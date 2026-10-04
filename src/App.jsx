@@ -17,6 +17,11 @@ import {
   PushPinSimple,
   Sun,
   X,
+  ArrowDown,
+  ArrowUp,
+  ArrowsInLineVertical,
+  GitCommit,
+  ShieldCheck,
 } from "@phosphor-icons/react";
 import antigravityAppIcon from "./assets/antigravity-app-icon.png";
 import chatgptAppIcon from "./assets/chatgpt-app-icon.png";
@@ -335,6 +340,7 @@ function statusDotTitle(loading, loadError) {
   if (loadError) return "数据读取失败，仍显示上次成功的数据";
   return loading ? "正在更新数据…" : "数据正常";
 }
+let windowActionQueue = Promise.resolve();
 let latestWindowCorrection = 0;
 
 function runWindowAction(action) {
@@ -1665,7 +1671,7 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
     // tasks-window-shell：面板跟随窗口尺寸（用户可拖拽调宽高）；.widget-shell
     // 的 320 定宽是主窗小组件的规矩，这里放开到满窗。
     <main className={`${shellAppearance.className} tasks-window-shell`}>
-      <h1 className="sr-only">Metrik Gateway 任务追踪小组件</h1>
+      <h1 className="sr-only">司南 任务追踪小组件</h1>
       <header className="widget-titlebar" onPointerDown={(event) => {
         if (event.target.closest("button")) return;
         startWindowDragging();
@@ -2801,9 +2807,9 @@ function NotificationWindow({ transparent, glassMode, glassTint, glassInk, glass
       className={`${shellAppearance.className} badge-window`}
       style={{ ...shellAppearance.style, width: "344px" }}
     >
-      <h1 className="sr-only">Metrik 提醒</h1>
+      <h1 className="sr-only">司南 提醒</h1>
       {toasts.length === 0 ? (
-        <p className="badge-empty">提醒角标待命…（真失败/完成的轮次会在这里弹出，总开关在 设置 → 任务追踪 → 提醒）</p>
+        <p className="badge-empty">提醒角标待命…（真失败/完成的轮次会在这里弹出，总开关在 任务台 → 提醒与预警）</p>
       ) : (
         <div className="badge-stack">
           {toasts.map((toast) => (
@@ -3386,251 +3392,6 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
     </main>
   );
 }
-
-function ReportsSection({ report }) {
-  const [view, setView] = useState("heatmap");
-  const [rangeWeeks, setRangeWeeks] = useState(() => {
-    const stored = Number(localStorage.getItem("metrik:reportWeeks"));
-    return REPORT_RANGE_WEEKS.includes(stored) ? stored : 8;
-  });
-  const handleRangeWeeks = (next) => {
-    setRangeWeeks(next);
-    localStorage.setItem("metrik:reportWeeks", String(next));
-  };
-  if (!report || report.status === "loading") {
-    return (
-      <main className="reports-section" aria-busy="true">
-        <header className="settings-header">
-          <h1>报告</h1>
-          <p>正在读取本地账本。报告只统计已索引的数据，不触发新的日志扫描。</p>
-        </header>
-      </main>
-    );
-  }
-  const data = report.data;
-  if (!data || data.loadError) {
-    return (
-      <main className="reports-section">
-        <header className="settings-header">
-          <h1>报告</h1>
-          <p>本地账本读取失败，报告暂不可用；未以演示数据替代。稍后重试。</p>
-        </header>
-      </main>
-    );
-  }
-
-  const weeks = buildHeatmapWeeks(data.days);
-  const nonZero = data.days.map((day) => day.tokens).filter(Boolean).sort((a, b) => a - b);
-  const q = (p) => nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * p))] || 1;
-  const thresholds = [q(0.25), q(0.5), q(0.75)];
-  const monthLabels = weeks.map((week, index) => {
-    const firstCell = week.find(Boolean);
-    if (!firstCell || firstCell.day > 7) return null;
-    const prev = weeks[index - 1]?.find(Boolean);
-    if (prev && prev.month === firstCell.month) return null;
-    return { index, label: `${firstCell.month + 1}月` };
-  }).filter(Boolean);
-  const activeDayCount = data.days.filter((day) => day.tokens > 0).length;
-  const coverageStart = Number.isFinite(data.firstEventMs)
-    ? new Date(data.firstEventMs).toLocaleDateString("zh-CN")
-    : null;
-  // 周趋势与构成共用同一份按档位截取的周序列；热力图仍是固定 26 周日历。
-  const trendWeeks = weeklySeries(data.days, rangeWeeks);
-  const rangeTotals = {};
-  trendWeeks.forEach((week) => {
-    Object.entries(week.byAgent).forEach(([id, value]) => {
-      rangeTotals[id] = (rangeTotals[id] || 0) + value;
-    });
-  });
-  const rangeAgents = AGENT_ORDER.filter((id) => rangeTotals[id] > 0).map((id) => ({
-    id,
-    tokens: rangeTotals[id],
-  }));
-  const rangeTotal = rangeAgents.reduce((sum, agent) => sum + agent.tokens, 0);
-
-  return (
-    <main className="reports-section" aria-labelledby="reports-title">
-      <header className="settings-header">
-        <h1 id="reports-title">报告</h1>
-        <p>
-          <strong>近 26 周活动</strong> · 只统计本地账本中已索引的数据（已解析 token 口径，非账单）。
-          {coverageStart ? `账本数据自 ${coverageStart} 起。` : ""}
-          {data.isDemo ? " 当前为浏览器演示数据。" : ""}
-        </p>
-      </header>
-
-      <div className="report-stats">
-        <div><strong>{compactTokens(data.totalTokens)}</strong><span>26 周总量</span></div>
-        <div><strong>{activeDayCount}</strong><span>活跃天数</span></div>
-        <div><strong>{data.streakDays}</strong><span>连续活跃天数</span></div>
-      </div>
-
-      <section className="report-card" aria-label="活动可视化">
-        <div className="report-toolbar">
-          <div className="report-view-toggle" role="group" aria-label="切换图表形式">
-            {REPORT_VIEWS.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                className={view === item.id ? "is-selected" : ""}
-                aria-pressed={view === item.id}
-                onClick={() => setView(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          {view !== "heatmap" && view !== "projects" && (
-            <div className="report-view-toggle" role="group" aria-label="统计时间段">
-              {REPORT_RANGE_WEEKS.map((num) => (
-                <button
-                  type="button"
-                  key={num}
-                  className={rangeWeeks === num ? "is-selected" : ""}
-                  aria-pressed={rangeWeeks === num}
-                  onClick={() => handleRangeWeeks(num)}
-                >
-                  {num} 周
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        {/* 固定高度：三种视图内容高度不同，卡片会随切换忽大忽小。 */}
-        <div className="report-view-body">
-        {view === "projects" ? (
-          (data.projects || []).length > 0 ? (
-            <ul className="project-trend-list">
-              {data.projects.map((project, index) => (
-                <li key={project.path}>
-                  <span className="project-trend-name" title={project.path}>
-                    {project.label}
-                    <small>{project.activeDays} 天</small>
-                  </span>
-                  <Sparkline
-                    points={project.weekly}
-                    color={index < PROJECT_COLOR_COUNT ? `var(--viz-${index + 1})` : "var(--viz-other)"}
-                  />
-                  <em>{compactTokens(project.tokens)}</em>
-                  {project.recentDeltaPercent != null ? (
-                    <small
-                      className={project.recentDeltaPercent >= 0 ? "trend-up" : "trend-down"}
-                      title="近 7 天相对再前 7 天"
-                    >
-                      {project.recentDeltaPercent >= 0
-                        ? <ArrowUp size={10} weight="bold" aria-hidden="true" />
-                        : <ArrowDown size={10} weight="bold" aria-hidden="true" />}
-                      {Math.abs(Math.round(project.recentDeltaPercent))}%
-                    </small>
-                  ) : (
-                    <small className="trend-flat">—</small>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="settings-muted">该时间段内暂无可归属的项目用量。</p>
-          )
-        ) : view === "trend" ? (
-          <ReportTrendChart weeks={trendWeeks} />
-        ) : view === "share" ? (
-          <ReportShareDonut agents={rangeAgents} totalTokens={rangeTotal} weeksCount={trendWeeks.length} />
-        ) : (
-          <>
-        <div className="heatmap-months" style={{ "--heatmap-weeks": weeks.length }} aria-hidden="true">
-          {monthLabels.map((month) => (
-            <span key={month.index} style={{ gridColumnStart: month.index + 1 }}>{month.label}</span>
-          ))}
-        </div>
-        <div className="heatmap" style={{ "--heatmap-weeks": weeks.length }} role="img" aria-label="近 26 周每日 token 用量热力图，颜色越深用量越大">
-          {weeks.map((week, weekIndex) => (
-            <div className="heatmap-week" key={weekIndex}>
-              {week.map((cell, dayIndex) => (
-                cell ? (
-                  <i
-                    key={cell.key}
-                    className={`heat-${heatLevel(cell.tokens, thresholds)}`}
-                    title={`${cell.key} · ${cell.tokens ? `${compactTokens(cell.tokens)} tokens` : "暂无用量"}`}
-                  />
-                ) : (
-                  <i key={`pad-${weekIndex}-${dayIndex}`} className="heat-pad" aria-hidden="true" />
-                )
-              ))}
-            </div>
-          ))}
-        </div>
-        <div className="heatmap-scale" aria-hidden="true">
-          <span>少</span>
-          <i className="heat-0" /><i className="heat-1" /><i className="heat-2" /><i className="heat-3" /><i className="heat-4" />
-          <span>多</span>
-        </div>
-          </>
-        )}
-        </div>
-      </section>
-
-      <div className="report-grid">
-        <section className="report-card" aria-label="Agent 排行">
-          <h2>Agent 排行</h2>
-          <ul className="model-list">
-            {/* 后端按注册表顺序返回，之前直接渲染——一个叫"排行"的列表其实没排过序。 */}
-            {data.agents
-              .filter((agent) => agent.tokens > 0)
-              .sort((left, right) => right.tokens - left.tokens)
-              .map((agent) => {
-              const meta = AGENT_META[agent.id];
-              const max = Math.max(...data.agents.map((entry) => entry.tokens), 1);
-              return (
-                <li key={agent.id}>
-                  <i className="model-dot" style={{ backgroundColor: meta?.accent || "#74767a" }} aria-hidden="true" />
-                  <span className="model-name">{meta?.label || agent.id}</span>
-                  <span className="model-track" aria-hidden="true">
-                    <i style={{ transform: `scaleX(${agent.tokens / max})`, backgroundColor: meta?.accent || "#74767a" }} />
-                  </span>
-                  <em>{compactTokens(agent.tokens)} · {agent.activeDays} 天</em>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-
-        <section className="report-card" aria-label="模型排行">
-          <h2>模型排行</h2>
-          <ul className="model-list">
-            {(data.topModels || []).slice(0, 8).map((entry) => {
-              const max = data.topModels[0]?.tokens || 1;
-              return (
-                <li key={`${entry.agent}-${entry.model}`}>
-                  <i className="model-dot" style={{ backgroundColor: AGENT_META[entry.agent]?.accent || "#74767a" }} aria-hidden="true" />
-                  <span className="model-name">{modelDisplayName(entry.model)}</span>
-                  <span className="model-track" aria-hidden="true">
-                    <i style={{ transform: `scaleX(${entry.tokens / max})`, backgroundColor: AGENT_META[entry.agent]?.accent || "#74767a" }} />
-                  </span>
-                  <em>{compactTokens(entry.tokens)}</em>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      </div>
-
-    </main>
-  );
-}
-
-function EmptySection({ section, onReturn }) {
-  const item = NAV_ITEMS.find((entry) => entry.id === section);
-  const Icon = item?.icon || ChartLineUp;
-  return (
-    <main className="empty-section">
-      <span><Icon size={30} weight="light" /></span>
-      <h1>{item?.label || "功能"}</h1>
-      <p>该功能将在后续版本提供。</p>
-      <button type="button" onClick={onReturn}>返回概览</button>
-    </main>
-  );
-}
-
 
 function initialWindowMode() {
   if (typeof window === "undefined") return "main";

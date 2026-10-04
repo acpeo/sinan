@@ -1,4 +1,4 @@
-// Gateway 任务页数据客户端：连接 Metrik 后端（Tauri命令）或浏览器演示数据。
+// Gateway 任务页数据客户端：连接司南后端（Tauri命令）或浏览器演示数据。
 // 口径：与 usageClient.js 同构——浏览器预览走演示数据，Tauri 走真实命令。
 
 import { invoke } from "@tauri-apps/api/core";
