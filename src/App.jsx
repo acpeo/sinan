@@ -209,6 +209,12 @@ const AGENT_META = {
 
 const AGENT_ORDER = Object.keys(AGENT_META);
 
+// 平台旗标：Windows 是主战场，零件里的平台分支共用这三条。
+const IS_MAC = isMacPlatform();
+const IS_WINDOWS = isWindowsPlatform();
+const IS_LINUX = isLinuxPlatform();
+
+
 function visibleAgentId(agentId) {
   return agentId === "kimiwork" ? "kimi" : agentId;
 }
