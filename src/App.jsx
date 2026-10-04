@@ -2900,7 +2900,189 @@ function formatCronNext(nextMs, now = Date.now()) {
   return `${Math.round((hours / 24) * 10) / 10} 天后`;
 }
 
-function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState] = useState({ status: "loading", filter: "active", data: null });
+/// 星轨时间线（任务台「任务」签主内容）：横轴=时间，纵轴=星位，会话台账的
+/// 每跳是轨道上的一段光；定时心跳收成一条刻度轨。数据全部来自本地台账，
+/// 不用动后端。接力扣 = 上一棒结束到下一棒开始（≤60 分钟）的虚线连接。
+// 轨道行高与 CSS .starrail-lane 保持一致（接力扣的纵向几何靠它算）。
+const STARRAIL_LANE_H = 48;
+const STARRAIL_PAD_TOP = 30;
+// 网关星名广播没到时的兜底：北斗七星 + main 的中文名（桌面端正常都走广播）。
+const STARRAIL_NAME_FALLBACK = {
+  tianshu: "天枢", tianxuan: "天璇", tianji: "天玑", tianquan: "天权",
+  yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "主会话",
+};
+// 轨道光条上的短时长标注（"6 分"；不足 1 分钟只给秒）。
+function starrailShortDuration(start, end) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "";
+  const minutes = Math.round((end - start) / 60_000);
+  if (minutes < 1) return `${Math.max(1, Math.round((end - start) / 1000))} 秒`;
+  if (minutes < 60) return `${minutes} 分`;
+  return `${Math.floor(minutes / 60)} 时 ${minutes % 60} 分`;
+}
+
+// 视野人话："35 分钟" / "2 小时"。
+function starrailHumanWindow(ms) {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = minutes / 60;
+  return Number.isInteger(hours) ? `${hours} 小时` : `${hours.toFixed(1)} 小时`;
+}
+
+function StarRailTimeline({ runs, cronTasks, agentNameMap, now, episodeTitle }) {
+  // 视野自适应（Apple 日历式）：窗口罩住全部活动并留 4 分钟边，最短 30 分钟、
+  // 最长 24 小时——活动密在几分钟里时轨道放大，不会挤成一串点。
+  const decorated = runs
+    .map((run) => {
+      const start = Number.isFinite(run.startedAtMs) ? run.startedAtMs : run.firstSeenMs;
+      const end = run.status === "running" ? now : run.endedAtMs ?? run.lastSeenMs ?? start;
+      return Number.isFinite(start) && Number.isFinite(end) ? { run, start, end } : null;
+    })
+    .filter(Boolean);
+  const activityStart = decorated.length ? Math.min(...decorated.map((e) => e.start)) : now;
+  const windowStart = Math.min(activityStart - 4 * 60_000, now - 30 * 60_000);
+  const viewMs = Math.min(now - windowStart, 24 * 60 * 60 * 1000);
+  const pct = (ms) => Math.max(0, Math.min(100, ((ms - windowStart) / viewMs) * 100));
+  const laneRuns = decorated.filter((e) => e.end >= windowStart).map((e) => e.run);
+  const lanes = [];
+  const laneIndex = new Map();
+  for (const run of laneRuns) {
+    const key = run.agentId || run.sessionKey || "unknown";
+    if (!laneIndex.has(key)) {
+      laneIndex.set(key, lanes.length);
+      lanes.push({ key, items: [] });
+    }
+    lanes[laneIndex.get(key)].items.push(run);
+  }
+  const laneName = (key) => {
+    const suffix = key.slice(key.lastIndexOf(":") + 1);
+    return agentNameMap?.get(key)
+      ?? agentNameMap?.get(suffix)
+      ?? STARRAIL_NAME_FALLBACK[suffix]
+      ?? suffix
+      ?? key;
+  };
+  // 轨道副行：该星最近一段活动的状态（进行中 / 收班时间）。
+  const laneSub = (lane) => {
+    const latest = [...lane.items].sort(
+      (a, b) => (b.endedAtMs ?? b.lastSeenMs ?? 0) - (a.endedAtMs ?? a.lastSeenMs ?? 0),
+    )[0];
+    if (!latest) return "";
+    if (latest.status === "running") return latest.progressSummary || "进行中";
+    const at = latest.endedAtMs ?? latest.lastSeenMs;
+    return Number.isFinite(at) ? `收班 ${formatTaskAge(at)}` : "";
+  };
+  const gridTicks = [0, 0.25, 0.5, 0.75].map((fraction) => {
+    const at = windowStart + viewMs * fraction;
+    return {
+      fraction,
+      label: new Date(at).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }),
+    };
+  });
+  // 心跳刻度：automation_run 落在窗口内的每一次运行（按分诊口径着色）。
+  const cronTicks = (cronTasks ?? [])
+    .filter((task) => task?.kind === "automation_run")
+    .map((task) => {
+      const at = task.endedAtMs ?? task.startedAtMs ?? task.lastSeenMs;
+      const tone = hopToneOf({ status: task.status, taskId: task.taskId ?? task.id, error: task.error });
+      return { at, tone: tone.tone, name: cleanTaskTitle(task) || task.label || task.taskId };
+    })
+    .filter((tick) => Number.isFinite(tick.at) && tick.at >= windowStart && tick.at <= now)
+    .slice(-80);
+  // 接力扣：时间顺序上相邻、跨轨道、间隔 ≤60 分钟的两跳连一条虚线。
+  const ordered = laneRuns
+    .map((run) => ({ ...run, lane: laneIndex.get(run.agentId || run.sessionKey || "unknown") }))
+    .sort((a, b) => (a.endedAtMs ?? a.lastSeenMs ?? 0) - (b.endedAtMs ?? b.lastSeenMs ?? 0));
+  const connectors = [];
+  for (let i = 1; i < ordered.length; i++) {
+    const prev = ordered[i - 1];
+    const next = ordered[i];
+    if (next.lane <= prev.lane) continue;
+    const prevEnd = prev.endedAtMs ?? prev.lastSeenMs ?? 0;
+    const nextStart = next.startedAtMs ?? 0;
+    if (!prevEnd || !nextStart || nextStart - prevEnd > 60 * 60 * 1000) continue;
+    connectors.push({
+      left: pct(Math.min(nextStart, prevEnd + 60_000)),
+      top: STARRAIL_PAD_TOP + prev.lane * STARRAIL_LANE_H + 34,
+      height: (next.lane - prev.lane) * STARRAIL_LANE_H - 14,
+      key: `${prev.id ?? i}-${next.id ?? i}`,
+    });
+  }
+  return (
+    <section className="starrail" aria-label="星轨时间线">
+      <div className="starrail-head">
+        <b>{episodeTitle || "星轨"}</b>
+        <small>{episodeTitle ? "进行中的接力" : "最近一段活动"}</small>
+        <span className="starrail-window">视野：{starrailHumanWindow(viewMs)}</span>
+      </div>
+      <div className="starrail-frame">
+        <div className="starrail-grid">
+          {gridTicks.map((tick) => (
+            <i key={tick.fraction} style={{ left: `${tick.fraction * 100}%` }}>
+              <span>{tick.label}</span>
+            </i>
+          ))}
+        </div>
+        <i className="starrail-now" aria-hidden="true" />
+        {lanes.map((lane) => (
+          <div className="starrail-lane" key={lane.key}>
+            <div className="starrail-who">
+              <b>{laneName(lane.key)}</b>
+              <small>{laneSub(lane)}</small>
+            </div>
+            {lane.items.map((run) => {
+              const start = Number.isFinite(run.startedAtMs) ? run.startedAtMs : run.firstSeenMs;
+              const end = run.status === "running" ? now : run.endedAtMs ?? run.lastSeenMs ?? start;
+              const tone = hopToneOf({ status: run.status, taskId: run.taskId ?? run.id, error: run.error });
+              const left = pct(start);
+              const width = Math.max(2.2, pct(end) - left);
+              const label = run.status === "running"
+                ? (run.progressSummary || starrailShortDuration(start, end) || "进行中")
+                : tone.tone === "failed"
+                  ? "失败"
+                  : starrailShortDuration(start, end);
+              return (
+                <span
+                  key={run.id ?? `${run.sessionKey}:${run.startedAtMs}`}
+                  className={`starrail-run starrail-run--${tone.tone}${run.status === "running" ? " starrail-run--live" : ""}`}
+                  style={{ left: `${left}%`, width: `${width}%` }}
+                  title={`${laneName(lane.key)} · ${starrailShortDuration(start, end) || "进行中"}${run.error ? ` · ${run.error}` : ""}${run.terminalSummary ? `\n${run.terminalSummary}` : ""}`}
+                >
+                  {label ? <em>{label}</em> : null}
+                </span>
+              );
+            })}
+          </div>
+        ))}
+        <div className="starrail-lane starrail-lane--cron">
+          <div className="starrail-who">
+            <b>定时</b>
+            <small>心跳/巡检</small>
+          </div>
+          {cronTicks.map((tick, index) => (
+            <span
+              key={index}
+              className={`starrail-tick starrail-tick--${tick.tone}`}
+              style={{ left: `${pct(tick.at)}%` }}
+              title={`${tick.name} · ${formatHistoryTime(tick.at, now)}`}
+            />
+          ))}
+        </div>
+        {connectors.map((c) => (
+          <i
+            key={c.key}
+            className="starrail-handoff"
+            style={{ left: `${c.left}%`, top: `${c.top}px`, height: `${c.height}px` }}
+          />
+        ))}
+      </div>
+      {lanes.length === 0 && cronTicks.length === 0 && (
+        <p className="starrail-empty">最近 2 小时没有星位活动；派一轮活，轨道就会亮起来。</p>
+      )}
+    </section>
+  );
+}
+
+function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) {  const [state, setState] = useState({ status: "loading", filter: "active", data: null });
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [lastSync, setLastSync] = useState(null);
@@ -2917,6 +3099,14 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
   const [expandedEpisode, setExpandedEpisode] = useState(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // 状态头上报（App 头部渲染）：同步灯/最近同步/忙碌/手动刷新入口。
+  const statusSig = `${live}|${lastSync ?? 0}|${busy}|${state.status}|${state.filter}`;
+  const reportedStatusRef = useRef("");
+  useEffect(() => {
+    if (reportedStatusRef.current === statusSig) return;
+    reportedStatusRef.current = statusSig;
+    onStatus?.({ live, lastSync, busy, refresh: handleRefresh });
+  });
   // 钩子必须全在条件 return 之前（loading 早退时少跑钩子 = React 崩）。
   const agentNameMap = useMemo(() => buildAgentNameMap(agentsSnap?.agents), [agentsSnap]);
   const historyEpisodes = useMemo(() => {
@@ -3045,21 +3235,15 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
 
   if (state.status === "loading" && !state.data) {
     return (
-      <main className="tasks-section" aria-busy="true">
-        <header className="settings-header">
-          <h1>任务</h1>
-          <p>正在连接 Gateway 并建立实时监控…</p>
-        </header>
+      <main className="tasks-section tasks-section--flush" aria-busy="true">
+        <p className="tasks-standby">正在连接 Gateway 并建立实时监控…</p>
       </main>
     );
   }
   if (state.status === "error") {
     return (
-      <main className="tasks-section">
-        <header className="settings-header">
-          <h1>任务</h1>
-          <p>任务账本读取失败，稍后自动重试。</p>
-        </header>
+      <main className="tasks-section tasks-section--flush">
+        <p className="tasks-standby">任务账本读取失败，稍后自动重试。</p>
       </main>
     );
   }
@@ -3075,6 +3259,26 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
   ];
   const now = Date.now();
   const STALE_MS = Math.max(10, monitor.staleThresholdSec) * 1000; // 无活动判定阈值（设置页可调）
+  // 今日口径（指标片）：0 点起的真失败 / 静默跳过（分诊口径），收班轮次取台账。
+  const dayStart = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  const todayTones = { failed: 0, skipped: 0, relay: 0 };
+  for (const run of sessionRuns) {
+    if (run.status !== "failed") continue;
+    const at = run.endedAtMs ?? run.lastSeenMs ?? 0;
+    if (at < dayStart) continue;
+    const tone = hopToneOf({ status: run.status, taskId: run.taskId ?? run.id, error: run.error }).tone;
+    if (tone === "failed") todayTones.failed += 1;
+    if (tone === "skipped") todayTones.skipped += 1;
+  }
+  const cronEnabled = cronJobs.filter((job) => job.enabled).length;
+  const cronNextHint = (() => {
+    const nextList = cronJobs
+      .filter((job) => job.enabled)
+      .map((job) => cronNextRunMs(job.scheduleExpr, now))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    return nextList.length ? formatCronNext(nextList[0], now) : "待排";
+  })();
 
   // 定时任务看板行（六案③）：镜像 job + 上次结果（分诊口径着色，completed
   // 是网关侧对 automation_run 的叫法，归一成 succeeded）+ 下次运行估算。
@@ -3112,6 +3316,7 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
     sessionRuns.filter((run) => run.status === "running"),
     Math.max(5, monitor.episodeGapMin) * 60_000,
   );
+  todayTones.relay = historyEpisodes.length + relayEpisodes.length;
   const panoramaChainIndex = buildTaskChains(cronTasks);
   const liveTaskChains = (() => {
     const seen = new Set();
@@ -3128,66 +3333,54 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
     return chains;
   })();
 
+  const showTasks = tab === "tasks";
+  const showCron = tab === "cron";
+  const showHistory = tab === "history";
   return (
-    <main className="tasks-section">
-      <header className="settings-header">
-        <div className="tasks-title-row">
-          <h1>任务</h1>
-          <span
-            className={live ? "live-indicator live-indicator--on" : "live-indicator"}
-            title={live ? "每 3 秒自动同步 Gateway" : "未在同步：检查 Gateway 配置或网络"}
-          >
-            <span className="live-dot" />
-            {live ? "实时监控中" : "未同步"}
-          </span>
-          {lastSync && (
-            <span className="tasks-last-sync">
-              更新于 {new Date(lastSync).toLocaleTimeString("zh-CN", { hour12: false })}
-            </span>
-          )}
+    <main className="tasks-section tasks-section--flush">
+      {showTasks && (
+        <div className="tasks-toolbar">
+          <div className="tasks-filters" role="tablist" aria-label="任务筛选">
+            {filters.map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                role="tab"
+                aria-selected={state.filter === filter.id}
+                className={state.filter === filter.id ? "is-selected" : ""}
+                onClick={() => setState((current) => ({ ...current, filter: filter.id }))}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <p>
-          OpenClaw Gateway 的后台任务台账（subagent / cron / CLI / ACP），每 3 秒自动同步。
-          说明：普通对话轮次不计入台账；subagent 派工、cron、CLI 才是任务。
-          本地账本保留全部历史；官方侧终态记录 7 天后清理。
-        </p>
-      </header>
+      )}
 
-      <div className="tasks-toolbar">
-        <div className="tasks-filters" role="tablist" aria-label="任务筛选">
-          {filters.map((filter) => (
-            <button
-              key={filter.id}
-              type="button"
-              role="tab"
-              aria-selected={state.filter === filter.id}
-              className={state.filter === filter.id ? "is-selected" : ""}
-              onClick={() => setState((current) => ({ ...current, filter: filter.id }))}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          className="ledger-button ledger-button--secondary"
-          disabled={busy}
-          onClick={handleRefresh}
-        >
-          <ArrowsClockwise size={14} /> {busy ? "拉取中…" : "立即同步"}
-        </button>
-      </div>
-
-      {feedback && (
+      {showTasks && feedback && (
         <p className={feedback.tone === "error" ? "tasks-feedback tasks-feedback--error" : "tasks-feedback tasks-feedback--success"}>
           {feedback.message}
         </p>
       )}
-      {data?.demo && (
+      {showTasks && data?.demo && (
         <p className="tasks-feedback">浏览器预览：展示演示数据；Tauri 桌面端读取真实任务账本。</p>
       )}
-      {data?.loadError && <p className="tasks-feedback tasks-feedback--error">{data.loadError}</p>}
+      {showTasks && data?.loadError && <p className="tasks-feedback tasks-feedback--error">{data.loadError}</p>}
 
+      {showTasks && (<>
+      <StarRailTimeline
+        runs={sessionRuns}
+        cronTasks={cronTasks}
+        agentNameMap={agentNameMap}
+        now={now}
+        episodeTitle={relayEpisodes[0]?.hops?.[0]?.title ?? null}
+      />
+      <div className="starrail-chips">
+        <div className="starrail-chip"><b>{todayTones.relay}</b><small>今日接力 · 全部落账</small></div>
+        <div className="starrail-chip"><b className={todayTones.failed ? "starrail-bad" : undefined}>{todayTones.failed}</b><small>真失败 · 分诊口径</small></div>
+        <div className="starrail-chip"><b>{cronEnabled}</b><small>定时任务 · 下一次 {cronNextHint}</small></div>
+        <div className="starrail-chip"><b>{todayTones.skipped}</b><small>静默跳过 · 免打扰</small></div>
+      </div>
       {agentsSnap?.agents?.length > 0 && (
         <div className="agent-grid">
           <div className="agent-grid-title">Agent 会话活动</div>
@@ -3226,13 +3419,10 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
       )}
 
       {tasks.length === 0 && !agentsSnap?.agents?.some((agent) => agent.active) ? (
-        <div className="tasks-empty">
-          <ListChecks size={30} weight="light" />
-          <p>
+        <p className="tasks-standby tasks-standby--roomy">
             还没有任务记录，也没有活跃的 Agent 会话。派一个 subagent 任务，
             几秒内这里就会出现"运行中"条目。本机 Gateway 已配置时无需手动操作。
-          </p>
-        </div>
+        </p>
       ) : tasks.length > 0 ? (
         <div className="task-list">
           {tasks.map((task) => {
@@ -3301,7 +3491,8 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
           )}
         </section>
       )}
-      {cronBoard.length > 0 && (
+      </>)}
+      {showCron && (cronBoard.length > 0 ? (
         <section className="cron-board" aria-label="定时任务">
           <h2 className="history-episodes-head">
             定时任务
@@ -3332,8 +3523,10 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
             ))}
           </div>
         </section>
-      )}
-      {historyEpisodes.length > 0 && (
+      ) : (
+        <p className="tasks-standby">还没有定时任务的本地镜像；配好网关后第一拍就会同步进来。</p>
+      ))}
+      {showHistory && (historyEpisodes.length > 0 ? (
         <section className="history-episodes" aria-label="历史轮次">
           <h2 className="history-episodes-head">
             历史轮次
@@ -3388,10 +3581,19 @@ function TasksSection({ gateways, onGatewaysChanged }) {  const [state, setState
             })}
           </div>
         </section>
-      )}
+      ) : (
+        <p className="tasks-standby">回看窗口内没有收尾的轮次；窗口大小在「设置 · 实时监控参数」里调。</p>
+      ))}
     </main>
   );
 }
+
+const CONSOLE_TABS = [
+  { id: "tasks", label: "任务" },
+  { id: "cron", label: "定时" },
+  { id: "history", label: "历史" },
+  { id: "settings", label: "设置" },
+];
 
 function initialWindowMode() {
   if (typeof window === "undefined") return "main";
@@ -3405,6 +3607,8 @@ export function App() {
   const [viewMode] = useState(initialWindowMode);
   const [gateways, setGateways] = useState(() => loadGatewayConfig());
   const reloadGateways = useCallback(() => setGateways(loadGatewayConfig()), []);
+  const [consoleTab, setConsoleTab] = useState("tasks");
+  const [consoleStatus, setConsoleStatus] = useState(null);
   const [tasksWidgetEnabled, setTasksWidgetEnabled] = useState(
     () => localStorage.getItem("metrik:tasksWidget") !== "off",
   );
@@ -3615,9 +3819,56 @@ export function App() {
         tasksWidgetEnabled={tasksWidgetEnabled}
         onToggleTasksWidget={handleToggleTasksWidget}
       />
+      <header className="console-head">
+        <span className="console-brand">司南<small>任务台</small></span>
+        {consoleStatus && (
+          <span
+            className={consoleStatus.live ? "console-live console-live--on" : "console-live"}
+            title={consoleStatus.live ? "自动同步 Gateway 中" : "未在同步：检查网关配置或网络"}
+          >
+            <span className="live-dot" />
+            {consoleStatus.live ? "同步中" : "未同步"}
+          </span>
+        )}
+        {consoleStatus?.lastSync ? (
+          <span className="console-sync-at">
+            更新于 {new Date(consoleStatus.lastSync).toLocaleTimeString("zh-CN", { hour12: false })}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="console-refresh"
+          disabled={!!consoleStatus?.busy}
+          onClick={() => consoleStatus?.refresh?.()}
+          title="立即拉取网关任务台账"
+        >
+          <ArrowsClockwise size={13} /> {consoleStatus?.busy ? "拉取中…" : "同步"}
+        </button>
+      </header>
+      <nav className="console-tabs" role="tablist" aria-label="任务台分区">
+        {CONSOLE_TABS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={consoleTab === item.id}
+            className={consoleTab === item.id ? "is-selected" : ""}
+            onClick={() => setConsoleTab(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
       <div className="console-scroll">
-        <TasksSection gateways={gateways} onGatewaysChanged={reloadGateways} />
-        <div className="console-settings">
+        <div className={consoleTab === "settings" ? "console-hidden" : ""}>
+          <TasksSection
+            gateways={gateways}
+            onGatewaysChanged={reloadGateways}
+            tab={consoleTab}
+            onStatus={setConsoleStatus}
+          />
+        </div>
+        <div className={consoleTab === "settings" ? "console-settings" : "console-settings console-hidden"}>
           <MonitorSettingsCard />
           <GatewaySettingsCard gateways={gateways} onGatewaysChanged={reloadGateways} />
           <AppearanceCard

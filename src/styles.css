@@ -8273,3 +8273,100 @@ html[data-theme="dark"] .console-root {
   gap: 14px;
   margin-top: 16px;
 }
+
+/* ===== 司南任务台：状态头 + 签页 + 星轨时间线 ===== */
+.console-hidden { display: none !important; }
+.console-head { position: absolute; top: 10px; left: 16px; right: 232px; display: flex; align-items: center; gap: 8px; z-index: 4; white-space: nowrap; }
+.console-head > * { white-space: nowrap; }
+.console-brand { font-weight: 600; font-size: 15px; }
+.console-brand small { color: var(--fg-faint, #6a6b73); font-weight: 400; margin-left: 6px; font-size: 12px; }
+.console-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-faint, #6a6b73); }
+.console-live--on { color: inherit; }
+.console-sync-at { font-size: 12px; color: var(--fg-faint, #6a6b73); }
+.console-refresh { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid rgba(127, 127, 127, 0.35); background: transparent; color: inherit; cursor: pointer; }
+.console-refresh:disabled { opacity: 0.5; cursor: default; }
+.console-tabs { position: absolute; top: 42px; left: 16px; right: 16px; display: flex; gap: 4px; z-index: 4; border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
+.console-tabs button { appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent; color: inherit; opacity: 0.6; font: inherit; font-size: 13px; padding: 6px 12px 8px; cursor: pointer; }
+.console-tabs button.is-selected { opacity: 1; border-bottom-color: #6a5ae0; }
+.console-tabs button:hover { opacity: 1; }
+.console-root .console-scroll { top: 88px; }
+.tasks-section--flush { margin: 0; padding: 0; }
+.tasks-standby { color: var(--fg-faint, #6a6b73); font-size: 13px; text-align: center; padding: 28px 12px; }
+.starrail { margin: 0 0 12px; }
+.starrail-frame { position: relative; background: rgba(127, 127, 127, 0.07); border: 1px solid rgba(127, 127, 127, 0.22); border-radius: 10px; padding: 26px 12px 8px 92px; }
+.starrail-grid { position: absolute; left: 92px; right: 12px; top: 0; bottom: 0; }
+.starrail-grid i { position: absolute; top: 22px; bottom: 6px; width: 1px; background: rgba(127, 127, 127, 0.18); }
+.starrail-grid i span { position: absolute; top: 2px; left: 4px; font-size: 10px; color: var(--fg-faint, #6a6b73); font-style: normal; }
+.starrail-lane { position: relative; height: 44px; }
+.starrail-lane--cron { height: 36px; }
+.starrail-who { position: absolute; left: -80px; top: 11px; width: 68px; text-align: right; font-size: 12px; line-height: 1.2; }
+.starrail-who b { font-weight: 600; display: block; }
+.starrail-who small { font-size: 10px; color: var(--fg-faint, #6a6b73); }
+.starrail-rail { position: absolute; left: 0; right: 0; top: 20px; height: 6px; border-radius: 3px; background: rgba(127, 127, 127, 0.12); }
+.starrail-run { position: absolute; top: 2px; height: 22px; border-radius: 6px; min-width: 14px; }
+.starrail-run--done { background: rgba(61, 156, 80, 0.3); border: 1px solid rgba(61, 156, 80, 0.55); }
+.starrail-run--failed { background: rgba(224, 82, 82, 0.32); border: 1px solid rgba(224, 82, 82, 0.6); }
+.starrail-run--skipped { background: rgba(127, 127, 127, 0.15); border: 1px dashed rgba(127, 127, 127, 0.45); }
+.starrail-run--pending { background: rgba(127, 127, 127, 0.12); border: 1px solid rgba(127, 127, 127, 0.35); }
+.starrail-run--current { background: rgba(106, 90, 224, 0.4); border: 1px solid #6a5ae0; box-shadow: 0 0 10px rgba(106, 90, 224, 0.4); }
+.starrail-run--live::after { content: "●"; position: absolute; right: 5px; top: 3px; font-size: 9px; color: #fff; animation: starrail-pulse 1.2s infinite; }
+@keyframes starrail-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.starrail-tick { position: absolute; top: 6px; width: 8px; height: 14px; border-radius: 3px; }
+.starrail-tick--done { background: rgba(61, 156, 80, 0.5); }
+.starrail-tick--failed { background: rgba(224, 82, 82, 0.55); }
+.starrail-tick--skipped { background: rgba(127, 127, 127, 0.28); }
+.starrail-tick--pending, .starrail-tick--current { background: rgba(106, 90, 224, 0.55); }
+.starrail-handoff { position: absolute; width: 0; border-left: 1px dashed rgba(106, 90, 224, 0.45); }
+.starrail-empty { color: var(--fg-faint, #6a6b73); font-size: 12.5px; text-align: center; padding: 18px 10px; }
+
+/* ===== 星轨 v2：贴设计稿的密度与标注 ===== */
+.starrail-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 2px 8px; }
+.starrail-head b { font-size: 14px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.starrail-head small { color: var(--fg-faint, #6a6b73); font-size: 12px; }
+.starrail-window { margin-left: auto; font-size: 11px; color: var(--fg-faint, #6a6b73); }
+.starrail-frame { padding: 30px 12px 10px 96px; }
+.starrail-grid i span { font-size: 10.5px; }
+.starrail-lane { height: 48px; }
+.starrail-lane--cron { height: 44px; }
+.starrail-who { left: -84px; width: 72px; top: 5px; }
+.starrail-who b { font-size: 13px; }
+.starrail-who small { display: block; font-size: 10px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.starrail-rail { top: 24px; height: 8px; border-radius: 4px; }
+.starrail-run { top: 5px; height: 26px; border-radius: 7px; overflow: hidden; display: flex; align-items: center; padding: 0 7px; }
+.starrail-run em { font-style: normal; font-size: 10.5px; line-height: 1; color: rgba(255, 255, 255, 0.92); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.starrail-run--done { background: rgba(61, 156, 80, 0.32); border: 1px solid rgba(61, 156, 80, 0.6); }
+.starrail-run--done em { color: #cdeeda; }
+.starrail-run--failed { background: rgba(224, 82, 82, 0.32); border: 1px solid rgba(224, 82, 82, 0.65); }
+.starrail-run--failed em { color: #f4cdcd; }
+.starrail-run--skipped { border-style: dashed; }
+.starrail-run--current { box-shadow: 0 0 12px rgba(106, 90, 224, 0.45); }
+.starrail-run--live::after { content: "●"; margin-left: auto; font-size: 8px; color: #fff; animation: starrail-pulse 1.2s infinite; }
+.starrail-lane--cron .starrail-tick { top: 12px; }
+.starrail-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 12px; }
+.starrail-chip { background: rgba(127, 127, 127, 0.08); border: 1px solid rgba(127, 127, 127, 0.2); border-radius: 9px; padding: 8px 10px; }
+.starrail-chip b { display: block; font-size: 15px; line-height: 1.2; }
+.starrail-chip b.starrail-bad { color: #e05252; }
+.starrail-chip small { color: var(--fg-faint, #6a6b73); font-size: 11px; }
+.tasks-standby--roomy { padding: 40px 12px; }
+
+/* ===== 任务签可读性：全景/轮次回放字号与对比度（亮暗两套） ===== */
+.console-root .chain-panorama .history-episodes-head,
+.console-root .cron-board .history-episodes-head,
+.console-root .history-episodes .history-episodes-head { font-size: 14.5px; color: inherit; }
+.console-root .history-episodes-head small { font-size: 12px; opacity: 0.72; }
+.console-root .task-timeline-title { font-size: 13.5px; color: inherit; }
+.console-root .task-timeline-name { font-size: 12.5px; font-weight: 600; }
+.console-root .task-timeline-progress { font-size: 12px; color: #56575e; opacity: 1; }
+.console-root .task-timeline-summary { font-size: 12.5px; color: #2e7d43; opacity: 1; }
+html[data-theme="dark"] .console-root .task-timeline-progress { color: #a6a8b0; }
+html[data-theme="dark"] .console-root .task-timeline-summary { color: #7fcf95; }
+
+/* ===== 星轨 v3：标注常驻条内（Apple 日历式）+ 控制台滚动条 ===== */
+.starrail-run { min-width: 18px; }
+.console-root ::-webkit-scrollbar { width: 5px; }
+.console-root ::-webkit-scrollbar-track { background: transparent; }
+.console-root ::-webkit-scrollbar-thumb { background: rgba(127, 130, 136, 0.4); border-radius: 3px; }
+.console-root ::-webkit-scrollbar-button { display: none; }
+.console-root { scrollbar-width: thin; scrollbar-color: rgba(127, 130, 136, 0.4) transparent; }
+
+.starrail-now { position: absolute; right: 12px; top: 28px; bottom: 8px; width: 2px; border-radius: 1px; background: linear-gradient(180deg, rgba(106, 90, 224, 0.9), rgba(106, 90, 224, 0.12)); box-shadow: 0 0 8px rgba(106, 90, 224, 0.55); }
