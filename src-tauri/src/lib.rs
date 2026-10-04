@@ -8,11 +8,10 @@
 
 mod gateway_tasks;
 
-use anyhow::Context as _;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 const DATABASE_FILE_NAME: &str = "sinan.sqlite3";
 /// 旧 Metrik 的数据目录与账本名：首启时把旧任务台账搬过来，历史不断档。
