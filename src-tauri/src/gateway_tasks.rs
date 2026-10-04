@@ -803,10 +803,6 @@ fn is_terminal_status(status: Option<&str>) -> bool {
     )
 }
 
-/// 每次快照把观察到的任务 upsert 进本地账本：
-/// - 运行中任务更新时间戳；终态任务落最终状态后不再被旧快照覆盖（观察合并
-///   取"更完整"的记录：ended_at 补齐即视为更完整）。
-/// - 不删除任何记录：任务历史永久保留（这是本表存在的意义）。
 /// gateway_task 表结构：建表 + 老库补列，读写两条路径共用。
 /// 读路径必须自带迁移：网关断连时快照写入一次都不会跑，老库上的
 /// list_tasks 若只靠写路径补列，首屏就撞 no such column（0.20.13 真机踩坑）。
@@ -851,6 +847,10 @@ fn ensure_gateway_task_table(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// 每次快照把观察到的任务 upsert 进本地账本：
+/// - 运行中任务更新时间戳；终态任务落最终状态后不再被旧快照覆盖（观察合并
+///   取"更完整"的记录：ended_at 补齐即视为更完整）。
+/// - 不删除任何记录：任务历史永久保留（这是本表存在的意义）。
 pub fn upsert_tasks(
     connection: &Connection,
     target_label: &str,

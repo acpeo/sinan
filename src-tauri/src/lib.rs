@@ -4,6 +4,7 @@
 //! - 网关任务台账 + cron 镜像 + 会话工作台账（gateway_tasks 模块，原样）；
 //! - 任务小组件窗（tasks-widget）、自绘提醒角标窗（notifications）两个常驻窗；
 //! - 主窗 = 任务台（任务页 + 监控/网关/外观设置）。
+//!
 //! 用量统计留在 Metrik 本尊，两边互不依赖，只共读同一个 openclaw 网关。
 
 mod gateway_tasks;
@@ -619,7 +620,7 @@ fn disable_system_corner_rounding(hwnd: isize) {
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
     };
-    let preference = DWMWCP_DONOTROUND.0 as i32;
+    let preference = DWMWCP_DONOTROUND.0;
     unsafe {
         let _ = DwmSetWindowAttribute(
             HWND(hwnd as *mut _),
