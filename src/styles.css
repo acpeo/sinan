@@ -8385,7 +8385,9 @@ html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background:
    90% 灰阶（色=状态点+金色单重音）、事件流=紧凑日志、密度梯度 ============ */
 .tasksboard { display: flex; flex-direction: column; min-height: 100%; padding-bottom: 12px; }
 .v7row { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; }
-.v7-feedrow { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; align-items: start; }
+.v7-feedrow { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; align-items: stretch; }
+/* 左右底部对齐：矮的一栏末卡吃满剩余高（空腔收进卡内，不再裸在页面上） */
+.v7-feedmain > .v5card:last-child { flex: 1 1 auto; }
 .v7card { background: #131a26; border: 1px solid #202938; border-radius: 10px; min-width: 0; }
 .v7-dialcard { padding: 6px 10px; position: relative; overflow: hidden; }
 .dial { position: relative; aspect-ratio: 552 / 146; }

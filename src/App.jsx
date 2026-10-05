@@ -1096,11 +1096,13 @@ function TasksWidgetWindow({
   }, [collapsed, miniControlsOpen, miniOrientation]);
   // 展开态挂载（重启后直接回到面板）：Rust 侧按 320×384 建窗，这里把用户
   // 上次拖出的尺寸套回去并放开可拖拽调尺寸。折叠态挂载由上面的胶囊副作用管。
+  // 依赖带 collapsed：任何路径切进展开态（胶囊 +N、提醒落点）都必须把窗
+  // 撑回面板尺寸——曾只写 [] 只在挂载时跑，运行中展开=窗停在胶囊尺寸，
+  // 内容被裁得只剩一个字还没按钮可点（Leo 装机踩中）。
   useEffect(() => {
     if (collapsed) return;
     runWindowAction(() => applyExpandedPanelSize());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [collapsed]);
   // 详情卡定位（唯一路径，Portal+fixed）。竖条：卡在胶卷靠屏幕中心一侧，
   // 纵向锚在悬停跳中心、钳在视口内，卡高用实测值钳半高。横条：真机由
   // horizontal helper 给出条上方/下方坐标，预览贴悬停格上缘（放不下改下方）、
@@ -1316,7 +1318,7 @@ function TasksWidgetWindow({
                       key={cell.agentId}
                       type="button"
                       className={`tasks-mini-starcell is-${cell.state}`}
-                      onClick={expand}
+                      onClick={onOpenExpanded}
                       title={cell.title ? `${STAR_NAME_FALLBACK[cell.agentId]} · ${cell.title}` : `${STAR_NAME_FALLBACK[cell.agentId]} · 空闲`}
                     >
                       <i className="tasks-mini-starcelldot" aria-hidden="true" />
@@ -2951,14 +2953,26 @@ function isBriefingRow(row) {
   return taskKindOf(row) === "巡检简报";
 }
 // 定时任务显示名：网关 job 名是英文标识符，显示层换人话；未知名字原样透传
-//（Leo：定时任务不能只能英文显示）。
+//（Leo：定时任务不能只能英文显示）。词表=openclaw 生态高频任务词（官方内置
+// 只有 heartbeat，其余是社区常见 automation：digest/briefing/cleanup 等）。
 function jobDisplayName(name) {
   const t = String(name ?? "").trim();
   let m = /^skill-collection-review-(\w+)$/.exec(t);
   if (m) return `skill 检查 · ${starNameOf(m[1])}`;
   m = /^heartbeat-(\w+)$/.exec(t);
   if (m) return `心跳保活 · ${starNameOf(m[1])}`;
+  if (/^heartbeat$/i.test(t)) return "心跳保活";
   if (/^memory dreaming promotion$/i.test(t)) return "记忆整理晋升";
+  if (!/[\u4e00-\u9fff]/.test(t)) {
+    if (/consolidat|flush|dream/i.test(t)) return "记忆整理";
+    if (/digest/i.test(t)) return "每日摘要";
+    if (/briefing/i.test(t)) return "简报汇总";
+    if (/(daily|morning).?(report|update)/i.test(t)) return "每日报告";
+    if (/cleanup|prune|sweep/i.test(t)) return "清理维护";
+    if (/backup/i.test(t)) return "备份";
+    if (/inbox/i.test(t)) return "收件箱巡检";
+    if (/compact/i.test(t)) return "上下文压缩";
+  }
   return t;
 }
 function taskTitleOf(row) {
