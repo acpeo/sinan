@@ -2529,6 +2529,7 @@ mod tests {
                 description: None,
                 enabled: Some(true),
                 schedule: None,
+                ..Default::default()
             }],
         )
         .unwrap();
