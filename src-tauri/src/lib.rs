@@ -668,6 +668,20 @@ pub fn run() {
                 .map_err(|error| error.to_string())?;
             let database_path = local_dir.join(DATABASE_FILE_NAME);
             import_legacy_ledger(&local_dir, &database_path);
+            // 启动即补列：快照写路径可能长期失败（如网关摘除 tasks.list），只读
+            // 路径又跑不了 ALTER——三张表的补列在启动时用可写连接一次跑齐，
+            // 搬迁进来的老库才不会在读路径撞 no such column。
+            match open_database(&database_path) {
+                Ok(connection) => {
+                    let migrated = gateway_tasks::ensure_gateway_task_table(&connection)
+                        .and_then(|_| gateway_tasks::ensure_session_run_table(&connection))
+                        .and_then(|_| gateway_tasks::ensure_gateway_cron_table(&connection));
+                    if let Err(error) = migrated {
+                        eprintln!("sinan could not migrate its task ledger: {error}");
+                    }
+                }
+                Err(error) => eprintln!("sinan could not open its task ledger: {error}"),
+            }
 
             app.manage(AppState {
                 database_path,

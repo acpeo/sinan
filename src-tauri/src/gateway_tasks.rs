@@ -806,7 +806,7 @@ fn is_terminal_status(status: Option<&str>) -> bool {
 /// gateway_task 表结构：建表 + 老库补列，读写两条路径共用。
 /// 读路径必须自带迁移：网关断连时快照写入一次都不会跑，老库上的
 /// list_tasks 若只靠写路径补列，首屏就撞 no such column（0.20.13 真机踩坑）。
-fn ensure_gateway_task_table(connection: &Connection) -> Result<()> {
+pub fn ensure_gateway_task_table(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS gateway_task (
             task_id        TEXT NOT NULL,
@@ -1106,28 +1106,7 @@ pub struct GatewayCronRow {
 /// cron.list 看板节流：数据变化以分钟计，60 秒拉一次足够。
 const CRON_SNAPSHOT_MIN_INTERVAL_MS: u64 = 60_000;
 
-pub fn fetch_crons(target: &GatewayTarget) -> Result<Vec<GatewayCronJob>> {
-    let identity_dir = match &target.identity_dir {
-        Some(dir) => dir.clone(),
-        None => default_state_dir(),
-    };
-    let identity = load_or_create_identity(&identity_dir)?;
-    let mut client = GatewayClient::connect(target, &identity)?;
-    let payload = client.call("cron.list", json!({}))?;
-    let jobs = payload
-        .get("jobs")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| serde_json::from_value::<GatewayCronJob>(value.clone()).ok())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Ok(jobs)
-}
-
-fn ensure_gateway_cron_table(connection: &Connection) -> Result<()> {
+pub fn ensure_gateway_cron_table(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS gateway_cron (
             id            TEXT NOT NULL,
@@ -1182,6 +1161,158 @@ pub fn upsert_crons(
 }
 
 /// 拉取 + 落镜像，带 60 秒节流（前端每拍调用也只真连一次每分钟）。
+/// 一次完整的定时快照：单次握手连抓两路——cron.list 落看板镜像 +
+/// cron.runs 落任务账本。2026.9.8 摘除 tasks.list 后，automation_run 的活水
+/// 就是 cron.runs（cron_run_receipts 表没有 summary 列，中文结论只在 runs
+/// 条目里）。cron.runs 拉取失败不拖垮看板镜像：定时台账缺一拍只是晚一分钟，
+/// 看板挂了才是事故。
+pub fn snapshot_gateway_crons(connection: &Connection, target: &GatewayTarget) -> Result<usize> {
+    let identity_dir = match &target.identity_dir {
+        Some(dir) => dir.clone(),
+        None => default_state_dir(),
+    };
+    let identity = load_or_create_identity(&identity_dir)?;
+    let mut client = GatewayClient::connect(target, &identity)?;
+
+    let jobs_payload = client.call("cron.list", json!({}))?;
+    let jobs = jobs_payload
+        .get("jobs")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| serde_json::from_value::<GatewayCronJob>(value.clone()).ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mirror_written = upsert_crons(connection, &target.label, &jobs)?;
+
+    // cron.runs：条目位置与 params 在网关版本间可能漂移，宽容解析
+    // （runs/entries/items/顶层数组都认）。
+    let mut recorded = 0usize;
+    match client.call("cron.runs", json!({})) {
+        Ok(runs_payload) => {
+            let entries = ["runs", "entries", "items"]
+                .iter()
+                .find_map(|key| runs_payload.get(*key).and_then(Value::as_array))
+                .or_else(|| runs_payload.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let tasks = entries
+                .iter()
+                .filter_map(cron_run_entry_to_task)
+                .collect::<Vec<_>>();
+            let names = cron_job_name_map(connection, &target.label);
+            let snapshot = TasksSnapshot {
+                collected_at_ms: chrono::Utc::now().timestamp_millis(),
+                tasks: tasks
+                    .into_iter()
+                    .map(|mut task| {
+                        if task.label.is_none() {
+                            if let Some(source) = task.source_id.as_deref() {
+                                task.label = names.get(source).cloned();
+                            }
+                        }
+                        task
+                    })
+                    .collect(),
+            };
+            recorded = upsert_tasks(connection, &target.label, &snapshot)?;
+        }
+        Err(error) => {
+            eprintln!("cron.runs unavailable on {}: {error}", target.label);
+        }
+    }
+    Ok(mirror_written + recorded)
+}
+
+/// cron.runs 单条 → 任务账本行。字段宽容：网关版本间字段名可能漂移
+/// （runAtMs/ts、completionStatus/status、agentId/agent_id），逐个回退。
+fn cron_run_entry_to_task(entry: &Value) -> Option<GatewayTask> {
+    let job_id = str_of(entry, &["jobId", "job_id"])?;
+    if job_id.is_empty() {
+        return None;
+    }
+    let run_at = num_of(entry, &["runAtMs", "run_at_ms", "ts"]);
+    let duration = num_of(entry, &["durationMs", "duration_ms"]);
+    let task_id = format!(
+        "cronrun:{job_id}:{}",
+        run_at.unwrap_or_else(|| num_of(entry, &["ts"]).unwrap_or_default())
+    );
+    let status_raw =
+        str_of(entry, &["completionStatus", "completion_status"]).or_else(|| str_of(entry, &["status"]));
+    let status = status_raw
+        .as_deref()
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| normalize_cron_run_status(raw));
+    let started_at = run_at;
+    let ended_at = match (run_at, duration) {
+        (Some(at), Some(dur)) if dur > 0 => Some(at + dur),
+        _ => None,
+    };
+    Some(GatewayTask {
+        task_id: Some(task_id),
+        kind: Some("automation_run".to_owned()),
+        runtime: Some("cron".to_owned()),
+        status,
+        title: None,
+        agent_id: str_of(entry, &["agentId", "agent_id"]).filter(|s| !s.is_empty()),
+        session_key: None,
+        child_session_key: None,
+        run_id: str_of(entry, &["runId", "run_id"]).filter(|s| !s.is_empty()),
+        source_id: Some(job_id),
+        created_at: num_of(entry, &["ts"]),
+        started_at,
+        ended_at,
+        updated_at: num_of(entry, &["ts"]),
+        terminal_summary: str_of(entry, &["summary"]).filter(|s| !s.is_empty()),
+        error: str_of(entry, &["error", "errorText", "error_text"]).filter(|s| !s.is_empty()),
+        progress_summary: None,
+        tool_use_count: None,
+        last_tool_name: None,
+        label: None,
+    })
+}
+
+fn str_of(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key)?.as_str().map(str::to_owned))
+}
+
+fn num_of(value: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)?
+            .as_i64()
+            .or_else(|| value.get(*key)?.as_str()?.parse().ok())
+    })
+}
+
+/// 网关侧 completionStatus 口径 → 账本口径。completed 是 runs 的叫法，
+/// 账本统一 succeeded；skipped 保留（分诊口径=良性未跑，静默跳过）。
+fn normalize_cron_run_status(raw: &str) -> String {
+    match raw.to_ascii_lowercase().as_str() {
+        "ok" | "completed" | "complete" | "success" | "succeeded" => "succeeded".to_owned(),
+        "error" | "failed" | "fail" => "failed".to_owned(),
+        "skipped" | "skip" => "skipped".to_owned(),
+        "cancelled" | "canceled" => "cancelled".to_owned(),
+        "running" | "active" => "running".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn cron_job_name_map(connection: &Connection, target_label: &str) -> std::collections::HashMap<String, String> {
+    list_crons(connection, None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| row.gateway == target_label)
+        .filter_map(|row| {
+            let id = row.id;
+            row.name.map(|name| (id, name))
+        })
+        .collect()
+}
+
 pub fn snapshot_gateway_crons_throttled(
     connection: &Connection,
     target: &GatewayTarget,
@@ -1194,8 +1325,7 @@ pub fn snapshot_gateway_crons_throttled(
             return Ok(0);
         }
     }
-    let crons = fetch_crons(target)?;
-    let written = upsert_crons(connection, &target.label, &crons)?;
+    let written = snapshot_gateway_crons(connection, target)?;
     *last_fetch = Some((target.label.clone(), Instant::now()));
     Ok(written)
 }
@@ -1261,7 +1391,7 @@ impl Default for SessionLedgerOptions {
     }
 }
 
-fn ensure_session_run_table(connection: &Connection) -> Result<()> {
+pub fn ensure_session_run_table(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS session_run (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2257,5 +2387,89 @@ mod tests {
         let bare: GatewayTask = serde_json::from_value(json!({"taskId": "t2"})).unwrap();
         assert_eq!(bare.tool_use_count, None);
         assert_eq!(bare.last_tool_name, None);
+    }
+
+    #[test]
+    fn cron_run_status_normalizes_gateway_vocab() {
+        assert_eq!(normalize_cron_run_status("ok"), "succeeded");
+        assert_eq!(normalize_cron_run_status("completed"), "succeeded");
+        assert_eq!(normalize_cron_run_status("Failed"), "failed");
+        assert_eq!(normalize_cron_run_status("skipped"), "skipped");
+        assert_eq!(normalize_cron_run_status("cancelled"), "cancelled");
+        assert_eq!(normalize_cron_run_status("running"), "running");
+        // 未知口径原样透传，前端分诊兜底
+        assert_eq!(normalize_cron_run_status("held"), "held");
+    }
+
+    #[test]
+    fn cron_run_entry_parses_defensively() {
+        let entry = json!({
+            "jobId": "cb75a58f",
+            "completionStatus": "ok",
+            "summary": "本轮完成，候选 0，晋升 0。",
+            "runAtMs": 1_791_144_000_025i64,
+            "durationMs": 28_242i64,
+            "ts": 1_791_144_028_267i64,
+            "agentId": "tianshu"
+        });
+        let task = cron_run_entry_to_task(&entry).unwrap();
+        assert_eq!(task.task_id.as_deref(), Some("cronrun:cb75a58f:1791144000025"));
+        assert_eq!(task.kind.as_deref(), Some("automation_run"));
+        assert_eq!(task.status.as_deref(), Some("succeeded"));
+        assert_eq!(task.source_id.as_deref(), Some("cb75a58f"));
+        assert_eq!(task.agent_id.as_deref(), Some("tianshu"));
+        assert_eq!(task.started_at, Some(1_791_144_000_025));
+        assert_eq!(task.ended_at, Some(1_791_144_000_025 + 28_242));
+        assert!(task.terminal_summary.as_deref().unwrap().starts_with("本轮完成"));
+        // snake_case 回退 + 缺 status 不给终态
+        let legacy = json!({ "job_id": "j2", "status": "failed", "ts": 5 });
+        let task = cron_run_entry_to_task(&legacy).unwrap();
+        assert_eq!(task.task_id.as_deref(), Some("cronrun:j2:5"));
+        assert_eq!(task.status.as_deref(), Some("failed"));
+        assert_eq!(task.ended_at, None);
+        // 无 jobId 的条目不落账
+        assert!(cron_run_entry_to_task(&json!({"ts": 1})).is_none());
+    }
+
+    #[test]
+    fn cron_runs_land_in_ledger_with_job_names() {
+        let db = memory_db();
+        upsert_crons(
+            &db,
+            "vps",
+            &[GatewayCronJob {
+                id: Some("job-1".to_owned()),
+                name: Some("北斗巡检-OpenAI安全黑洞任务".to_owned()),
+                description: None,
+                enabled: Some(true),
+                schedule: None,
+            }],
+        )
+        .unwrap();
+        let entry = json!({
+            "jobId": "job-1", "completionStatus": "ok",
+            "summary": "巡检 14:00：发现一处卡点，已补发续跑卡。",
+            "runAtMs": 1000, "durationMs": 60_000, "agentId": "tianshu"
+        });
+        let mut task = cron_run_entry_to_task(&entry).unwrap();
+        let names = cron_job_name_map(&db, "vps");
+        if task.label.is_none() {
+            task.label = task
+                .source_id
+                .as_deref()
+                .and_then(|source| names.get(source).cloned());
+        }
+        upsert_tasks(&db, "vps", &snapshot_at(2000, vec![task])).unwrap();
+        let rows = list_tasks(&db, None, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label.as_deref(), Some("北斗巡检-OpenAI安全黑洞任务"));
+        assert_eq!(rows[0].status.as_deref(), Some("succeeded"));
+        assert_eq!(rows[0].source_id.as_deref(), Some("job-1"));
+        assert_eq!(rows[0].started_at_ms, Some(1000));
+        assert_eq!(rows[0].ended_at_ms, Some(61_000));
+        // 重放同一条不重复、不回退（cron.runs 每拍都带历史）
+        let replay = cron_run_entry_to_task(&entry).unwrap();
+        upsert_tasks(&db, "vps", &snapshot_at(3000, vec![replay])).unwrap();
+        assert_eq!(list_tasks(&db, None, None).unwrap().len(), 1);
     }
 }

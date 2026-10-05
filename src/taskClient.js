@@ -14,7 +14,70 @@ export { isTauriRuntime };
 /// 假任务堆数只会误导对 +N 角标和面板密度的判断。
 export async function loadGatewayTasks(status) {
   if (!isTauriRuntime()) {
-    return { demo: true, tasks: [] };
+    // 浏览器演示：automation_run 形态取自北斗网关真实台账（2026-10-05 只读拷贝），
+    // 让任务台 v5 的简报/批次/取消/聚合条在预览里各就各位。Tauri 走真账本。
+    const now = Date.now();
+    const min = 60_000;
+    const row = (overrides) => ({
+      gateway: "vps", runtime: "cron", kind: "automation_run",
+      title: null, label: null, error: null, progressSummary: null,
+      toolUseCount: null, lastToolName: null,
+      ...overrides,
+    });
+    return {
+      demo: true,
+      tasks: [
+        row({
+          taskId: "cronrun:demo-patrol:1", label: "北斗巡检-OpenAI安全黑洞任务",
+          agentId: "tianshu", sourceId: "cron-demo-patrol", status: "succeeded",
+          startedAtMs: now - 21 * 3_600_000, endedAtMs: now - 21 * 3_600_000 + 9 * min,
+          terminalSummary: "巡检 14:00｜OpenAI安全黑洞任务：发现并处理一处卡点——天权 13:16 回合中断（事实核查 4 次已完成，但报告未落盘、表未回填），已补发含 4 条核查结论的续跑卡（明确勿重跑检索），天权现已恢复执行中。\n当前阶段「天权初审中」，选题包 1 份在库，巡检备注已登记补发事实；天权落盘回表后会自行 dispatch 天玑，链路无需人工介入。",
+        }),
+        row({
+          taskId: "cronrun:demo-review-yuheng:1", label: "skill-collection-review-yuheng",
+          agentId: "yuheng", sourceId: "cron-demo-review", status: "succeeded",
+          startedAtMs: now - 130 * min, endedAtMs: now - 130 * min + 22_000,
+          terminalSummary: "The Skill Workshop directory is empty — `pwd` is `/root/.openclaw/agents/yuheng/agent/workshop-skills` and it contains no files or subdirectories. There is no collection to audit.",
+        }),
+        row({
+          taskId: "cronrun:demo-review-tianji:1", label: "skill-collection-review-tianji",
+          agentId: "tianji", sourceId: "cron-demo-review", status: "succeeded",
+          startedAtMs: now - 27 * 3_600_000, endedAtMs: now - 27 * 3_600_000 + 18_000,
+          terminalSummary: "The Skill Workshop directory is completely empty — verified via listing and shell inspection (no dotfiles, no subdirectories, last modified Sep 18).",
+        }),
+        row({
+          taskId: "cronrun:demo-memory:1", label: "Memory Dreaming Promotion",
+          agentId: "tianshu", sourceId: "cron-demo-memory", status: "succeeded",
+          startedAtMs: now - 29 * 3_600_000, endedAtMs: now - 29 * 3_600_000 + 5 * min,
+          terminalSummary: "本轮完成，结果与过去 12 轮一致：候选 0，晋升 0，机制性阻塞未解除。\n硬门槛 dry-run：8 个工作区全部 No short-term recall candidates，未写入任何 MEMORY.md。",
+        }),
+        row({
+          taskId: "cronrun:demo-abort:1", runtime: "cli", kind: null,
+          agentId: "tianshu", sourceId: "31953e62-23ba-4174-a786-f4b1f628027f", status: "cancelled",
+          startedAtMs: now - 20 * 3_600_000, endedAtMs: now - 20 * 3_600_000 + 41_000,
+          error: "agent run aborted for restart | OPENCLAW_RESTART_ABORT",
+          terminalSummary: "agent run aborted for restart | OPENCLAW_RESTART_ABORT",
+        }),
+        row({
+          taskId: "cli:demo-1", runtime: "cli", kind: "exec", label: "CLI command",
+          agentId: "tianshu", status: "succeeded",
+          startedAtMs: now - 200 * min, endedAtMs: now - 200 * min + 14_000,
+          terminalSummary: "Command completed",
+        }),
+        row({
+          taskId: "cli:demo-2", runtime: "cli", kind: "exec", label: "CLI command",
+          agentId: "tianshu", status: "succeeded",
+          startedAtMs: now - 190 * min, endedAtMs: now - 190 * min + 9_000,
+          terminalSummary: "Command completed",
+        }),
+        row({
+          taskId: "cli:demo-3", runtime: "cli", kind: "exec", label: "CLI command",
+          agentId: "main", status: "timed_out",
+          startedAtMs: now - 150 * min, endedAtMs: now - 150 * min + 60_000,
+          error: "Command timed out", terminalSummary: "Command stopped",
+        }),
+      ],
+    };
   }
   try {
     const tasks = await invoke("gateway_task_list", { status: status ?? null, limit: 300 });

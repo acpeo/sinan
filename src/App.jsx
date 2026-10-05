@@ -2271,7 +2271,7 @@ function GatewaySettingsCard({ gateways, onGatewaysChanged }) {
       }
       // 连通性验证：直接试拉一次。失败也允许保存（VPS 可能暂时离线），
       // 但把错误显示出来让用户知道。
-      const result = await refreshGatewayTasks([entry]);
+      const result = await refreshCronJobs([entry]);
       const outcome = result.results?.[0];
       const next = [
         ...gateways.filter((candidate) => candidate.label !== entry.label),
@@ -2900,189 +2900,464 @@ function formatCronNext(nextMs, now = Date.now()) {
   return `${Math.round((hours / 24) * 10) / 10} 天后`;
 }
 
-/// 星轨时间线（任务台「任务」签主内容）：横轴=时间，纵轴=星位，会话台账的
-/// 每跳是轨道上的一段光；定时心跳收成一条刻度轨。数据全部来自本地台账，
-/// 不用动后端。接力扣 = 上一棒结束到下一棒开始（≤60 分钟）的虚线连接。
-// 轨道行高与 CSS .starrail-lane 保持一致（接力扣的纵向几何靠它算）。
-const STARRAIL_LANE_H = 48;
-const STARRAIL_PAD_TOP = 30;
-// 网关星名广播没到时的兜底：北斗七星 + main 的中文名（桌面端正常都走广播）。
-const STARRAIL_NAME_FALLBACK = {
+// ============ 任务台 v5：斗形星盘 + 值班区 + 动态流（2026-10-05 设计评审定稿） ============
+// 设计契约：北斗=连续折线（枢→璇→玑→权→衡→阳→光，魁口不封，摇光坠向右下
+// 指向"下一次·定时"读数块）；实心金只允许读数块时间一处；状态四色+卡左缘
+// 色条；看门狗简报金边置顶；统计口径=每个数字必须指到屏上可见对象。
+
+// 斗形坐标（552×146 视口，窗口缩放由 SVG viewBox 等比承担）。
+const DIAL_CHAIN = [
+  ["tianshu", 58, 30], ["tianxuan", 54, 92], ["tianji", 140, 104],
+  ["tianquan", 166, 62], ["yuheng", 232, 50], ["kaiyang", 286, 42], ["yaoguang", 352, 90],
+];
+const DIAL_HUB = { x: 104, y: 70 };
+const DIAL_TONE = { live: "#3DD68C", fail: "#F26D6D", done: "#4E9DB8", cancel: "#4A5568", idle: "#4A5568" };
+const STAR_NAME_FALLBACK = {
   tianshu: "天枢", tianxuan: "天璇", tianji: "天玑", tianquan: "天权",
-  yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "主会话",
+  yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "主 Agent",
 };
-// 轨道光条上的短时长标注（"6 分"；不足 1 分钟只给秒）。
-function starrailShortDuration(start, end) {
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "";
-  const minutes = Math.round((end - start) / 60_000);
-  if (minutes < 1) return `${Math.max(1, Math.round((end - start) / 1000))} 秒`;
-  if (minutes < 60) return `${minutes} 分`;
-  return `${Math.floor(minutes / 60)} 时 ${minutes % 60} 分`;
+function starNameOf(agentId) {
+  const key = String(agentId || "main");
+  return STAR_NAME_FALLBACK[key] ?? key;
 }
-
-// 视野人话："35 分钟" / "2 小时"。
-function starrailHumanWindow(ms) {
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hours = minutes / 60;
-  return Number.isInteger(hours) ? `${hours} 小时` : `${hours.toFixed(1)} 小时`;
+// 用户语言的类型词：巡检简报 / 巡检 / Memory / 定时 / 任务 / 接力。
+function cjkRatioOf(text) {
+  const t = String(text ?? "").replace(/\s/g, "");
+  if (!t) return 0;
+  let han = 0;
+  for (const ch of t) if (/\p{Script=Han}/u.test(ch)) han += 1;
+  return han / [...t].length;
 }
-
-function StarRailTimeline({ runs, cronTasks, agentNameMap, now, episodeTitle }) {
-  // 视野自适应（Apple 日历式）：窗口罩住全部活动并留 4 分钟边，最短 30 分钟、
-  // 最长 24 小时——活动密在几分钟里时轨道放大，不会挤成一串点。
-  const decorated = runs
-    .map((run) => {
-      const start = Number.isFinite(run.startedAtMs) ? run.startedAtMs : run.firstSeenMs;
-      const end = run.status === "running" ? now : run.endedAtMs ?? run.lastSeenMs ?? start;
-      return Number.isFinite(start) && Number.isFinite(end) ? { run, start, end } : null;
-    })
-    .filter(Boolean);
-  const activityStart = decorated.length ? Math.min(...decorated.map((e) => e.start)) : now;
-  const windowStart = Math.min(activityStart - 4 * 60_000, now - 30 * 60_000);
-  const viewMs = Math.min(now - windowStart, 24 * 60 * 60 * 1000);
-  const pct = (ms) => Math.max(0, Math.min(100, ((ms - windowStart) / viewMs) * 100));
-  const laneRuns = decorated.filter((e) => e.end >= windowStart).map((e) => e.run);
-  const lanes = [];
-  const laneIndex = new Map();
-  for (const run of laneRuns) {
-    const key = run.agentId || run.sessionKey || "unknown";
-    if (!laneIndex.has(key)) {
-      laneIndex.set(key, lanes.length);
-      lanes.push({ key, items: [] });
-    }
-    lanes[laneIndex.get(key)].items.push(run);
+function taskKindOf(row) {
+  const title = row.label || row.title || "";
+  if (/巡检/.test(title) && cjkRatioOf(row.terminalSummary) > 0.3) return "巡检简报";
+  if (/skill-collection-review/i.test(title)) return "巡检";
+  if (/Memory/i.test(title)) return "Memory";
+  return row.kind === "automation_run" ? "定时" : "任务";
+}
+function isBriefingRow(row) {
+  return taskKindOf(row) === "巡检简报";
+}
+function taskTitleOf(row) {
+  const id = row.taskId ?? "";
+  const degenerate = !cleanTaskTitle(row) && !row.label && !row.title
+    && (/^cronrun:/.test(id) || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(id));
+  if (degenerate) {
+    return row.kind === "automation_run" ? "定时运行" : `${row.runtime ?? "任务"} 运行`;
   }
-  const laneName = (key) => {
-    const suffix = key.slice(key.lastIndexOf(":") + 1);
-    return agentNameMap?.get(key)
-      ?? agentNameMap?.get(suffix)
-      ?? STARRAIL_NAME_FALLBACK[suffix]
-      ?? suffix
-      ?? key;
-  };
-  // 轨道副行：该星最近一段活动的状态（进行中 / 收班时间）。
-  const laneSub = (lane) => {
-    const latest = [...lane.items].sort(
-      (a, b) => (b.endedAtMs ?? b.lastSeenMs ?? 0) - (a.endedAtMs ?? a.lastSeenMs ?? 0),
-    )[0];
-    if (!latest) return "";
-    if (latest.status === "running") return latest.progressSummary || "进行中";
-    const at = latest.endedAtMs ?? latest.lastSeenMs;
-    return Number.isFinite(at) ? `收班 ${formatTaskAge(at)}` : "";
-  };
-  const gridTicks = [0, 0.25, 0.5, 0.75].map((fraction) => {
-    const at = windowStart + viewMs * fraction;
+  return cleanTaskTitle(row) || row.label || row.title || row.taskId || "未命名任务";
+}
+function isSlugTitle(row) {
+  return /skill-collection-review/i.test(row.label || row.title || "");
+}
+function feedToneOf(row) {
+  if (row.status === "running") return "live";
+  if (row.status === "failed" || row.status === "timed_out") return "fail";
+  if (row.status === "cancelled" || row.status === "skipped") return "cancel";
+  return "done";
+}
+const atMsOf = (row) => row.startedAtMs ?? row.createdAtMs ?? row.lastSeenMs ?? 0;
+const hhMmOf = (ms) => new Date(ms).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+
+// 动态流视图模型：exec 聚合 / NO_REPLY 跳过 / 简报置顶去重 / 同日巡检批次聚合。
+function buildTasksFeedModel({ rows, episodes, now }) {
+  const atOf = (row) => atMsOf(row);
+  const items = [];
+  const execAgg = new Map();
+  let skippedNoReply = 0;
+  for (const row of rows) {
+    const kind = row.kind ?? "";
+    // exec 聚合口径：kind 明确是 exec/cli 的命令行；runtime=cli 但 kind 缺失的
+    // 是被重启中止的 agent run（取消卡），不进聚合。
+    if (kind === "exec" || (kind === "cli" && row.runtime === "cli")) {
+      const agent = row.agentId || "main";
+      const agg = execAgg.get(agent) ?? { total: 0, ok: 0, bad: 0, cancel: 0 };
+      agg.total += 1;
+      if (row.status === "succeeded") agg.ok += 1;
+      else if (row.status === "cancelled") agg.cancel += 1;
+      else if (row.status && row.status !== "running") agg.bad += 1;
+      execAgg.set(agent, agg);
+      continue;
+    }
+    const summary = String(row.terminalSummary ?? "").trim();
+    if (summary === "NO_REPLY" || (!summary && row.status === "succeeded" && !row.label && !row.title)) {
+      skippedNoReply += 1;
+      continue;
+    }
+    items.push(row);
+  }
+  const makeTaskVm = (row) => {
+    const tone = feedToneOf(row);
+    const summary = String(row.terminalSummary ?? "").trim();
     return {
-      fraction,
-      label: new Date(at).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }),
+      key: `row:${row.gateway}:${row.taskId}`,
+      type: "task", agentId: row.agentId || "main",
+      agent: starNameOf(row.agentId), kind: taskKindOf(row),
+      at: atOf(row), tone,
+      color: DIAL_TONE[tone],
+      title: taskTitleOf(row), slug: isSlugTitle(row),
+      summary, cjk: cjkRatioOf(summary) > 0.3,
+      status: row.status, error: row.error,
+      decayed: tone === "done" && now - atOf(row) > 86_400_000,
     };
-  });
-  // 心跳刻度：automation_run 落在窗口内的每一次运行（按分诊口径着色）。
-  const cronTicks = (cronTasks ?? [])
-    .filter((task) => task?.kind === "automation_run")
-    .map((task) => {
-      const at = task.endedAtMs ?? task.startedAtMs ?? task.lastSeenMs;
-      const tone = hopToneOf({ status: task.status, taskId: task.taskId ?? task.id, error: task.error });
-      return { at, tone: tone.tone, name: cleanTaskTitle(task) || task.label || task.taskId };
-    })
-    .filter((tick) => Number.isFinite(tick.at) && tick.at >= windowStart && tick.at <= now)
-    .slice(-80);
-  // 接力扣：时间顺序上相邻、跨轨道、间隔 ≤60 分钟的两跳连一条虚线。
-  const ordered = laneRuns
-    .map((run) => ({ ...run, lane: laneIndex.get(run.agentId || run.sessionKey || "unknown") }))
-    .sort((a, b) => (a.endedAtMs ?? a.lastSeenMs ?? 0) - (b.endedAtMs ?? b.lastSeenMs ?? 0));
-  const connectors = [];
-  for (let i = 1; i < ordered.length; i++) {
-    const prev = ordered[i - 1];
-    const next = ordered[i];
-    if (next.lane <= prev.lane) continue;
-    const prevEnd = prev.endedAtMs ?? prev.lastSeenMs ?? 0;
-    const nextStart = next.startedAtMs ?? 0;
-    if (!prevEnd || !nextStart || nextStart - prevEnd > 60 * 60 * 1000) continue;
-    connectors.push({
-      left: pct(Math.min(nextStart, prevEnd + 60_000)),
-      top: STARRAIL_PAD_TOP + prev.lane * STARRAIL_LANE_H + 34,
-      height: (next.lane - prev.lane) * STARRAIL_LANE_H - 14,
-      key: `${prev.id ?? i}-${next.id ?? i}`,
+  };
+  const briefings = items
+    .filter((row) => isBriefingRow(row) && now - atOf(row) <= 48 * 3_600_000)
+    .sort((a, b) => atOf(b) - atOf(a));
+  const briefing = briefings.length ? makeTaskVm(briefings[0]) : null;
+  const rest = briefing ? items.filter((row) => row !== briefings[0]) : items;
+  // 同日多星巡检批次（≥2 星才聚，单卡还原）
+  const batched = [];
+  const batchByDay = new Map();
+  for (const row of rest) {
+    if (taskKindOf(row) === "巡检") {
+      const day = new Date(atOf(row)).toDateString();
+      const batch = batchByDay.get(day);
+      if (batch) { batch.rows.push(row); continue; }
+      const fresh = { batchDay: day, rows: [row] };
+      batchByDay.set(day, fresh);
+      batched.push(fresh);
+      continue;
+    }
+    batched.push(row);
+  }
+  const flattened = batched.map((entry) => (
+    Array.isArray(entry?.rows) && entry.rows.length < 2 ? entry.rows[0] : entry
+  ));
+  const cards = [];
+  for (const entry of flattened) {
+    if (Array.isArray(entry?.rows)) {
+      const group = entry.rows;
+      const okN = group.filter((r) => r.status === "succeeded").length;
+      const badN = group.length - okN;
+      cards.push({
+        key: `batch:${entry.batchDay}:${group[0].taskId}`,
+        type: "batch", agentId: null, agent: "多星", kind: "巡检",
+        at: Math.max(...group.map(atOf)), tone: badN ? "fail" : "done",
+        color: DIAL_TONE[badN ? "fail" : "done"],
+        title: `巡检批次 · ${group.length} 星 · ${badN ? `${okN} 成 ${badN} 异常` : "全部正常"}`,
+        detail: group.map((r) => `${starNameOf(r.agentId)} ${hhMmOf(atOf(r))} ${r.status === "succeeded" ? "✓" : "✕"}`).join(" · "),
+      });
+      continue;
+    }
+    cards.push(makeTaskVm(entry));
+  }
+  // 收工接力轮 → 一条接力卡（实时跳转归小组件，主窗管案的结论与状态）
+  for (const ep of episodes) {
+    const latest = ep.runs[ep.runs.length - 1];
+    if (!latest) continue;
+    const { tone } = hopToneOf({ status: latest.status, taskId: latest.taskId ?? latest.id, error: latest.error });
+    const summary = String(latest.terminalSummary ?? latest.progressSummary ?? "").trim();
+    cards.push({
+      key: `ep:${ep.startedAtMs}:${latest.id ?? latest.sessionKey ?? "ep"}`,
+      type: "episode", episode: ep, agentId: latest.agentId || "main",
+      agent: starNameOf(latest.agentId), kind: "接力",
+      at: ep.lastActivityMs ?? ep.startedAtMs ?? 0,
+      tone: tone === "failed" ? "fail" : "done",
+      color: tone === "failed" ? DIAL_TONE.fail : DIAL_TONE.done,
+      title: latest.title || latest.fallbackTitle || "会话工作", slug: false,
+      summary, cjk: cjkRatioOf(summary) > 0.3,
+      status: latest.status, error: latest.error, decayed: false,
     });
   }
-  return (
-    <section className="starrail" aria-label="星轨时间线">
-      <div className="starrail-head">
-        <b>{episodeTitle || "星轨"}</b>
-        <small>{episodeTitle ? "进行中的接力" : "最近一段活动"}</small>
-        <span className="starrail-window">视野：{starrailHumanWindow(viewMs)}</span>
-      </div>
-      <div className="starrail-frame">
-        <div className="starrail-grid">
-          {gridTicks.map((tick) => (
-            <i key={tick.fraction} style={{ left: `${tick.fraction * 100}%` }}>
-              <span>{tick.label}</span>
-            </i>
-          ))}
-        </div>
-        <i className="starrail-now" aria-hidden="true" />
-        {lanes.map((lane) => (
-          <div className="starrail-lane" key={lane.key}>
-            <div className="starrail-who">
-              <b>{laneName(lane.key)}</b>
-              <small>{laneSub(lane)}</small>
+  cards.sort((a, b) => b.at - a.at);
+  return { briefing, cards, execAgg, skippedNoReply };
+}
+
+// 星盘态：每颗星最近一条非取消卡；取消/跳过不进盘（保留"收班"语义）。
+function buildStarState(cards, now) {
+  const latest = new Map();
+  for (const card of cards) {
+    if (card.type === "batch" || card.tone === "cancel") continue;
+    const id = card.agentId || "main";
+    if (!latest.has(id)) latest.set(id, card);
+  }
+  return DIAL_CHAIN.map(([id]) => {
+    const card = latest.get(id);
+    if (!card) return { id, tone: "idle", stale: true };
+    return { id, tone: card.tone, stale: card.tone === "done" && now - card.at > 86_400_000 };
+  });
+}
+
+// 案卡链路行：状态级标注（不是逐跳实时，实时归小组件）。
+function caseChainText(episode) {
+  const hops = episode?.hops ?? [];
+  const n = hops.length;
+  if (!n) return "";
+  return hops.map((hop, i) => {
+    const name = starNameOf(hop.agentId);
+    if (hop.status === "running") return `${name} ● 执行中（第 ${i + 1}/${n} 跳）`;
+    const { tone } = hopToneOf({ status: hop.status, taskId: hop.taskId ?? hop.id, error: hop.error });
+    if (tone === "done") return `${name} ✓`;
+    if (tone === "failed") return `${name} ✕`;
+    return `${name} ○ 待派`;
+  }).join("  →  ");
+}
+
+function dayLabelOf(ms, now) {  const d = new Date(ms);
+  if (d.toDateString() === new Date(now).toDateString()) return "今天";
+  if (d.toDateString() === new Date(now - 86_400_000).toDateString()) return "昨天";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// 任务台主内容（v5）：星盘仪 → 统计行 → 值班区（在办案件/最新简报）→ 动态流。
+function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap }) {
+  const [selectedStar, setSelectedStar] = useState(null);
+  const [feedFilter, setFeedFilter] = useState("all"); // all | failed | cron
+  const [expandedSet, setExpandedSet] = useState(() => new Set());
+  const toggleExpanded = (key) => setExpandedSet((current) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+
+  const feed = useMemo(
+    () => buildTasksFeedModel({ rows, episodes, now }),
+    [rows, episodes, now],
+  );
+  const starState = useMemo(() => buildStarState(feed.cards, now), [feed, now]);
+
+  const isCronKind = (card) => card.kind === "定时" || card.kind === "巡检简报" || card.kind === "巡检" || card.kind === "Memory";
+  const filteredCards = feed.cards.filter((card) => {
+    if (feedFilter === "failed" && card.tone !== "fail") return false;
+    if (feedFilter === "cron" && !isCronKind(card)) return false;
+    if (selectedStar && card.agentId !== selectedStar) return false;
+    return true;
+  });
+  const todayKey = new Date(now).toDateString();
+  const visibleToday = filteredCards.filter((card) => new Date(card.at).toDateString() === todayKey).length;
+  const failedToday = feed.cards.filter((card) => card.tone === "fail" && new Date(card.at).toDateString() === todayKey).length;
+  const runningCount = activeEpisodes.length + rows.filter((row) => row.status === "running").length;
+
+  const statBits = [`今日 <b>${visibleToday} 案</b>`];
+  if (failedToday) statBits.push(`失败 ${failedToday}`);
+  if (runningCount) statBits.push(`进行中 ${runningCount}`);
+
+  const enabledJobs = cronJobs.filter((job) => job.enabled);
+  const nextCandidates = enabledJobs
+    .map((job) => ({ job, at: cronNextRunMs(job.scheduleExpr, now) }))
+    .filter((entry) => Number.isFinite(entry.at))
+    .sort((a, b) => a.at - b.at);
+  const nextEntry = nextCandidates[0] ?? null;
+  const nextStar = nextEntry
+    ? starNameOf(lastRunByJob.get(nextEntry.job.id)?.agentId)
+    : "";
+
+  const sparkBars = useMemo(() => (
+    Array.from({ length: 7 }, (_, i) => {
+      const day = new Date(now - (6 - i) * 86_400_000);
+      const key = day.toDateString();
+      const n = rows.filter((row) => {
+        const kind = row.kind ?? "";
+        if (kind === "exec" || (kind === "cli" && row.runtime === "cli")) return false;
+        return new Date(atMsOf(row)).toDateString() === key;
+      }).length;
+      return { n, label: `${day.getMonth() + 1}-${day.getDate()} · ${n} 行`, today: i === 6 };
+    })
+  ), [rows, now]);
+  const sparkMax = Math.max(1, ...sparkBars.map((bar) => bar.n));
+
+  const execTotal = [...feed.execAgg.values()].reduce((sum, agg) => sum + agg.total, 0);
+  const execDetail = [...feed.execAgg.entries()].map(([agent, agg]) => `${starNameOf(agent)} ${agg.total}`).join("｜");
+  const isEmpty = !feed.cards.length && !feed.execAgg.size && !activeEpisodes.length;
+
+  const renderCard = (card) => {
+    if (card.type === "batch") {
+      return (
+        <article key={card.key} className="v5card v5card--dump spine" style={{ "--spine": card.color }}>
+          <div className="v5-l1"><i className="v5-dot" style={{ background: card.color }} /><b style={{ color: card.color }}>{card.agent}</b><span className="v5-kind">巡检</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+          <div className="v5-l2">{card.title}</div>
+          <div className="v5-batchdetail">{card.detail}</div>
+        </article>
+      );
+    }
+    if (card.type === "episode") {
+      const expanded = expandedSet.has(card.key);
+      return (
+        <article key={card.key} className={`v5card spine${card.summary && card.cjk ? "" : " v5card--dump"}`} style={{ "--spine": card.color }}>
+          <div className="v5-l1"><i className="v5-dot" style={{ background: card.color }} /><b style={{ color: card.color }}>{card.agent}</b><span className="v5-kind">接力</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+          <div className="v5-l2">{card.title}</div>
+          {card.summary ? <div className="v5-concl">{card.summary}</div> : null}
+          <div className="v5-morerow">
+            <button type="button" className="v5-more" onClick={() => toggleExpanded(card.key)}>
+              {expanded ? "收起链路" : "展开链路"}
+            </button>
+          </div>
+          {expanded && (
+            <div className="v5-hops">
+              <TaskChainTimeline
+                hops={card.episode.runs.map(sessionRunHop)}
+                currentTaskId={card.episode.runs[card.episode.runs.length - 1]?.taskId}
+                agentNameMap={agentNameMap}
+              />
             </div>
-            {lane.items.map((run) => {
-              const start = Number.isFinite(run.startedAtMs) ? run.startedAtMs : run.firstSeenMs;
-              const end = run.status === "running" ? now : run.endedAtMs ?? run.lastSeenMs ?? start;
-              const tone = hopToneOf({ status: run.status, taskId: run.taskId ?? run.id, error: run.error });
-              const left = pct(start);
-              const width = Math.max(2.2, pct(end) - left);
-              const label = run.status === "running"
-                ? (run.progressSummary || starrailShortDuration(start, end) || "进行中")
-                : tone.tone === "failed"
-                  ? "失败"
-                  : starrailShortDuration(start, end);
-              return (
-                <span
-                  key={run.id ?? `${run.sessionKey}:${run.startedAtMs}`}
-                  className={`starrail-run starrail-run--${tone.tone}${run.status === "running" ? " starrail-run--live" : ""}`}
-                  style={{ left: `${left}%`, width: `${width}%` }}
-                  title={`${laneName(lane.key)} · ${starrailShortDuration(start, end) || "进行中"}${run.error ? ` · ${run.error}` : ""}${run.terminalSummary ? `\n${run.terminalSummary}` : ""}`}
-                >
-                  {label ? <em>{label}</em> : null}
-                </span>
-              );
-            })}
+          )}
+        </article>
+      );
+    }
+    const row = card;
+    if (card.tone === "cancel") {
+      const skipped = card.status === "skipped";
+      const err = card.error ?? (skipped ? "免打扰/未满足条件" : "操作者取消");
+      const pipeAt = err.lastIndexOf(" | ");
+      const code = pipeAt > 0 ? err.slice(pipeAt + 3) : null;
+      const msg = pipeAt > 0 ? err.slice(0, pipeAt) : err;
+      return (
+        <article key={card.key} className="v5card v5card--dump spine" style={{ "--spine": DIAL_TONE.cancel }}>
+          <div className="v5-l1"><i className="v5-dot v5-dot--hollow" /><b style={{ color: DIAL_TONE.cancel }}>{card.agent}</b><span className="v5-kind">{card.kind}</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+          <div className="v5-l2 v5-l2--soft">{card.title}</div>
+          <div className="v5-cancelwhy">{skipped ? "静默跳过" : "已取消"} · {msg}</div>
+          {code ? <div className="v5-errraw">{code} · {msg}</div> : null}
+        </article>
+      );
+    }
+    const isBriefing = card.kind === "巡检简报";
+    const clamped = card.summary && card.summary.length > 96;
+    const expanded = expandedSet.has(card.key);
+    if (card.summary && !card.cjk) {
+      return (
+        <article key={card.key} className="v5card v5card--dump spine" style={{ "--spine": card.color }}>
+          <div className="v5-l1"><i className="v5-dot" style={{ background: card.color, opacity: card.decayed ? 0.55 : 1 }} /><b style={{ color: card.color }}>{card.agent}</b><span className="v5-kind">{card.kind}</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+          <div className={`v5-l2${card.slug ? " is-slug" : ""}`}>{card.title}</div>
+          <div className="v5-concl-en">{card.summary}</div>
+        </article>
+      );
+    }
+    return (
+      <article key={card.key} className={`v5card spine${isBriefing ? " v5card--brief" : ""}`} style={{ "--spine": card.color }}>
+        <div className="v5-l1"><i className="v5-dot" style={{ background: card.color, opacity: card.decayed ? 0.55 : 1 }} /><b style={{ color: card.color }}>{card.agent}</b><span className={`v5-kind${isBriefing ? " v5-kind--gold" : ""}`}>{card.kind}</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+        <div className={`v5-l2${card.slug ? " is-slug" : ""}`}>{card.title}</div>
+        {card.summary ? <div className={`v5-concl${expanded ? " is-open" : ""}`}>{card.summary}</div> : null}
+        {card.error && card.tone === "fail" ? <div className="v5-err">{card.error}</div> : null}
+        {clamped ? (
+          <div className="v5-morerow">
+            <button type="button" className="v5-more" onClick={() => toggleExpanded(card.key)}>
+              {expanded ? "收起" : "展开全文"}
+            </button>
           </div>
-        ))}
-        <div className="starrail-lane starrail-lane--cron">
-          <div className="starrail-who">
-            <b>定时</b>
-            <small>心跳/巡检</small>
-          </div>
-          {cronTicks.map((tick, index) => (
-            <span
-              key={index}
-              className={`starrail-tick starrail-tick--${tick.tone}`}
-              style={{ left: `${pct(tick.at)}%` }}
-              title={`${tick.name} · ${formatHistoryTime(tick.at, now)}`}
+        ) : null}
+      </article>
+    );
+  };
+
+  let lastDay = null;
+  const feedNodes = [];
+  for (const card of filteredCards) {
+    const label = dayLabelOf(card.at, now);
+    if (label !== lastDay) {
+      feedNodes.push(<div className="v5-daybar" key={`day:${label}:${card.key}`}><span>{label}</span></div>);
+      lastDay = label;
+    }
+    feedNodes.push(renderCard(card));
+  }
+
+  return (
+    <div className="tasksboard">
+      <div className="dial" role="img" aria-label="北斗七星状态盘">
+        <svg viewBox="0 0 552 146" preserveAspectRatio="xMinYMid meet">
+          <polyline
+            points={DIAL_CHAIN.map(([, x, y]) => `${x},${y}`).join(" ")}
+            fill="none" stroke="#2E3850" strokeWidth="1"
+          />
+          <line x1={DIAL_CHAIN[6][1] + 8} y1="86" x2="372" y2="84" stroke="rgba(217,168,96,.4)" strokeWidth="1" strokeDasharray="2 3" />
+          <text x="376" y="88" fill="#D9A860" fontSize="12">›</text>
+          <path d="M 24 136 Q 276 128 496 136" fill="none" stroke="#2A3142" strokeWidth="1" />
+          {starState.map((star) => {
+            const [, x, y] = DIAL_CHAIN.find(([id]) => id === star.id);
+            const color = DIAL_TONE[star.tone];
+            return (
+              <g
+                key={star.id}
+                className={`dial-node${star.tone === "idle" ? " is-idle" : ""}${star.stale ? " is-stale" : ""}${selectedStar === star.id ? " is-selected" : ""}`}
+                transform={`translate(${x},${y})`}
+                onClick={() => setSelectedStar(selectedStar === star.id ? null : star.id)}
+              >
+                {selectedStar === star.id && <circle r="9" fill="none" stroke="#D9A860" strokeWidth="1.3" />}
+                {star.tone === "live" && <circle className="dial-halo" r="8.5" fill="none" stroke={color} strokeOpacity=".4" />}
+                <circle
+                  className="dial-dot" r="4.5"
+                  fill={star.tone === "idle" ? "none" : color}
+                  stroke={star.tone === "idle" ? "#4A5568" : "none"}
+                  strokeWidth={star.tone === "idle" ? 1.2 : 0}
+                />
+                <text x="0" y={star.id === "tianquan" ? -9 : 17} textAnchor="middle">{STAR_NAME_FALLBACK[star.id]}</text>
+              </g>
+            );
+          })}
+          <g className="dial-hub" transform={`translate(${DIAL_HUB.x},${DIAL_HUB.y})`}>
+            <circle r="6" fill="none" stroke="#D9A860" strokeWidth="1.4" />
+            <text x="10" y="4" textAnchor="start">主 Agent</text>
+          </g>
+        </svg>
+        <div className="dial-next">
+          <div className="lb">下一次 · 定时</div>
+          <div className="tm">{nextEntry ? hhMmOf(nextEntry.at) : "待排"}</div>
+          <div className="sub">{nextEntry ? formatCronNext(nextEntry.at, now) : ""}{nextStar ? ` · ${nextStar}` : ""}</div>
+        </div>
+        <div className="dial-legend">
+          <span><i style={{ background: DIAL_TONE.live }} />运行</span>
+          <span><i style={{ background: DIAL_TONE.fail }} />失败</span>
+          <span><i style={{ background: DIAL_TONE.done }} />收班</span>
+          <span><i className="li-idle" />空闲</span>
+        </div>
+      </div>
+
+      <div className="v5-statrow">
+        <span className="v5-stat" dangerouslySetInnerHTML={{ __html: statBits.join(" · ") }} />
+        <div className="v5-spark">
+          <span className="v5-spark-label">台账</span>
+          {sparkBars.map((bar) => (
+            <i
+              key={bar.label} className="v5-spark-bar"
+              style={{ height: bar.n === 0 ? 2 : Math.max(3, Math.round((bar.n / sparkMax) * 18)), background: bar.today ? "#D9A860" : undefined }}
+              title={bar.label}
             />
           ))}
         </div>
-        {connectors.map((c) => (
-          <i
-            key={c.key}
-            className="starrail-handoff"
-            style={{ left: `${c.left}%`, top: `${c.top}px`, height: `${c.height}px` }}
-          />
-        ))}
+        <div className="v5-filters">
+          {[["all", "全部"], ["failed", "失败"], ["cron", "定时"]].map(([id, label]) => (
+            <button key={id} type="button" className={`v5-chip${feedFilter === id ? " is-on" : ""}`} onClick={() => setFeedFilter(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
-      {lanes.length === 0 && cronTicks.length === 0 && (
-        <p className="starrail-empty">最近 2 小时没有星位活动；派一轮活，轨道就会亮起来。</p>
-      )}
-    </section>
+
+      <div className="v5-feed">
+        {activeEpisodes.map((episode) => (
+          <div key={`case:${episode.chatId ?? episode.startedAtMs}`}>
+            <div className="v5-daybar" style={{ marginTop: 2 }}><span>在办案件</span></div>
+            <article className="v5card v5case">
+              <div className="v5-l1"><i className="v5-dot" style={{ background: DIAL_TONE.live }} /><b style={{ color: DIAL_TONE.live }}>案 · 接力</b><span className="v5-kind">进行中</span></div>
+              <div className="v5-l2">{episode.hops?.[0]?.title || "接力进行中"}</div>
+              <div className="v5-chain">{caseChainText(episode)}</div>
+            </article>
+          </div>
+        ))}
+        {feed.briefing && (!selectedStar || feed.briefing.agentId === selectedStar) && (
+          <div>
+            <div className="v5-daybar" style={{ marginTop: 2 }}><span>最新简报</span></div>
+            {renderCard({ ...feed.briefing })}
+          </div>
+        )}
+        {isEmpty && (
+          <p className="v5-empty">舰队还没有活动记录 · 连上网关派一轮活，这里会长出动态</p>
+        )}
+        {feedNodes}
+        {execTotal > 0 && (
+          <div className="v5-execbar">
+            <span className="v5-execico" aria-hidden="true" />
+            命令执行 · {execTotal} 条{execDetail ? `｜${execDetail}` : ""}
+          </div>
+        )}
+        {feed.skippedNoReply > 0 && <div className="v5-foot">已跳过 {feed.skippedNoReply} 条空定时 · 不占位</div>}
+      </div>
+    </div>
   );
 }
 
-function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) {  const [state, setState] = useState({ status: "loading", filter: "active", data: null });
+function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) {  const [state, setState] = useState({ status: "loading", filter: "all", data: null });
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [lastSync, setLastSync] = useState(null);
@@ -3335,28 +3610,8 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
 
   const showTasks = tab === "tasks";
   const showCron = tab === "cron";
-  const showHistory = tab === "history";
   return (
     <main className="tasks-section tasks-section--flush">
-      {showTasks && (
-        <div className="tasks-toolbar">
-          <div className="tasks-filters" role="tablist" aria-label="任务筛选">
-            {filters.map((filter) => (
-              <button
-                key={filter.id}
-                type="button"
-                role="tab"
-                aria-selected={state.filter === filter.id}
-                className={state.filter === filter.id ? "is-selected" : ""}
-                onClick={() => setState((current) => ({ ...current, filter: filter.id }))}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {showTasks && feedback && (
         <p className={feedback.tone === "error" ? "tasks-feedback tasks-feedback--error" : "tasks-feedback tasks-feedback--success"}>
           {feedback.message}
@@ -3367,131 +3622,17 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
       )}
       {showTasks && data?.loadError && <p className="tasks-feedback tasks-feedback--error">{data.loadError}</p>}
 
-      {showTasks && (<>
-      <StarRailTimeline
-        runs={sessionRuns}
-        cronTasks={cronTasks}
-        agentNameMap={agentNameMap}
-        now={now}
-        episodeTitle={relayEpisodes[0]?.hops?.[0]?.title ?? null}
-      />
-      <div className="starrail-chips">
-        <div className="starrail-chip"><b>{todayTones.relay}</b><small>今日接力 · 全部落账</small></div>
-        <div className="starrail-chip"><b className={todayTones.failed ? "starrail-bad" : undefined}>{todayTones.failed}</b><small>真失败 · 分诊口径</small></div>
-        <div className="starrail-chip"><b>{cronEnabled}</b><small>定时任务 · 下一次 {cronNextHint}</small></div>
-        <div className="starrail-chip"><b>{todayTones.skipped}</b><small>静默跳过 · 免打扰</small></div>
-      </div>
-      {agentsSnap?.agents?.length > 0 && (
-        <div className="agent-grid">
-          <div className="agent-grid-title">Agent 会话活动</div>
-          <div className="agent-cards">
-            {agentsSnap.agents.map((agent) => {
-              const lastSeen = Number.isFinite(agent.lastActiveMs) ? agent.lastActiveMs : 0;
-              const stale = agent.active && now - lastSeen > STALE_MS;
-              const shortId = agent.agentId.includes(":")
-                ? agent.agentId.slice(agent.agentId.indexOf(":") + 1)
-                : agent.agentId;
-              return (
-                <div
-                  key={agent.agentId}
-                  className={
-                    agent.active
-                      ? stale
-                        ? "agent-card agent-card--stale"
-                        : "agent-card agent-card--active"
-                      : "agent-card"
-                  }
-                >
-                  <div className="agent-card-head">
-                    <span className="agent-status-dot" />
-                    <strong>{agent.name || shortId}</strong>
-                  </div>
-                  <div className="agent-card-meta">
-                    <span>{shortId}</span>
-                    {agent.runningTasks > 0 && <span>{agent.runningTasks} 个活动会话</span>}
-                    {lastSeen > 0 && <span>活动 {formatTaskAge(lastSeen)}</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+      {showTasks && (
+        <TasksBoard
+          rows={cronTasks}
+          episodes={historyEpisodes}
+          activeEpisodes={relayEpisodes}
+          cronJobs={cronJobs}
+          lastRunByJob={lastRunByJob}
+          agentNameMap={agentNameMap}
+          now={now}
+        />
       )}
-
-      {tasks.length === 0 && !agentsSnap?.agents?.some((agent) => agent.active) ? (
-        <p className="tasks-standby tasks-standby--roomy">
-            还没有任务记录，也没有活跃的 Agent 会话。派一个 subagent 任务，
-            几秒内这里就会出现"运行中"条目。本机 Gateway 已配置时无需手动操作。
-        </p>
-      ) : tasks.length > 0 ? (
-        <div className="task-list">
-          {tasks.map((task) => {
-            const isActive = isActiveTask(task);
-            const lastSeen = Number.isFinite(task.lastSeenMs) ? task.lastSeenMs : 0;
-            const stale = isActive && now - lastSeen > STALE_MS;
-            return (
-              <article key={`${task.gateway}:${task.taskId}`} className="task-row">
-                <div className="task-row-main">
-                  <div className="task-row-title">
-                    <TaskStatusPill status={task.status} />
-                    {stale && <span className="task-pill task-pill--stale">疑似卡住</span>}
-                    <strong>{cleanTaskTitle(task) || task.label || task.taskId}</strong>
-                  </div>
-                  <div className="task-row-meta">
-                    <span className="task-meta-gateway">{task.gateway}</span>
-                    <span>{task.runtime || task.kind || "任务"}</span>
-                    {task.agentId && <span>{task.agentId}</span>}
-                    {Number.isFinite(task.startedAtMs) && (
-                      <span>已运行 {formatTaskDuration(task.startedAtMs, task.endedAtMs) || "—"}</span>
-                    )}
-                    <span>最近活动 {formatTaskAge(lastSeen)}</span>
-                  </div>
-                  {task.error && <p className="task-row-error">{task.error}</p>}
-                </div>
-              </article>
-            );
-          })}
-          {state.filter !== "all" && <p className="tasks-empty">当前筛选下暂无任务。</p>}
-        </div>
-      ) : null}
-
-      {(relayEpisodes.length > 0 || liveTaskChains.length > 0) && (
-        <section className="chain-panorama" aria-label="链路全景">
-          <h2 className="history-episodes-head">
-            链路全景
-            <small>进行中的工作链：接力轮逐跳回放（带派活原话与收工结论），登记任务链按父子/runId 拼链</small>
-          </h2>
-          {relayEpisodes.length > 0 && (
-            <div className="chain-panorama-list">
-              {relayEpisodes.map((episode) => (
-                <div className="chain-panorama-item" key={episode.chatId}>
-                  <TaskChainTimeline
-                    hops={episode.hops}
-                    currentTaskId={episode.hops[episode.hops.length - 1]?.taskId}
-                    agentNameMap={agentNameMap}
-                    translate={monitor.translateProgress}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-          {liveTaskChains.length > 0 && (
-            <div className="chain-panorama-list">
-              {liveTaskChains.map((chain) => (
-                <div className="chain-panorama-item" key={chain.rootId}>
-                  <TaskChainTimeline
-                    hops={chain.hops}
-                    currentTaskId={chain.currentTaskId}
-                    agentNameMap={agentNameMap}
-                    translate={monitor.translateProgress}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-      </>)}
       {showCron && (cronBoard.length > 0 ? (
         <section className="cron-board" aria-label="定时任务">
           <h2 className="history-episodes-head">
@@ -3526,64 +3667,6 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
       ) : (
         <p className="tasks-standby">还没有定时任务的本地镜像；配好网关后第一拍就会同步进来。</p>
       ))}
-      {showHistory && (historyEpisodes.length > 0 ? (
-        <section className="history-episodes" aria-label="历史轮次">
-          <h2 className="history-episodes-head">
-            历史轮次
-            <small>
-              近 {formatHistoryWindow(monitor.historyWindowMin)}
-              ，收尾的接力段按交接时序回放；窗口在 设置 → 任务追踪 里可调（0 = 关闭）
-            </small>
-          </h2>
-          <div className="history-episode-list">
-            {historyEpisodes.map((episode) => {
-              const latest = episode.runs[episode.runs.length - 1];
-              const hops = episode.runs.map(sessionRunHop);
-              // 失败计数走分诊口径（六案②）：良性未跑（静默跳过等）不算失败
-              const failedCount = hops.filter((hop) => hopToneOf(hop).tone === "failed").length;
-              const episodeKey = `${episode.runs[0].id ?? episode.runs[0].sessionKey}:${episode.startedAtMs}`;
-              const expanded = expandedEpisode === episodeKey;
-              const title = latest.title || latest.fallbackTitle || "会话工作";
-              return (
-                <article
-                  key={episodeKey}
-                  className={`history-episode${expanded ? " is-expanded" : ""}`}
-                >
-                  <button
-                    type="button"
-                    className="history-episode-row"
-                    aria-expanded={expanded}
-                    onClick={() => setExpandedEpisode(expanded ? null : episodeKey)}
-                  >
-                    <span
-                      className={`history-episode-dot${failedCount ? " history-episode-dot--failed" : ""}`}
-                      aria-hidden="true"
-                    />
-                    <span className="history-episode-time">{formatHistoryTime(episode.startedAtMs, now)}</span>
-                    <span className="history-episode-title" title={title}>{title}</span>
-                    <small className="history-episode-meta">
-                      {formatTaskDuration(episode.startedAtMs, episode.lastActivityMs) || "—"}
-                      {" · "}{hops.length} 跳{failedCount ? ` · ${failedCount} 失败` : ""}
-                    </small>
-                  </button>
-                  {expanded && (
-                    <div className="history-episode-detail">
-                      <TaskChainTimeline
-                        hops={hops}
-                        currentTaskId={hops[hops.length - 1]?.taskId}
-                        agentNameMap={agentNameMap}
-                        translate={monitor.translateProgress}
-                      />
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      ) : (
-        <p className="tasks-standby">回看窗口内没有收尾的轮次；窗口大小在「设置 · 实时监控参数」里调。</p>
-      ))}
     </main>
   );
 }
@@ -3591,7 +3674,6 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
 const CONSOLE_TABS = [
   { id: "tasks", label: "任务" },
   { id: "cron", label: "定时" },
-  { id: "history", label: "历史" },
   { id: "settings", label: "设置" },
 ];
 
@@ -3640,8 +3722,7 @@ export function App() {
   useEffect(() => {
     if (viewMode === "tasks-widget") return undefined;
     if (localStorage.getItem("metrik:tasksWidget") === "off") return undefined;
-    if (!gateways.length) return undefined;
-    setTasksWidgetWindow(true);
+        setTasksWidgetWindow(true);
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -3649,8 +3730,7 @@ export function App() {
   useEffect(() => {
     if (viewMode === "notifications") return undefined;
     if (!loadMonitorConfig().notifyEnabled) return undefined;
-    if (!gateways.length) return undefined;
-    setNotificationWindow(true);
+        setNotificationWindow(true);
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -8362,7 +8362,7 @@ html[data-theme="dark"] .console-root .task-timeline-progress { color: #a6a8b0; 
 html[data-theme="dark"] .console-root .task-timeline-summary { color: #7fcf95; }
 
 /* ===== 星轨 v3：标注常驻条内（Apple 日历式）+ 控制台滚动条 ===== */
-.starrail-run { min-width: 18px; }
+.starrail-run { min-width: 2px; }
 .console-root ::-webkit-scrollbar { width: 5px; }
 .console-root ::-webkit-scrollbar-track { background: transparent; }
 .console-root ::-webkit-scrollbar-thumb { background: rgba(127, 130, 136, 0.4); border-radius: 3px; }
@@ -8370,3 +8370,105 @@ html[data-theme="dark"] .console-root .task-timeline-summary { color: #7fcf95; }
 .console-root { scrollbar-width: thin; scrollbar-color: rgba(127, 130, 136, 0.4) transparent; }
 
 .starrail-now { position: absolute; right: 12px; top: 28px; bottom: 8px; width: 2px; border-radius: 1px; background: linear-gradient(180deg, rgba(106, 90, 224, 0.9), rgba(106, 90, 224, 0.12)); box-shadow: 0 0 8px rgba(106, 90, 224, 0.55); }
+
+/* ===== 浅色主题：光条文字/描边加深（白字压浅底不可读） ===== */
+.console-root .starrail-run--done em { color: #eaf6ee; }
+.console-root .starrail-run--failed em { color: #fbe0e0; }
+.console-root .starrail-run--current em { color: #f0eeff; }
+html:not([data-theme="dark"]) .console-root .starrail-run--done { background: rgba(61, 156, 80, 0.24); border-color: rgba(34, 110, 55, 0.65); }
+html:not([data-theme="dark"]) .console-root .starrail-run--done em { color: #1c5a2e; }
+html:not([data-theme="dark"]) .console-root .starrail-run--failed { background: rgba(224, 82, 82, 0.2); border-color: rgba(160, 48, 48, 0.6); }
+html:not([data-theme="dark"]) .console-root .starrail-run--failed em { color: #8f2626; }
+html:not([data-theme="dark"]) .console-root .starrail-run--current { background: rgba(106, 90, 224, 0.24); border-color: #5b4ed0; }
+html:not([data-theme="dark"]) .console-root .starrail-run--current em { color: #372e9e; }
+html:not([data-theme="dark"]) .console-root .starrail-run--live::after { color: #372e9e; }
+html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.28); }
+
+/* ============ 任务台 v5：斗形星盘 + 值班区 + 动态流（2026-10-05 设计评审定稿） ============ */
+.tasksboard { display: flex; flex-direction: column; min-height: 100%; }
+.dial { position: relative; height: 146px; border-bottom: 1px solid rgba(240,240,240,.07); overflow: hidden; flex-shrink: 0; }
+.dial svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dial-node { cursor: pointer; }
+.dial-node text { font-size: 11px; fill: #9aa5b5; }
+.dial-node.is-idle { opacity: .38; }
+.dial-node.is-stale .dial-dot { opacity: .55; }
+.dial-node.is-stale text { fill: #5c6779; }
+.dial-node.is-selected text { fill: #d9a860; font-weight: 600; }
+.dial-hub text { font-size: 10px; fill: #9aa5b5; }
+.dial-halo { animation: v5-breath 1.6s ease-in-out infinite; }
+@keyframes v5-breath { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+.dial-next { position: absolute; right: 16px; top: 50px; }
+.dial-next .lb { font-size: 10.5px; color: #8a8c90; letter-spacing: .06em; }
+.dial-next .tm { font-size: 17px; font-weight: 600; color: #d9a860; font-variant-numeric: tabular-nums; margin: 2px 0; }
+.dial-next .sub { font-size: 11px; color: #8a8c90; font-variant-numeric: tabular-nums; }
+.dial-legend { position: absolute; right: 16px; top: 112px; display: flex; gap: 12px; font-size: 10.5px; color: #74767a; }
+.dial-legend span { display: flex; align-items: center; gap: 4px; }
+.dial-legend i { width: 6px; height: 6px; border-radius: 50%; }
+.dial-legend .li-idle { background: transparent; border: 1px solid #4a5568; }
+
+.v5-statrow { display: flex; align-items: center; gap: 12px; padding: 9px 16px; }
+.v5-stat { font-size: 12px; color: #9aa5b5; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v5-stat b { color: #ececec; font-weight: 600; }
+.v5-spark { display: flex; align-items: flex-end; gap: 3px; height: 20px; }
+.v5-spark-label { font-size: 10.5px; color: #5c6779; align-self: center; }
+.v5-spark-bar { width: 4px; border-radius: 1px; background: #2e3850; }
+.v5-filters { margin-left: auto; display: flex; gap: 6px; }
+.v5-chip { font-size: 10.5px; color: #9a9ca0; border: 1px solid rgba(240,240,240,.12); border-radius: 11px; padding: 3px 10px; background: transparent; cursor: pointer; }
+.v5-chip.is-on { color: #d9a860; border-color: rgba(217,168,96,.5); }
+
+.v5-feed { display: flex; flex-direction: column; padding: 0 12px 12px; }
+.v5-daybar { display: flex; align-items: center; gap: 12px; height: 24px; margin-top: 14px; font-size: 10.5px; color: #74767a; letter-spacing: .1em; flex-shrink: 0; }
+.v5-daybar::after { content: ""; flex: 1; height: 1px; background: rgba(240,240,240,.08); }
+.v5card { position: relative; border: 1px solid rgba(240,240,240,.10); border-radius: 10px; background: rgba(255,255,255,.04); padding: 12px 14px; margin-bottom: 10px; }
+.v5card.spine::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 10px 0 0 10px; background: var(--spine, transparent); }
+.v5card--dump { padding-top: 10px; padding-bottom: 10px; }
+.v5card--brief { border-color: rgba(217,168,96,.38); background: rgba(217,168,96,.05); }
+.v5-l1 { display: flex; align-items: center; gap: 6px; height: 16px; }
+.v5-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.v5-dot--hollow { background: transparent !important; border: 1.5px solid #6b6e78; }
+.v5-l1 b { font-size: 11.5px; font-weight: 500; }
+.v5-kind { font-size: 10.5px; color: #74767a; }
+.v5-kind--gold { color: #d9a860; }
+.v5-when { margin-left: auto; font-size: 11px; color: #74767a; font-variant-numeric: tabular-nums; }
+.v5-l2 { font-size: 13px; font-weight: 550; color: #ececec; line-height: 18px; margin-top: 5px; }
+.v5-l2.is-slug { color: #9a9ca0; font-weight: 450; }
+.v5-l2--soft { color: #9a9ca0; }
+.v5-concl { font-size: 13px; color: #c9cbcf; line-height: 21px; margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.v5-concl.is-open { display: block; }
+.v5-concl-en { color: #74767a; font-size: 11px; line-height: 1.5; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v5-morerow { text-align: right; margin-top: 2px; }
+.v5-more { color: #d9a860; font-size: 12px; background: none; border: none; cursor: pointer; padding: 2px 4px; }
+.v5-cancelwhy { font-size: 13px; color: #9a9ca0; line-height: 21px; margin-top: 5px; }
+.v5-errraw { font-size: 11px; color: #74767a; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v5-err { font-size: 12.5px; color: #e08a80; line-height: 1.5; margin-top: 6px; }
+.v5-batchdetail { font-size: 11px; color: #9a9ca0; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.v5-case { border-color: rgba(61,214,140,.28); background: rgba(61,214,140,.045); }
+.v5-chain { margin-top: 6px; font-size: 11.5px; color: #9a9ca0; line-height: 1.6; }
+.v5-hops { margin-top: 8px; border-top: 1px dashed rgba(240,240,240,.1); padding-top: 8px; }
+.v5-execbar { display: flex; align-items: center; gap: 10px; min-height: 28px; margin-top: 12px; border: 1px solid rgba(240,240,240,.08); border-radius: 8px; background: rgba(255,255,255,.02); padding: 4px 12px; font-size: 11px; color: #9a9ca0; font-variant-numeric: tabular-nums; }
+.v5-execico { width: 12px; height: 12px; border: 1px solid #2e3850; border-radius: 3px; position: relative; flex-shrink: 0; }
+.v5-execico::after { content: ""; position: absolute; left: 2px; right: 2px; top: 3px; height: 1px; background: #2e3850; box-shadow: 0 3px 0 #2e3850; }
+.v5-foot { padding: 8px 16px 6px; font-size: 10.5px; color: #5d6069; text-align: center; }
+.v5-empty { margin: 28px 16px; font-size: 12.5px; color: #74767a; text-align: center; line-height: 1.7; }
+
+/* 浅色主题对比度（.console-root 作用域） */
+html:not([data-theme="dark"]) .console-root .dial-node text { fill: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .dial-node.is-stale text { fill: #9a9ca0; }
+html:not([data-theme="dark"]) .console-root .v5card { background: rgba(255,255,255,.6); border-color: rgba(31,33,36,.12); }
+html:not([data-theme="dark"]) .console-root .v5card--brief { background: rgba(217,168,96,.08); }
+html:not([data-theme="dark"]) .console-root .v5-l2 { color: #26282b; }
+html:not([data-theme="dark"]) .console-root .v5-l2.is-slug { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-l2--soft { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-concl { color: #3c3e42; }
+html:not([data-theme="dark"]) .console-root .v5-kind { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v5-when { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v5-stat { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-stat b { color: #26282b; }
+html:not([data-theme="dark"]) .console-root .v5-daybar { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v5-daybar::after { background: rgba(31,33,36,.08); }
+html:not([data-theme="dark"]) .console-root .v5-chip { border-color: rgba(31,33,36,.14); color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-chain,
+html:not([data-theme="dark"]) .console-root .v5-cancelwhy,
+html:not([data-theme="dark"]) .console-root .v5-batchdetail { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-spark-bar { background: rgba(31,33,36,.14); }
+html:not([data-theme="dark"]) .console-root .dial { border-bottom-color: rgba(31,33,36,.08); }
