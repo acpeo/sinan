@@ -1285,6 +1285,8 @@ async function expandTasksHoverHorizontal({ cardHeight, gap, anchorTop, anchorBo
     anchorTop: Math.round(anchorTop * scale),
     anchorBottom: Math.round(anchorBottom * scale),
     gap: Math.round(gap * scale),
+    // 卡高与锚点同单位（物理像素）——此前传逻辑像素，DPI>1 的屏上卡位偏差
+    cardHeight: Math.round(cardHeight * scale),
   });
   if (!layout) return null;
   const physical = await scaledPhysicalSize(

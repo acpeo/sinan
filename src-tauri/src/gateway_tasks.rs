@@ -1080,14 +1080,31 @@ pub struct GatewayCronJob {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub schedule: Option<CronSchedule>,
+    #[serde(default)]
+    pub state: Option<CronJobState>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CronSchedule {
-    /// 只取表达式；kind 等其余字段 serde 自动忽略（clippy dead_code：不读不存）。
+    /// 只取表达式与周期毫秒；kind 等其余字段 serde 自动忽略（clippy dead_code：不读不存）。
     #[serde(default)]
     pub expr: Option<String>,
+    /// every 型任务（skill 周检/心跳）没有 expr，只有 everyMs+anchorMs。
+    #[serde(default)]
+    pub every_ms: Option<i64>,
+}
+
+/// job.state 的看板字段子集：网关权威的下次/上次运行时刻与上次结果。
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronJobState {
+    #[serde(default)]
+    pub next_run_at_ms: Option<i64>,
+    #[serde(default)]
+    pub last_run_at_ms: Option<i64>,
+    #[serde(default)]
+    pub last_status: Option<String>,
 }
 
 /// 看板一行（serde 序列化后直接给前端）。
@@ -1100,6 +1117,10 @@ pub struct GatewayCronRow {
     pub description: Option<String>,
     pub enabled: bool,
     pub schedule_expr: Option<String>,
+    pub schedule_every_ms: Option<i64>,
+    pub next_run_at_ms: Option<i64>,
+    pub last_run_at_ms: Option<i64>,
+    pub last_status: Option<String>,
     pub updated_at_ms: i64,
 }
 
@@ -1119,6 +1140,11 @@ pub fn ensure_gateway_cron_table(connection: &Connection) -> Result<()> {
             PRIMARY KEY (id, gateway)
         );",
     )?;
+    // 老镜像补列（v7：网关权威的调度状态）：重复执行报 duplicate column，直接忽略。
+    let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN schedule_every_ms INTEGER");
+    let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN next_run_at_ms INTEGER");
+    let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN last_run_at_ms INTEGER");
+    let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN last_status TEXT");
     Ok(())
 }
 
@@ -1137,13 +1163,17 @@ pub fn upsert_crons(
             continue;
         };
         connection.execute(
-            "INSERT INTO gateway_cron (id, gateway, name, description, enabled, schedule_expr, updated_at_ms)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)
+            "INSERT INTO gateway_cron (id, gateway, name, description, enabled, schedule_expr, schedule_every_ms, next_run_at_ms, last_run_at_ms, last_status, updated_at_ms)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(id, gateway) DO UPDATE SET
                 name = COALESCE(excluded.name, name),
                 description = COALESCE(excluded.description, description),
                 enabled = excluded.enabled,
                 schedule_expr = COALESCE(excluded.schedule_expr, schedule_expr),
+                schedule_every_ms = COALESCE(excluded.schedule_every_ms, schedule_every_ms),
+                next_run_at_ms = excluded.next_run_at_ms,
+                last_run_at_ms = excluded.last_run_at_ms,
+                last_status = excluded.last_status,
                 updated_at_ms = excluded.updated_at_ms",
             rusqlite::params![
                 id,
@@ -1152,6 +1182,10 @@ pub fn upsert_crons(
                 cron.description,
                 cron.enabled.unwrap_or(true),
                 cron.schedule.as_ref().and_then(|s| s.expr.clone()),
+                cron.schedule.as_ref().and_then(|s| s.every_ms),
+                cron.state.as_ref().and_then(|s| s.next_run_at_ms),
+                cron.state.as_ref().and_then(|s| s.last_run_at_ms),
+                cron.state.as_ref().and_then(|s| s.last_status.clone()),
                 now,
             ],
         )?;
@@ -1335,7 +1369,8 @@ pub fn list_crons(connection: &Connection, limit: Option<u32>) -> Result<Vec<Gat
     ensure_gateway_cron_table(connection)?;
     let limit = limit.unwrap_or(200).min(2000);
     let sql = format!(
-        "SELECT id, gateway, name, description, enabled, schedule_expr, updated_at_ms \
+        "SELECT id, gateway, name, description, enabled, schedule_expr, updated_at_ms, \
+         schedule_every_ms, next_run_at_ms, last_run_at_ms, last_status \
          FROM gateway_cron \
          ORDER BY enabled DESC, name ASC LIMIT {limit}"
     );
@@ -1351,6 +1386,10 @@ pub fn list_crons(connection: &Connection, limit: Option<u32>) -> Result<Vec<Gat
             enabled: row.get::<_, i64>(4)? != 0,
             schedule_expr: row.get(5)?,
             updated_at_ms: row.get(6)?,
+            schedule_every_ms: row.get(7)?,
+            next_run_at_ms: row.get(8)?,
+            last_run_at_ms: row.get(9)?,
+            last_status: row.get(10)?,
         });
     }
     Ok(out)
@@ -2340,6 +2379,7 @@ mod tests {
             enabled: Some(enabled),
             schedule: Some(CronSchedule {
                 expr: Some(expr.to_owned()),
+                ..Default::default()
             }),
         };
         let crons = vec![
@@ -2360,6 +2400,52 @@ mod tests {
         // 无 id 的脏行跳过不炸
         let dirty = vec![GatewayCronJob::default()];
         assert_eq!(upsert_crons(&connection, "vps", &dirty).unwrap(), 0);
+    }
+
+    #[test]
+    fn cron_mirror_keeps_gateway_schedule_state() {
+        // every 型任务（skill 周检/心跳）没有 expr，只有 everyMs + state 里的权威时刻
+        let connection = memory_db();
+        let job = GatewayCronJob {
+            id: Some("j-every".to_owned()),
+            name: Some("skill-collection-review-kaiyang".to_owned()),
+            enabled: Some(true),
+            schedule: Some(CronSchedule {
+                every_ms: Some(604_800_000),
+                ..Default::default()
+            }),
+            state: Some(CronJobState {
+                next_run_at_ms: Some(1_791_196_913_748),
+                last_run_at_ms: Some(1_791_136_273_748),
+                last_status: Some("ok".to_owned()),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(upsert_crons(&connection, "vps", &[job]).unwrap(), 1);
+        let rows = list_crons(&connection, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.schedule_expr, None);
+        assert_eq!(row.schedule_every_ms, Some(604_800_000));
+        assert_eq!(row.next_run_at_ms, Some(1_791_196_913_748));
+        assert_eq!(row.last_run_at_ms, Some(1_791_136_273_748));
+        assert_eq!(row.last_status.as_deref(), Some("ok"));
+        // 新一拍 state 变化要覆盖（镜像=现状），schedule 缺失不抹旧值
+        let updated = GatewayCronJob {
+            id: Some("j-every".to_owned()),
+            name: Some("skill-collection-review-kaiyang".to_owned()),
+            enabled: Some(true),
+            state: Some(CronJobState {
+                next_run_at_ms: Some(1_791_257_393_748),
+                last_run_at_ms: Some(1_791_196_913_748),
+                last_status: Some("ok".to_owned()),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(upsert_crons(&connection, "vps", &[updated]).unwrap(), 1);
+        let rows = list_crons(&connection, None).unwrap();
+        assert_eq!(rows[0].next_run_at_ms, Some(1_791_257_393_748));
+        assert_eq!(rows[0].schedule_every_ms, Some(604_800_000));
     }
 
     #[test]

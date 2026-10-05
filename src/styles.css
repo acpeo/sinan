@@ -8287,7 +8287,7 @@ html[data-theme="dark"] .console-root {
 .console-refresh:disabled { opacity: 0.5; cursor: default; }
 .console-tabs { position: absolute; top: 42px; left: 16px; right: 16px; display: flex; gap: 4px; z-index: 4; border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
 .console-tabs button { appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent; color: inherit; opacity: 0.6; font: inherit; font-size: 13px; padding: 6px 12px 8px; cursor: pointer; }
-.console-tabs button.is-selected { opacity: 1; border-bottom-color: #6a5ae0; }
+.console-tabs button.is-selected { opacity: 1; border-bottom-color: #d9a860; }
 .console-tabs button:hover { opacity: 1; }
 .console-root .console-scroll { top: 88px; }
 .tasks-section--flush { margin: 0; padding: 0; }
@@ -8384,29 +8384,74 @@ html:not([data-theme="dark"]) .console-root .starrail-run--current em { color: #
 html:not([data-theme="dark"]) .console-root .starrail-run--live::after { color: #372e9e; }
 html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.28); }
 
-/* ============ 任务台 v5：斗形星盘 + 值班区 + 动态流（2026-10-05 设计评审定稿） ============ */
-.tasksboard { display: flex; flex-direction: column; min-height: 100%; }
-.dial { position: relative; height: 146px; border-bottom: 1px solid rgba(240,240,240,.07); overflow: hidden; flex-shrink: 0; }
+/* ============ 任务台 v7（2026-10-05 设计规范重排）：统一卡片栅格等高对齐、
+   90% 灰阶（色=状态点+金色单重音）、事件流=紧凑日志、密度梯度 ============ */
+.tasksboard { display: flex; flex-direction: column; min-height: 100%; padding-bottom: 12px; }
+.v7row { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; }
+.v7-feedrow { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; align-items: start; }
+.v7card { background: #131a26; border: 1px solid #202938; border-radius: 10px; min-width: 0; }
+.v7-dialcard { padding: 6px 10px; position: relative; overflow: hidden; }
+.dial { position: relative; aspect-ratio: 552 / 146; }
 .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .dial-node { cursor: pointer; }
-.dial-node text { font-size: 11px; fill: #9aa5b5; }
-.dial-node.is-idle { opacity: .38; }
+.dial-node text { font-size: 9.5px; fill: #9aa5b5; }
+.dial-node .dial-sub { font-size: 8.5px; fill: #5c6779; }
+.dial-node .dial-sub.is-live { fill: #3dd68c; }
+.dial-node.is-idle { opacity: .45; }
 .dial-node.is-stale .dial-dot { opacity: .55; }
-.dial-node.is-stale text { fill: #5c6779; }
+.dial-node.is-stale .dial-sub { fill: #4a5568; }
 .dial-node.is-selected text { fill: #d9a860; font-weight: 600; }
-.dial-hub text { font-size: 10px; fill: #9aa5b5; }
+.dial-hub text { fill: #9aa5b5; }
 .dial-halo { animation: v5-breath 1.6s ease-in-out infinite; }
 @keyframes v5-breath { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-.dial-next { position: absolute; right: 16px; top: 50px; }
-.dial-next .lb { font-size: 10.5px; color: #8a8c90; letter-spacing: .06em; }
-.dial-next .tm { font-size: 17px; font-weight: 600; color: #d9a860; font-variant-numeric: tabular-nums; margin: 2px 0; }
-.dial-next .sub { font-size: 11px; color: #8a8c90; font-variant-numeric: tabular-nums; }
-.dial-legend { position: absolute; right: 16px; top: 112px; display: flex; gap: 12px; font-size: 10.5px; color: #74767a; }
-.dial-legend span { display: flex; align-items: center; gap: 4px; }
-.dial-legend i { width: 6px; height: 6px; border-radius: 50%; }
-.dial-legend .li-idle { background: transparent; border: 1px solid #4a5568; }
+.dial-next { position: absolute; left: 77%; top: 44%; text-align: left; }
+.dial-next .lb { font-size: 10.5px; color: #9aa5b5; letter-spacing: .06em; margin-bottom: 3px; }
+.dial-next .tm { font-size: 20px; font-weight: 650; color: #d9a860; font-variant-numeric: tabular-nums; line-height: 1.2; margin-bottom: 3px; }
+.dial-next .sub { font-size: 11.5px; color: #9aa5b5; font-variant-numeric: tabular-nums; line-height: 1.5; }
 
-.v5-statrow { display: flex; align-items: center; gap: 12px; padding: 9px 16px; }
+.v7-croncard { padding: 10px 14px 10px; display: flex; flex-direction: column; }
+.v7-mhead { font-size: 10.5px; color: #5c6779; letter-spacing: .08em; display: flex; align-items: baseline; justify-content: space-between; }
+.v7-mcount { color: #9aa5b5; letter-spacing: 0; }
+.v7-qrow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid #1b2331; }
+.v7-croncard .v7-qrow:first-of-type { border-top: none; }
+.v7-qname { font-size: 12px; color: #e7ecf4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.v7-qnext { font-size: 11px; color: #9aa5b5; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.v7-qnext em { font-style: normal; color: #5c6779; }
+.v7-qempty { padding: 10px 0 4px; font-size: 11.5px; color: #5c6779; }
+.v7-execblock { margin-top: auto; border-top: 1px solid #1b2331; padding-top: 8px; }
+.v7-exectop { display: flex; align-items: baseline; justify-content: space-between; }
+.v7-execnum { font-size: 13px; font-weight: 600; color: #e7ecf4; font-variant-numeric: tabular-nums; }
+.v7-execdetail { font-size: 10.5px; color: #5c6779; margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.v7-spark { display: flex; align-items: center; gap: 8px; }
+.v7-spark em { font-style: normal; font-size: 10.5px; color: #5c6779; }
+.v7-sbs { display: flex; align-items: flex-end; gap: 3px; height: 20px; }
+.v7-sb { width: 5px; border-radius: 1px 1px 0 0; background: #2e3850; }
+.v7-sb.is-now { background: #9aa5b5; }
+
+.v7-dutyrow > * { min-width: 0; }
+.v7-dutybrief { display: flex; min-width: 0; }
+.v7-dutybrief .v5card { flex: 1; }
+.v7-solo { grid-column: 1 / -1; }
+.v5-kind--run { color: #3dd68c; }
+.v7-progress { margin-top: 6px; font-size: 11.5px; color: #8fbfa6; display: flex; align-items: center; gap: 6px; }
+.v7-progress i { width: 5px; height: 5px; border-radius: 50%; background: #3dd68c; animation: v5-breath 1.6s ease-in-out infinite; flex-shrink: 0; }
+
+.v7-feedmain { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.v7-logcard { padding: 10px 14px 8px; }
+.v7-lday { font-size: 10px; color: #5c6779; letter-spacing: .1em; margin: 8px 0 2px; }
+.v7-mhead + .v7-lday { margin-top: 4px; }
+.v7-lrow { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px solid #1b2331; font-size: 11.5px; }
+.v7-lday + .v7-lrow { border-top: none; }
+.v7-lt { color: #5c6779; font-variant-numeric: tabular-nums; flex-shrink: 0; width: 34px; }
+.v7-ls { color: #9aa5b5; flex-shrink: 0; width: 52px; }
+.v7-le { color: #e7ecf4; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v7-lg { flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: 10.5px; }
+@media (max-width: 900px) {
+  .v7row, .v7-feedrow { grid-template-columns: 1fr; }
+}
+
+.v5-statrow { display: flex; align-items: center; gap: 16px; padding: 10px 16px 2px; }
 .v5-stat { font-size: 12px; color: #9aa5b5; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .v5-stat b { color: #ececec; font-weight: 600; }
 .v5-spark { display: flex; align-items: flex-end; gap: 3px; height: 20px; }
@@ -8416,7 +8461,6 @@ html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background:
 .v5-chip { font-size: 10.5px; color: #9a9ca0; border: 1px solid rgba(240,240,240,.12); border-radius: 11px; padding: 3px 10px; background: transparent; cursor: pointer; }
 .v5-chip.is-on { color: #d9a860; border-color: rgba(217,168,96,.5); }
 
-.v5-feed { display: flex; flex-direction: column; padding: 0 12px 12px; }
 .v5-daybar { display: flex; align-items: center; gap: 12px; height: 24px; margin-top: 14px; font-size: 10.5px; color: #74767a; letter-spacing: .1em; flex-shrink: 0; }
 .v5-daybar::after { content: ""; flex: 1; height: 1px; background: rgba(240,240,240,.08); }
 .v5card { position: relative; border: 1px solid rgba(240,240,240,.10); border-radius: 10px; background: rgba(255,255,255,.04); padding: 12px 14px; margin-bottom: 10px; }
@@ -8445,9 +8489,6 @@ html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background:
 .v5-case { border-color: rgba(61,214,140,.28); background: rgba(61,214,140,.045); }
 .v5-chain { margin-top: 6px; font-size: 11.5px; color: #9a9ca0; line-height: 1.6; }
 .v5-hops { margin-top: 8px; border-top: 1px dashed rgba(240,240,240,.1); padding-top: 8px; }
-.v5-execbar { display: flex; align-items: center; gap: 10px; min-height: 28px; margin-top: 12px; border: 1px solid rgba(240,240,240,.08); border-radius: 8px; background: rgba(255,255,255,.02); padding: 4px 12px; font-size: 11px; color: #9a9ca0; font-variant-numeric: tabular-nums; }
-.v5-execico { width: 12px; height: 12px; border: 1px solid #2e3850; border-radius: 3px; position: relative; flex-shrink: 0; }
-.v5-execico::after { content: ""; position: absolute; left: 2px; right: 2px; top: 3px; height: 1px; background: #2e3850; box-shadow: 0 3px 0 #2e3850; }
 .v5-foot { padding: 8px 16px 6px; font-size: 10.5px; color: #5d6069; text-align: center; }
 .v5-empty { margin: 28px 16px; font-size: 12.5px; color: #74767a; text-align: center; line-height: 1.7; }
 
@@ -8470,5 +8511,31 @@ html:not([data-theme="dark"]) .console-root .v5-chip { border-color: rgba(31,33,
 html:not([data-theme="dark"]) .console-root .v5-chain,
 html:not([data-theme="dark"]) .console-root .v5-cancelwhy,
 html:not([data-theme="dark"]) .console-root .v5-batchdetail { color: #6b6e78; }
-html:not([data-theme="dark"]) .console-root .v5-spark-bar { background: rgba(31,33,36,.14); }
-html:not([data-theme="dark"]) .console-root .dial { border-bottom-color: rgba(31,33,36,.08); }
+
+/* ---- v5.2 轮：图例删除改星点悬停 / 链线主题化 / 浅色对比度 / 折叠明细 ---- */
+.dial-chain { stroke: #2e3850; }
+/* 值班区双栏（C3 定稿：在办案件｜最新简报 并排，窄窗回落上下堆叠） */
+html:not([data-theme="dark"]) .console-root .dial-chain { stroke: #4a5164; }
+html:not([data-theme="dark"]) .console-root .dial-node text { fill: #54565a; }
+html:not([data-theme="dark"]) .console-root .dial-node.is-idle { opacity: .55; }
+html:not([data-theme="dark"]) .console-root .v7card { background: rgba(255,255,255,.6); border-color: rgba(31,33,36,.12); }
+html:not([data-theme="dark"]) .console-root .v7-qrow,
+html:not([data-theme="dark"]) .console-root .v7-lrow,
+html:not([data-theme="dark"]) .console-root .v7-execblock { border-color: rgba(31,33,36,.1); }
+html:not([data-theme="dark"]) .console-root .v7-mhead,
+html:not([data-theme="dark"]) .console-root .v7-lday,
+html:not([data-theme="dark"]) .console-root .v7-lt,
+html:not([data-theme="dark"]) .console-root .v7-qnext em,
+html:not([data-theme="dark"]) .console-root .v7-execdetail { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v7-qname,
+html:not([data-theme="dark"]) .console-root .v7-le,
+html:not([data-theme="dark"]) .console-root .v7-execnum { color: #26282b; }
+html:not([data-theme="dark"]) .console-root .v7-ls { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v7-sb { background: rgba(31,33,36,.14); }
+html:not([data-theme="dark"]) .console-root .v7-sb.is-now { background: #6b6e78; }
+
+/* ---- v5.1：单一滚动容器（Leo：左右两根滑轨多余）——外层 html/body 裁剪，
+   console-scroll 是任务台唯一的滚动条 ---- */
+html:has(.console-root),
+html:has(.console-root) body { overflow: hidden; height: 100%; }
+.console-root { height: 100dvh; overflow: hidden; }

@@ -5,8 +5,15 @@
 
 /// Agent 显示名映射：tasks.list 的 agentId 是短 id（如 tianshu），
 /// agents.list 的是 gateway 前缀全 id（如 VPS-北斗:tianshu）——两种都注册。
+// 星名兜底：网关 agents.list 的 name 字段缺席时（2026-10-05 真机实测为空），
+// 北斗七星 + 主 Agent 用固定中文名，任何消费方（胶卷/悬停卡/星位上下文）不再露裸 id。
+const STAR_DISPLAY_FALLBACK = {
+  main: "主 Agent", tianshu: "天枢", tianxuan: "天璇", tianji: "天玑",
+  tianquan: "天权", yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光",
+};
+
 export function buildAgentNameMap(agents) {
-  const map = new Map();
+  const map = new Map(Object.entries(STAR_DISPLAY_FALLBACK));
   for (const agent of agents ?? []) {
     if (!agent?.agentId) continue;
     if (agent.name && !map.has(agent.agentId)) map.set(agent.agentId, agent.name);
@@ -20,7 +27,9 @@ export function buildAgentNameMap(agents) {
 
 export function agentDisplayName(map, agentId) {
   if (!agentId) return "";
-  return map.get(agentId) || agentId;
+  return map.get(agentId)
+    || map.get(agentId.includes(":") ? agentId.slice(agentId.lastIndexOf(":") + 1) : "")
+    || agentId;
 }
 
 function startedMsOf(task) {
@@ -407,6 +416,34 @@ export function cronNextRunMs(expr, now = Date.now()) {
     if (day.getTime() > now) return day.getTime();
   }
   return null;
+}
+
+/// 网关权威优先的下一次运行时刻：job.state.nextRunAtMs（Rust 镜像列
+/// next_run_at_ms）直接可信；快照间隙里已触发的过期时刻按 everyMs 周期
+/// 滚动到未来；无网关值时退回表达式推算（只认两族）。
+export function cronNextAtOf(job, now = Date.now()) {
+  const gatewayNext = Number(job?.nextRunAtMs);
+  if (Number.isFinite(gatewayNext) && gatewayNext > 0) {
+    const period = Number(job?.scheduleEveryMs) > 0 ? Number(job.scheduleEveryMs) : 86_400_000;
+    let at = gatewayNext;
+    let guard = 0;
+    while (at <= now && guard < 366) { at += period; guard += 1; }
+    return at;
+  }
+  return cronNextRunMs(job?.scheduleExpr, now);
+}
+
+/// 排程人话：cron 表达式族照旧；every 周期族（skill 周检/心跳没有表达式）
+/// 从 everyMs 换算——"每 7 天 / 每 8 小时 / 每 30 分钟"。
+export function cronScheduleTextOf(job) {
+  const every = Number(job?.scheduleEveryMs);
+  if (Number.isFinite(every) && every > 0 && !job?.scheduleExpr) {
+    if (every % 86_400_000 === 0) return `每 ${every / 86_400_000} 天`;
+    if (every % 3_600_000 === 0) return `每 ${every / 3_600_000} 小时`;
+    if (every % 60_000 === 0) return `每 ${every / 60_000} 分钟`;
+    return `每 ${Math.max(1, Math.round(every / 60_000))} 分钟`;
+  }
+  return cronScheduleText(job?.scheduleExpr);
 }
 
 /// 活跃接力轮（2026-10-04 六案④链路全景）：activeRuns 里同一群聊只留

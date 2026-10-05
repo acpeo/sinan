@@ -52,6 +52,20 @@ export async function loadGatewayTasks(status) {
           terminalSummary: "本轮完成，结果与过去 12 轮一致：候选 0，晋升 0，机制性阻塞未解除。\n硬门槛 dry-run：8 个工作区全部 No short-term recall candidates，未写入任何 MEMORY.md。",
         }),
         row({
+          taskId: "cronrun:demo-heartbeat-main:2", label: "heartbeat-main",
+          agentId: "main", sourceId: "cron-demo-heartbeat-main", status: "failed",
+          startedAtMs: now - 40 * min, endedAtMs: now - 40 * min + 3_000,
+          error: "heartbeat failed: Feishu account \"default\" not configured",
+          terminalSummary: "heartbeat failed: Feishu account \"default\" not configured",
+        }),
+        row({
+          taskId: "cronrun:demo-heartbeat-main:1", label: "heartbeat-main",
+          agentId: "main", sourceId: "cron-demo-heartbeat-main", status: "failed",
+          startedAtMs: now - 70 * min, endedAtMs: now - 70 * min + 3_000,
+          error: "heartbeat failed: Feishu account \"default\" not configured",
+          terminalSummary: "heartbeat failed: Feishu account \"default\" not configured",
+        }),
+        row({
           taskId: "cronrun:demo-abort:1", runtime: "cli", kind: null,
           agentId: "tianshu", sourceId: "31953e62-23ba-4174-a786-f4b1f628027f", status: "cancelled",
           startedAtMs: now - 20 * 3_600_000, endedAtMs: now - 20 * 3_600_000 + 41_000,

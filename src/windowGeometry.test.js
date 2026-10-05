@@ -318,7 +318,9 @@ test("desync heal retry cadence tolerates invalid attempt counters", () => {
 
 test("horizontal strip hover grows upward and keeps the card gap above the cell", () => {
   // 条 224×36 @ (100,500)，长高 6+168=174：上方放得下 → 向上长，x 不动，
-  // 卡片与条同宽通栏（cardLeft=0），above 分支的 cardTop 恒等于 anchorTop
+  // 卡片与条同宽通栏（cardLeft=0）。卡底贴条顶（隔 gap）：卡顶 = anchorTop
+  // - gap - cardHeight——此前 cardTop=anchorTop 让整张卡压在条上（Leo：
+  // "弹窗跑到上面、横条没了"的根因）。
   assert.deepEqual(
     horizontalTasksHoverLayout({
       stripPosition: { x: 100, y: 500 },
@@ -328,8 +330,9 @@ test("horizontal strip hover grows upward and keeps the card gap above the cell"
       anchorTop: 500,
       anchorBottom: 536,
       gap: 6,
+      cardHeight: 168,
     }),
-    { side: "above", y: 326, cardTop: 500, cardLeft: 0 },
+    { side: "above", y: 326, cardTop: 326, cardLeft: 0 },
   );
 });
 
@@ -344,6 +347,7 @@ test("horizontal strip hover falls back to below when the top has no room", () =
       anchorTop: 0,
       anchorBottom: 36,
       gap: 6,
+      cardHeight: 168,
     }),
     { side: "below", y: 0, cardTop: 42, cardLeft: 0 },
   );
@@ -360,6 +364,7 @@ test("horizontal strip hover returns null when neither side fits", () => {
       anchorTop: 60,
       anchorBottom: 96,
       gap: 6,
+      cardHeight: 168,
     }),
     null,
   );

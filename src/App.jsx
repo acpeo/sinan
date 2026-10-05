@@ -39,7 +39,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, refreshGatewayTasks, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextRunMs, cronScheduleText, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { desyncHealRetryDelayMs, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -2912,6 +2912,7 @@ const DIAL_CHAIN = [
 ];
 const DIAL_HUB = { x: 104, y: 70 };
 const DIAL_TONE = { live: "#3DD68C", fail: "#F26D6D", done: "#4E9DB8", cancel: "#4A5568", idle: "#4A5568" };
+const TONE_LABEL = { live: "运行中", fail: "有失败", done: "已完成", cancel: "已取消", idle: "空闲" };
 const STAR_NAME_FALLBACK = {
   tianshu: "天枢", tianxuan: "天璇", tianji: "天玑", tianquan: "天权",
   yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "主 Agent",
@@ -2998,34 +2999,97 @@ function buildTasksFeedModel({ rows, episodes, now }) {
       title: taskTitleOf(row), slug: isSlugTitle(row),
       summary, cjk: cjkRatioOf(summary) > 0.3,
       status: row.status, error: row.error,
+      startedAtMs: row.startedAtMs, endedAtMs: row.endedAtMs,
+      toolUseCount: row.toolUseCount,
+      progress: String(row.progressSummary ?? "").trim(),
       decayed: tone === "done" && now - atOf(row) > 86_400_000,
     };
   };
-  const briefings = items
+  // 双写去重：tasks.list 时代的旧账行与 cron.runs 新行同源（同 jobId+同时刻），
+  // 相邻 120 秒内视为同一次运行只留一条；旧行缺结论而新行有时把结论搬过去。
+  const deduped = [];
+  const twinsBySource = new Map();
+  for (const row of items) {
+    if (row.kind !== "automation_run" || !row.sourceId) { deduped.push(row); continue; }
+    let peers = twinsBySource.get(row.sourceId);
+    if (!peers) { peers = []; twinsBySource.set(row.sourceId, peers); }
+    const at = atOf(row);
+    const twin = peers.find((other) => Math.abs(atOf(other) - at) <= 120_000);
+    if (twin) {
+      if (!String(twin.terminalSummary ?? "").trim() && String(row.terminalSummary ?? "").trim()) {
+        twin.terminalSummary = row.terminalSummary;
+      }
+      continue;
+    }
+    peers.push(row);
+    deduped.push(row);
+  }
+  const briefings = deduped
     .filter((row) => isBriefingRow(row) && now - atOf(row) <= 48 * 3_600_000)
     .sort((a, b) => atOf(b) - atOf(a));
   const briefing = briefings.length ? makeTaskVm(briefings[0]) : null;
-  const rest = briefing ? items.filter((row) => row !== briefings[0]) : items;
-  // 同日多星巡检批次（≥2 星才聚，单卡还原）
+  const rest = briefing ? deduped.filter((row) => row !== briefings[0]) : deduped;
+  // 同 job 折叠：同一 sourceId 同一天 ≥2 次运行收成一张卡（心跳 30 分钟一次，
+  // 不折就是刷屏，Leo 2026-10-05 点名）。巡检简报不折（最值钱的中文产出）。
+  const foldedLevels = [];
+  const foldBySourceDay = new Map();
+  for (const row of rest) {
+    if (row.kind !== "automation_run" || isBriefingRow(row)) { foldedLevels.push(row); continue; }
+    const day = new Date(atOf(row)).toDateString();
+    const key = `${row.sourceId}:${day}`;
+    const fold = foldBySourceDay.get(key);
+    if (fold) { fold.rows.push(row); continue; }
+    const fresh = { foldKey: key, rows: [row] };
+    foldBySourceDay.set(key, fresh);
+    foldedLevels.push(fresh);
+  }
+  const restFolded = foldedLevels.map((entry) => (
+    Array.isArray(entry?.rows) && entry.rows.length < 2 ? entry.rows[0] : entry
+  ));
+  // 同日多星巡检批次（≥2 星才聚，单卡还原）；同 job 折叠卡直接过不参与
   const batched = [];
   const batchByDay = new Map();
-  for (const row of rest) {
-    if (taskKindOf(row) === "巡检") {
-      const day = new Date(atOf(row)).toDateString();
+  for (const entry of restFolded) {
+    if (!Array.isArray(entry?.rows) && taskKindOf(entry) === "巡检") {
+      const day = new Date(atOf(entry)).toDateString();
       const batch = batchByDay.get(day);
-      if (batch) { batch.rows.push(row); continue; }
-      const fresh = { batchDay: day, rows: [row] };
+      if (batch) { batch.rows.push(entry); continue; }
+      const fresh = { batchDay: day, rows: [entry] };
       batchByDay.set(day, fresh);
       batched.push(fresh);
       continue;
     }
-    batched.push(row);
+    batched.push(entry);
   }
   const flattened = batched.map((entry) => (
     Array.isArray(entry?.rows) && entry.rows.length < 2 ? entry.rows[0] : entry
   ));
   const cards = [];
   for (const entry of flattened) {
+    if (Array.isArray(entry?.rows) && entry.foldKey) {
+      // 同 job 折叠卡：N 次运行一张卡，展开逐条；连续失败 ≥3 显著标注
+      const group = [...entry.rows].sort((a, b) => atOf(a) - atOf(b));
+      const okN = group.filter((r) => r.status === "succeeded").length;
+      const skipN = group.filter((r) => r.status === "skipped").length;
+      const badN = group.length - okN - skipN;
+      let streak = 0;
+      for (let i = group.length - 1; i >= 0; i -= 1) {
+        if (group[i].status === "failed" || group[i].status === "timed_out") streak += 1;
+        else break;
+      }
+      const last = group[group.length - 1];
+      const tone = feedToneOf(last) === "fail" ? "fail" : "done";
+      cards.push({
+        key: `fold:${entry.foldKey}`,
+        type: "fold", agentId: last.agentId || "main",
+        agent: starNameOf(last.agentId), kind: taskKindOf(last),
+        at: atOf(last), tone, color: DIAL_TONE[tone],
+        title: `${taskTitleOf(last)} · ${group.length} 次`,
+        detail: `✓ ${okN} · ✕ ${badN}${skipN ? ` · 跳过 ${skipN}` : ""}（${hhMmOf(atOf(group[0]))}–${hhMmOf(atOf(last))}）${streak >= 3 ? ` · 连续失败 ${streak} 次` : ""}`,
+        rows: group, decayed: false,
+      });
+      continue;
+    }
     if (Array.isArray(entry?.rows)) {
       const group = entry.rows;
       const okN = group.filter((r) => r.status === "succeeded").length;
@@ -3055,7 +3119,9 @@ function buildTasksFeedModel({ rows, episodes, now }) {
       at: ep.lastActivityMs ?? ep.startedAtMs ?? 0,
       tone: tone === "failed" ? "fail" : "done",
       color: tone === "failed" ? DIAL_TONE.fail : DIAL_TONE.done,
-      title: latest.title || latest.fallbackTitle || "会话工作", slug: false,
+      title: latest.title || latest.fallbackTitle
+        || (summary ? summary.slice(0, 24) : `${starNameOf(latest.agentId)} 的群会话`),
+      slug: false,
       summary, cjk: cjkRatioOf(summary) > 0.3,
       status: latest.status, error: latest.error, decayed: false,
     });
@@ -3074,8 +3140,13 @@ function buildStarState(cards, now) {
   }
   return DIAL_CHAIN.map(([id]) => {
     const card = latest.get(id);
-    if (!card) return { id, tone: "idle", stale: true };
-    return { id, tone: card.tone, stale: card.tone === "done" && now - card.at > 86_400_000 };
+    if (!card) return { id, tone: "idle", stale: true, label: "" };
+    // 副行=这颗星当前/最近在干嘛：运行中优先进度行，否则最近卡标题切片
+    const raw = card.tone === "live"
+      ? (card.progress ? String(card.progress).split("\n")[0] : "执行中")
+      : String(card.title ?? "");
+    const label = raw.length > 8 ? `${raw.slice(0, 8)}…` : raw;
+    return { id, tone: card.tone, stale: card.tone === "done" && now - card.at > 86_400_000, label };
   });
 }
 
@@ -3101,7 +3172,7 @@ function dayLabelOf(ms, now) {  const d = new Date(ms);
 }
 
 // 任务台主内容（v5）：星盘仪 → 统计行 → 值班区（在办案件/最新简报）→ 动态流。
-function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap }) {
+function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap, live }) {
   const [selectedStar, setSelectedStar] = useState(null);
   const [feedFilter, setFeedFilter] = useState("all"); // all | failed | cron
   const [expandedSet, setExpandedSet] = useState(() => new Set());
@@ -3134,33 +3205,55 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   if (failedToday) statBits.push(`失败 ${failedToday}`);
   if (runningCount) statBits.push(`进行中 ${runningCount}`);
 
+  // 定时队列（v7）：网关权威 nextRunAtMs 优先（Rust 镜像列），表达式推算只作回落；
+  // 之前只认两族表达式，10 个任务里 8 个 every 型全隐形。
   const enabledJobs = cronJobs.filter((job) => job.enabled);
-  const nextCandidates = enabledJobs
-    .map((job) => ({ job, at: cronNextRunMs(job.scheduleExpr, now) }))
+  const runQueue = enabledJobs
+    .map((job) => ({ job, at: cronNextAtOf(job, now) }))
     .filter((entry) => Number.isFinite(entry.at))
     .sort((a, b) => a.at - b.at);
-  const nextEntry = nextCandidates[0] ?? null;
-  const nextStar = nextEntry
-    ? starNameOf(lastRunByJob.get(nextEntry.job.id)?.agentId)
-    : "";
-
-  const sparkBars = useMemo(() => (
-    Array.from({ length: 7 }, (_, i) => {
-      const day = new Date(now - (6 - i) * 86_400_000);
-      const key = day.toDateString();
-      const n = rows.filter((row) => {
-        const kind = row.kind ?? "";
-        if (kind === "exec" || (kind === "cli" && row.runtime === "cli")) return false;
-        return new Date(atMsOf(row)).toDateString() === key;
-      }).length;
-      return { n, label: `${day.getMonth() + 1}-${day.getDate()} · ${n} 行`, today: i === 6 };
-    })
-  ), [rows, now]);
-  const sparkMax = Math.max(1, ...sparkBars.map((bar) => bar.n));
+  const queueRows = runQueue.slice(0, 4);
+  const nextEntry = queueRows[0] ?? null;
+  const nextStar = nextEntry ? starNameOf(lastRunByJob.get(nextEntry.job.id)?.agentId) : "";
 
   const execTotal = [...feed.execAgg.values()].reduce((sum, agg) => sum + agg.total, 0);
-  const execDetail = [...feed.execAgg.entries()].map(([agent, agg]) => `${starNameOf(agent)} ${agg.total}`).join("｜");
+  const execDetail = [...feed.execAgg.entries()].map(([agent, agg]) => `${starNameOf(agent)} ${agg.total}`).join(" · ");
+
+  // 近 7 天节奏：账本非 exec 行按天计数（与 realdays 同口径），今日柱高亮
+  const sparkSeries = (() => {
+    const counts = new Map();
+    for (const card of feed.cards) {
+      const key = new Date(card.at).toDateString();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return Array.from({ length: 7 }, (_, i) => {
+      const day = new Date(now - (6 - i) * 86_400_000);
+      return { label: `${day.getMonth() + 1}/${day.getDate()}`, count: counts.get(day.toDateString()) ?? 0 };
+    });
+  })();
+  const sparkPeak = Math.max(...sparkSeries.map((x) => x.count), 1);
+
+  // v7 分栏：中文结论卡/接力/巡检批次走左栏"案与结论"，其余（心跳折叠、
+  // 取消、英文检查卡）进右栏"事件流水"紧凑日志——日志行永不留空腔。
+  const isConclusionCard = (card) => (card.summary && card.cjk) || card.type === "episode" || card.type === "batch";
+  const conclusionCards = filteredCards.filter(isConclusionCard);
+  const LOG_GLYPH = { live: ["●", DIAL_TONE.live], fail: ["✕", DIAL_TONE.fail], done: ["✓", DIAL_TONE.done], cancel: ["○", DIAL_TONE.idle] };
+  const logRows = filteredCards.filter((card) => !isConclusionCard(card)).map((card) => {
+    const [glyph, glyphColor] = LOG_GLYPH[card.tone] ?? ["○", DIAL_TONE.idle];
+    const dur = card.type === "fold"
+      ? `${card.rows.length} 次`
+      : Number.isFinite(card.endedAtMs) && Number.isFinite(card.startedAtMs) && card.endedAtMs > card.startedAtMs
+        ? formatCompactDuration(card.startedAtMs, card.endedAtMs)
+        : "";
+    return { key: card.key, at: card.at, star: card.agent, event: card.title, glyph, glyphColor, dur, day: dayLabelOf(card.at, now) };
+  });
   const isEmpty = !feed.cards.length && !feed.execAgg.size && !activeEpisodes.length;
+  const dutyCase = activeEpisodes[0] ?? null;
+  const dutyProgress = (() => {
+    const hop = dutyCase?.hops?.find((h) => h.status === "running");
+    const text = String(hop?.progressSummary ?? "").split("\n")[0].trim();
+    return text ? (text.length > 30 ? `${text.slice(0, 30)}…` : text) : "";
+  })();
 
   const renderCard = (card) => {
     if (card.type === "batch") {
@@ -3243,7 +3336,7 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
 
   let lastDay = null;
   const feedNodes = [];
-  for (const card of filteredCards) {
+  for (const card of conclusionCards) {
     const label = dayLabelOf(card.at, now);
     if (label !== lastDay) {
       feedNodes.push(<div className="v5-daybar" key={`day:${label}:${card.key}`}><span>{label}</span></div>);
@@ -3254,67 +3347,92 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
 
   return (
     <div className="tasksboard">
-      <div className="dial" role="img" aria-label="北斗七星状态盘">
-        <svg viewBox="0 0 552 146" preserveAspectRatio="xMinYMid meet">
-          <polyline
-            points={DIAL_CHAIN.map(([, x, y]) => `${x},${y}`).join(" ")}
-            fill="none" stroke="#2E3850" strokeWidth="1"
-          />
-          <line x1={DIAL_CHAIN[6][1] + 8} y1="86" x2="372" y2="84" stroke="rgba(217,168,96,.4)" strokeWidth="1" strokeDasharray="2 3" />
-          <text x="376" y="88" fill="#D9A860" fontSize="12">›</text>
-          <path d="M 24 136 Q 276 128 496 136" fill="none" stroke="#2A3142" strokeWidth="1" />
-          {starState.map((star) => {
-            const [, x, y] = DIAL_CHAIN.find(([id]) => id === star.id);
-            const color = DIAL_TONE[star.tone];
-            return (
-              <g
-                key={star.id}
-                className={`dial-node${star.tone === "idle" ? " is-idle" : ""}${star.stale ? " is-stale" : ""}${selectedStar === star.id ? " is-selected" : ""}`}
-                transform={`translate(${x},${y})`}
-                onClick={() => setSelectedStar(selectedStar === star.id ? null : star.id)}
-              >
-                {selectedStar === star.id && <circle r="9" fill="none" stroke="#D9A860" strokeWidth="1.3" />}
-                {star.tone === "live" && <circle className="dial-halo" r="8.5" fill="none" stroke={color} strokeOpacity=".4" />}
-                <circle
-                  className="dial-dot" r="4.5"
-                  fill={star.tone === "idle" ? "none" : color}
-                  stroke={star.tone === "idle" ? "#4A5568" : "none"}
-                  strokeWidth={star.tone === "idle" ? 1.2 : 0}
-                />
-                <text x="0" y={star.id === "tianquan" ? -9 : 17} textAnchor="middle">{STAR_NAME_FALLBACK[star.id]}</text>
+      <div className="v7row">
+        <section className="v7card v7-dialcard">
+          <div className="dial" role="img" aria-label="北斗七星状态盘">
+            <svg viewBox="0 0 552 146" preserveAspectRatio="xMinYMid meet">
+              <polyline
+                className="dial-chain"
+                points={DIAL_CHAIN.map(([, x, y]) => `${x},${y}`).join(" ")}
+                fill="none" strokeWidth="1.6"
+              />
+              <line x1={DIAL_CHAIN[6][1] + 8} y1="88" x2="424" y2="85" stroke="rgba(217,168,96,.45)" strokeWidth="1" strokeDasharray="2 3" />
+              <text x="428" y="89" fill="#D9A860" fontSize="12">›</text>
+              <path d="M 24 136 Q 276 128 496 136" fill="none" stroke="#1E2735" strokeWidth="1" />
+              {starState.map((star) => {
+                const [, x, y] = DIAL_CHAIN.find(([id]) => id === star.id);
+                const color = DIAL_TONE[star.tone];
+                const above = star.id === "tianquan";
+                const staleNote = star.stale ? (star.tone === "idle" ? " · 暂无记录" : " · 已超 24 小时") : "";
+                return (
+                  <g
+                    key={star.id}
+                    className={`dial-node${star.tone === "idle" ? " is-idle" : ""}${star.stale ? " is-stale" : ""}${selectedStar === star.id ? " is-selected" : ""}`}
+                    transform={`translate(${x},${y})`}
+                    onClick={() => setSelectedStar(selectedStar === star.id ? null : star.id)}
+                  >
+                    <title>{`${STAR_NAME_FALLBACK[star.id]} · ${TONE_LABEL[star.tone]}${staleNote}`}</title>
+                    {selectedStar === star.id && <circle r="10" fill="none" stroke="#D9A860" strokeWidth="1.3" />}
+                    {star.tone === "live" && <circle className="dial-halo" r="9.5" fill="none" stroke={color} strokeOpacity=".4" />}
+                    <circle
+                      className="dial-dot" r="5.5"
+                      fill={star.tone === "idle" ? "none" : color}
+                      stroke={star.tone === "idle" ? "#4A5568" : "none"}
+                      strokeWidth={star.tone === "idle" ? 1.3 : 0}
+                    />
+                    <text x="0" y={above ? -11 : 19} textAnchor="middle" fontSize="9.5">{STAR_NAME_FALLBACK[star.id]}</text>
+                    {star.label ? (
+                      <text className={`dial-sub${star.tone === "live" ? " is-live" : ""}`} x="0" y={above ? -22 : 31} textAnchor="middle" fontSize="8.5">{star.label}</text>
+                    ) : null}
+                  </g>
+                );
+              })}
+              <g className="dial-hub" transform={`translate(${DIAL_HUB.x},${DIAL_HUB.y})`}>
+                <title>星君 · 北斗最高层（hermes，与网关同机）{live ? " · 在线" : " · 网关未连接"}</title>
+                <circle r="7" fill="none" stroke={live ? "#D9A860" : "#6b6e78"} strokeWidth="1.4" />
+                <text x="12" y="4" textAnchor="start" fontSize="9">星君</text>
+                {!live && <text x="12" y="15" textAnchor="start" fontSize="8" fill="#F26D6D">未连接</text>}
               </g>
-            );
-          })}
-          <g className="dial-hub" transform={`translate(${DIAL_HUB.x},${DIAL_HUB.y})`}>
-            <circle r="6" fill="none" stroke="#D9A860" strokeWidth="1.4" />
-            <text x="10" y="4" textAnchor="start">主 Agent</text>
-          </g>
-        </svg>
-        <div className="dial-next">
-          <div className="lb">下一次 · 定时</div>
-          <div className="tm">{nextEntry ? hhMmOf(nextEntry.at) : "待排"}</div>
-          <div className="sub">{nextEntry ? formatCronNext(nextEntry.at, now) : ""}{nextStar ? ` · ${nextStar}` : ""}</div>
-        </div>
-        <div className="dial-legend">
-          <span><i style={{ background: DIAL_TONE.live }} />运行</span>
-          <span><i style={{ background: DIAL_TONE.fail }} />失败</span>
-          <span><i style={{ background: DIAL_TONE.done }} />收班</span>
-          <span><i className="li-idle" />空闲</span>
-        </div>
+            </svg>
+            <div className="dial-next">
+              <div className="lb">下一次 · 定时</div>
+              <div className="tm">{nextEntry ? hhMmOf(nextEntry.at) : "待排"}</div>
+              <div className="sub">{nextEntry ? formatCronNext(nextEntry.at, now) : ""}{nextStar ? ` · ${nextStar}` : ""}</div>
+            </div>
+          </div>
+        </section>
+        <section className="v7card v7-croncard">
+          <div className="v7-mhead">定时队列<span className="v7-mcount">{enabledJobs.length} 启用</span></div>
+          {queueRows.map(({ job, at }) => (
+            <div key={job.id} className="v7-qrow">
+              <span className="v7-qname" title={job.description || job.name || job.id}>{job.name || job.id}</span>
+              <span className="v7-qnext">{formatCronNext(at, now)}<em> · {starNameOf(lastRunByJob.get(job.id)?.agentId)}</em></span>
+            </div>
+          ))}
+          {!queueRows.length && <div className="v7-qempty">没有启用的定时任务</div>}
+          <div className="v7-execblock">
+            <div className="v7-exectop"><span className="v7-mhead" style={{ margin: 0 }}>命令执行</span><span className="v7-execnum">{execTotal} 条</span></div>
+            <div className="v7-execdetail">{execDetail || "—"}</div>
+          </div>
+        </section>
       </div>
 
       <div className="v5-statrow">
         <span className="v5-stat" dangerouslySetInnerHTML={{ __html: statBits.join(" · ") }} />
-        <div className="v5-spark">
-          <span className="v5-spark-label">台账</span>
-          {sparkBars.map((bar) => (
-            <i
-              key={bar.label} className="v5-spark-bar"
-              style={{ height: bar.n === 0 ? 2 : Math.max(3, Math.round((bar.n / sparkMax) * 18)), background: bar.today ? "#D9A860" : undefined }}
-              title={bar.label}
-            />
-          ))}
-        </div>
+        <span className="v7-spark">
+          <em>近 7 天</em>
+          <span className="v7-sbs">
+            {sparkSeries.map((x, i) => (
+              <i
+                key={x.label}
+                className={`v7-sb${i === sparkSeries.length - 1 ? " is-now" : ""}`}
+                style={{ height: `${Math.max(2, Math.round((x.count / sparkPeak) * 20))}px` }}
+                title={`${x.label} · ${x.count} 次`}
+              />
+            ))}
+          </span>
+          <em className="v7-peak">峰 {sparkPeak}</em>
+        </span>
         <div className="v5-filters">
           {[["all", "全部"], ["failed", "失败"], ["cron", "定时"]].map(([id, label]) => (
             <button key={id} type="button" className={`v5-chip${feedFilter === id ? " is-on" : ""}`} onClick={() => setFeedFilter(id)}>
@@ -3324,34 +3442,53 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
         </div>
       </div>
 
-      <div className="v5-feed">
-        {activeEpisodes.map((episode) => (
-          <div key={`case:${episode.chatId ?? episode.startedAtMs}`}>
-            <div className="v5-daybar" style={{ marginTop: 2 }}><span>在办案件</span></div>
-            <article className="v5card v5case">
-              <div className="v5-l1"><i className="v5-dot" style={{ background: DIAL_TONE.live }} /><b style={{ color: DIAL_TONE.live }}>案 · 接力</b><span className="v5-kind">进行中</span></div>
-              <div className="v5-l2">{episode.hops?.[0]?.title || "接力进行中"}</div>
-              <div className="v5-chain">{caseChainText(episode)}</div>
-            </article>
-          </div>
-        ))}
+      <div className="v7row v7-dutyrow">
+        {dutyCase && (
+          <article className="v5card v5case">
+            <div className="v5-l1"><i className="v5-dot" style={{ background: DIAL_TONE.live }} /><b style={{ color: DIAL_TONE.live }}>案 · 接力</b><span className="v5-kind v5-kind--run">进行中</span><span className="v5-when">已跑 {formatCompactDuration(dutyCase.startedAtMs, now) || "1 分内"}</span></div>
+            <div className="v5-l2">{dutyCase.hops?.[0]?.title || "接力进行中"}</div>
+            <div className="v5-chain">{caseChainText(dutyCase)}</div>
+            {dutyProgress ? <div className="v7-progress"><i />{dutyProgress}</div> : null}
+          </article>
+        )}
         {feed.briefing && (!selectedStar || feed.briefing.agentId === selectedStar) && (
-          <div>
-            <div className="v5-daybar" style={{ marginTop: 2 }}><span>最新简报</span></div>
+          <div className={dutyCase ? "v7-dutybrief" : "v7-dutybrief v7-solo"}>
             {renderCard({ ...feed.briefing })}
           </div>
         )}
-        {isEmpty && (
-          <p className="v5-empty">舰队还没有活动记录 · 连上网关派一轮活，这里会长出动态</p>
-        )}
-        {feedNodes}
-        {execTotal > 0 && (
-          <div className="v5-execbar">
-            <span className="v5-execico" aria-hidden="true" />
-            命令执行 · {execTotal} 条{execDetail ? `｜${execDetail}` : ""}
-          </div>
-        )}
-        {feed.skippedNoReply > 0 && <div className="v5-foot">已跳过 {feed.skippedNoReply} 条空定时 · 不占位</div>}
+      </div>
+
+      <div className="v7-feedrow">
+        <div className="v7-feedmain">
+          {isEmpty && (
+            <p className="v5-empty">舰队还没有活动记录 · 连上网关派一轮活，这里会长出动态</p>
+          )}
+          {feedNodes}
+          {feed.skippedNoReply > 0 && <div className="v5-foot">已跳过 {feed.skippedNoReply} 条空定时 · 不占位</div>}
+        </div>
+        <aside className="v7card v7-logcard">
+          <div className="v7-mhead">事件流水</div>
+          {(() => {
+            const nodes = [];
+            let lastDay = null;
+            for (const row of logRows) {
+              if (row.day !== lastDay) {
+                nodes.push(<div key={`ld:${row.day}:${row.key}`} className="v7-lday">{row.day}</div>);
+                lastDay = row.day;
+              }
+              nodes.push(
+                <div key={row.key} className="v7-lrow">
+                  <span className="v7-lt">{hhMmOf(row.at)}</span>
+                  <span className="v7-ls">{row.star}</span>
+                  <span className="v7-le" title={row.event}>{row.event}</span>
+                  <span className="v7-lg" style={{ color: row.glyphColor }}>{row.glyph}{row.dur ? ` ${row.dur}` : ""}</span>
+                </div>
+              );
+            }
+            if (!nodes.length) nodes.push(<div key="logempty" className="v7-qempty">没有事件</div>);
+            return nodes;
+          })()}
+        </aside>
       </div>
     </div>
   );
@@ -3534,29 +3671,18 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
   ];
   const now = Date.now();
   const STALE_MS = Math.max(10, monitor.staleThresholdSec) * 1000; // 无活动判定阈值（设置页可调）
-  // 今日口径（指标片）：0 点起的真失败 / 静默跳过（分诊口径），收班轮次取台账。
-  const dayStart = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
-  const todayTones = { failed: 0, skipped: 0, relay: 0 };
-  for (const run of sessionRuns) {
-    if (run.status !== "failed") continue;
-    const at = run.endedAtMs ?? run.lastSeenMs ?? 0;
-    if (at < dayStart) continue;
-    const tone = hopToneOf({ status: run.status, taskId: run.taskId ?? run.id, error: run.error }).tone;
-    if (tone === "failed") todayTones.failed += 1;
-    if (tone === "skipped") todayTones.skipped += 1;
-  }
   const cronEnabled = cronJobs.filter((job) => job.enabled).length;
   const cronNextHint = (() => {
     const nextList = cronJobs
       .filter((job) => job.enabled)
-      .map((job) => cronNextRunMs(job.scheduleExpr, now))
+      .map((job) => cronNextAtOf(job, now))
       .filter(Number.isFinite)
       .sort((a, b) => a - b);
     return nextList.length ? formatCronNext(nextList[0], now) : "待排";
   })();
 
   // 定时任务看板行（六案③）：镜像 job + 上次结果（分诊口径着色，completed
-  // 是网关侧对 automation_run 的叫法，归一成 succeeded）+ 下次运行估算。
+  // 是网关侧对 automation_run 的叫法，归一成 succeeded）+ 下次运行（网关权威优先）。
   const cronBoard = cronJobs.map((job) => {
     const ledgerLast = lastRunByJob.get(job.id);
     const raw = ledgerLast
@@ -3565,10 +3691,10 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
           error: ledgerLast.error,
           at: ledgerLast.endedAtMs ?? ledgerLast.startedAtMs,
         }
-      : job.lastRunStatus
+      : job.lastStatus
         ? {
-            status: job.lastRunStatus === "completed" ? "succeeded" : job.lastRunStatus,
-            error: job.lastRunError,
+            status: job.lastStatus === "completed" ? "succeeded" : job.lastStatus,
+            error: null,
             at: job.lastRunAtMs,
           }
         : null;
@@ -3578,12 +3704,13 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
       name: job.name,
       description: job.description,
       enabled: job.enabled,
-      scheduleExpr: job.scheduleExpr,
+      scheduleText: cronScheduleTextOf(job),
       last: tone && raw ? { tone: tone.tone, text: `${tone.state} · ${formatHistoryTime(raw.at, now)}` } : null,
       // 停用的任务没有"下次"可言
-      next: job.enabled ? formatCronNext(cronNextRunMs(job.scheduleExpr, now), now) : null,
+      next: job.enabled ? formatCronNext(cronNextAtOf(job, now), now) : null,
     };
   });
+
   // 链路全景（六案④）：进行中的接力轮（同群聊一串，逐跳带原话/结论）+
   // 登记任务链（父子/runId 边，≥2 跳才算链）。
   const relayEpisodes = activeRelayEpisodes(
@@ -3591,22 +3718,6 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
     sessionRuns.filter((run) => run.status === "running"),
     Math.max(5, monitor.episodeGapMin) * 60_000,
   );
-  todayTones.relay = historyEpisodes.length + relayEpisodes.length;
-  const panoramaChainIndex = buildTaskChains(cronTasks);
-  const liveTaskChains = (() => {
-    const seen = new Set();
-    const chains = [];
-    for (const task of cronTasks) {
-      if (task?.status !== "running") continue;
-      const hops = chainHopsFor(task, panoramaChainIndex);
-      if (hops.length < 2) continue;
-      const rootId = hops[0].taskId;
-      if (seen.has(rootId)) continue;
-      seen.add(rootId);
-      chains.push({ rootId, hops, currentTaskId: task.taskId });
-    }
-    return chains;
-  })();
 
   const showTasks = tab === "tasks";
   const showCron = tab === "cron";
@@ -3631,6 +3742,7 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
           lastRunByJob={lastRunByJob}
           agentNameMap={agentNameMap}
           now={now}
+          live={live}
         />
       )}
       {showCron && (cronBoard.length > 0 ? (
@@ -3647,7 +3759,7 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
                 </span>
                 <div className="cron-board-main">
                   <span className="cron-board-name">{row.name || row.id}</span>
-                  <span className="cron-board-sched">{cronScheduleText(row.scheduleExpr) || "—"}</span>
+                  <span className="cron-board-sched">{row.scheduleText || "—"}</span>
                 </div>
                 <span className="cron-board-last">
                   {row.last ? (
@@ -3783,10 +3895,11 @@ export function App() {
     setGlassInk(value);
     localStorage.setItem("metrik:glassInk", value);
   }, []);
-  // 任务台的明暗主题：自动/亮/暗，默认跟随系统。
+  // 任务台的明暗主题：自动/亮/暗。默认深色（与小组件的深色 HUD 同一气质；
+  // 跟随系统会在浅色系统上亮成一页纸，Leo 2026-10-05 点名）。设置过就以设置为准。
   const [theme, setTheme] = useState(() => {
     const stored = localStorage.getItem("metrik:theme");
-    return stored === "light" || stored === "dark" ? stored : "auto";
+    return stored === "light" || stored === "dark" || stored === "auto" ? stored : "dark";
   });
   const handleThemeChange = useCallback((next) => {
     setTheme(next);

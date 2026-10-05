@@ -244,6 +244,7 @@ function horizontalTasksHoverLayout({
   anchorTop,
   anchorBottom,
   gap,
+  cardHeight,
 }) {
   const values = [
     stripPosition?.x,
@@ -258,6 +259,7 @@ function horizontalTasksHoverLayout({
     anchorTop,
     anchorBottom,
     gap,
+    cardHeight,
   ];
   if (values.some((value) => !Number.isFinite(value))) return null;
 
@@ -266,7 +268,9 @@ function horizontalTasksHoverLayout({
   const cardAbove = aboveY >= workArea.y;
   if (!cardAbove && stripPosition.y + stripSize.height + growHeight > workBottom) return null;
   const y = cardAbove ? aboveY : stripPosition.y;
-  const cardTop = cardAbove ? anchorTop : anchorBottom + gap;
+  // 卡底贴条顶（隔 gap）：条不被卡盖住，卡紧贴条上方。此前 cardTop=anchorTop
+  // 让整张卡压在条上再向上伸——Leo 看到的"弹窗跑到上面、横条没了"就是它。
+  const cardTop = cardAbove ? anchorTop - gap - cardHeight : anchorBottom + gap;
   return { side: cardAbove ? "above" : "below", y, cardTop, cardLeft: 0 };
 }
 
