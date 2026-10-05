@@ -287,12 +287,21 @@ export function benignStateOf(errorText, status) {
 }
 
 /// 单条会话 run → hop 形态（胶卷格与横条行悬停卡共用同一映射）。
+/// openclaw cron 会话主题剥壳："[cron:<jobId> <任务名>] <指令原文>" → "<任务名>"。
+/// 真机账本实测（sinan.sqlite3 session_run.title）：skill 周检的会话主题都带
+/// 这个壳，星盘副行/接力卡标题切前 8 字就露出 "[cron:a7…" 生料。非 cron 主题原样透传。
+export function cleanSessionTitle(text) {
+  const t = String(text ?? "");
+  const m = /^\[cron:[0-9a-f][0-9a-f-]*\s+([^\]]+)\]\s*/i.exec(t);
+  return m ? m[1].trim() : t;
+}
+
 export function sessionRunHop(run) {
   return {
     taskId: `session-run:${run.id ?? run.runId ?? run.sessionKey}`,
     agentId: run.agentId,
     status: sessionRunHopStatus(run.status),
-    title: run.title ?? run.fallbackTitle ?? "",
+    title: cleanSessionTitle(run.title ?? run.fallbackTitle ?? ""),
     progressSummary: run.progressSummary ?? null,
     startedAtMs: run.startedAtMs ?? 0,
     endedAtMs: run.endedAtMs ?? null,

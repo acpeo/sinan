@@ -11,6 +11,7 @@ import {
   buildTaskChains,
   chainHopsFor,
   cleanTaskTitle,
+  cleanSessionTitle,
   cronNextRunMs,
   cronScheduleText,
   failureClassOf,
@@ -380,6 +381,21 @@ test("isSubagentTask/cleanTaskTitle: 子 agent 任务识别与标题清理（真
   assert.equal(cleanTaskTitle({ title: "北斗巡检-OpenAI安全黑洞任务" }), "北斗巡检-OpenAI安全黑洞任务");
   assert.equal(cleanTaskTitle({ title: "" }), "");
   assert.equal(cleanTaskTitle(null), "");
+});
+
+test("cleanSessionTitle: openclaw cron 会话主题剥壳（真机 sinan.sqlite3 形态）", () => {
+  // 真机样例：cron 触发的会话主题 = "[cron:<jobId> <任务名>] <指令原文>"，
+  // 星盘副行/接力卡标题切前 8 字会露出 "[cron:a7…" 生料（Leo 装机截图抓到）。
+  assert.equal(
+    cleanSessionTitle(
+      "[cron:a764a0f8-68e7-4bfe-bbca-a2a37aa2f842 skill-collection-review-tianji] Review this agent's Skill Workshop as a collection.",
+    ),
+    "skill-collection-review-tianji",
+  );
+  // 非 cron 主题原样透传；空值安全
+  assert.equal(cleanSessionTitle("周报终稿校对并写入共享盘"), "周报终稿校对并写入共享盘");
+  assert.equal(cleanSessionTitle(""), "");
+  assert.equal(cleanSessionTitle(null), "");
 });
 
 test("sessionRunHop: 透传收工结论 terminalSummary（成果速览六案①）", () => {

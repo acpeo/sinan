@@ -39,7 +39,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, refreshGatewayTasks, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { desyncHealRetryDelayMs, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -1465,7 +1465,7 @@ function TasksWidgetWindow({
         <i className={`widget-task-accent ${taskAccentClass(task.status)}`} aria-hidden="true" />
         <span className="widget-task-main">
           <TaskStatusPill status={task.status} />
-          {stale && <span className="task-pill task-pill--stale">卡?</span>}
+          {stale && <span className="task-pill task-pill--stale" title="运行中但超过阈值没有新事件（设置页可调）">滞后?</span>}
           <span className="widget-task-title" title={task.title || task.taskId}>
             {cleanTaskTitle(task) || task.taskId}
           </span>
@@ -3119,11 +3119,12 @@ function buildTasksFeedModel({ rows, episodes, now }) {
       at: ep.lastActivityMs ?? ep.startedAtMs ?? 0,
       tone: tone === "failed" ? "fail" : "done",
       color: tone === "failed" ? DIAL_TONE.fail : DIAL_TONE.done,
-      title: latest.title || latest.fallbackTitle
+      title: cleanSessionTitle(latest.title) || cleanSessionTitle(latest.fallbackTitle)
         || (summary ? summary.slice(0, 24) : `${starNameOf(latest.agentId)} 的群会话`),
       slug: false,
       summary, cjk: cjkRatioOf(summary) > 0.3,
       status: latest.status, error: latest.error, decayed: false,
+      progress: String(latest.progressSummary ?? "").trim(),
     });
   }
   cards.sort((a, b) => b.at - a.at);
@@ -3131,6 +3132,16 @@ function buildTasksFeedModel({ rows, episodes, now }) {
 }
 
 // 星盘态：每颗星最近一条非取消卡；取消/跳过不进盘（保留"收班"语义）。
+// 星盘副行的短标签：舰队例行任务换中文短词，其余 CJK 切 8 字（拉丁词硬切难读）。
+function shortStarLabel(text) {
+  const t = String(text ?? "").trim();
+  if (!t) return "";
+  if (/^skill-collection-review/i.test(t)) return "skill 检查";
+  if (/^heartbeat/i.test(t)) return "心跳";
+  if (/^Memory/i.test(t)) return "Memory";
+  return t.length > 8 ? `${t.slice(0, 8)}…` : t;
+}
+
 function buildStarState(cards, now) {
   const latest = new Map();
   for (const card of cards) {
@@ -3145,8 +3156,7 @@ function buildStarState(cards, now) {
     const raw = card.tone === "live"
       ? (card.progress ? String(card.progress).split("\n")[0] : "执行中")
       : String(card.title ?? "");
-    const label = raw.length > 8 ? `${raw.slice(0, 8)}…` : raw;
-    return { id, tone: card.tone, stale: card.tone === "done" && now - card.at > 86_400_000, label };
+    return { id, tone: card.tone, stale: card.tone === "done" && now - card.at > 86_400_000, label: shortStarLabel(raw) };
   });
 }
 

@@ -760,30 +760,6 @@ pub struct TasksSnapshot {
     pub tasks: Vec<GatewayTask>,
 }
 
-pub fn fetch_tasks(target: &GatewayTarget) -> Result<TasksSnapshot> {
-    let identity_dir = match &target.identity_dir {
-        Some(dir) => dir.clone(),
-        None => default_state_dir(),
-    };
-    let identity = load_or_create_identity(&identity_dir)?;
-    let mut client = GatewayClient::connect(target, &identity)?;
-    let payload = client.call("tasks.list", json!({}))?;
-    let tasks = payload
-        .get("tasks")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| serde_json::from_value::<GatewayTask>(value.clone()).ok())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Ok(TasksSnapshot {
-        collected_at_ms: chrono::Utc::now().timestamp_millis(),
-        tasks,
-    })
-}
-
 fn default_state_dir() -> PathBuf {
     std::env::var_os("OPENCLAW_STATE_DIR")
         .map(PathBuf::from)
@@ -940,10 +916,12 @@ pub fn upsert_tasks(
     Ok(written)
 }
 
-/// 一次完整的任务快照：连接 → 拉取 → 落账本。供 lib.rs 的刷新命令调用。
-pub fn snapshot_gateway_tasks(connection: &Connection, target: &GatewayTarget) -> Result<usize> {
-    let snapshot = fetch_tasks(target)?;
-    upsert_tasks(connection, &target.label, &snapshot)
+/// 一次完整的任务快照。2026.9.8 网关摘除 tasks.list 后本函数不再发起任何
+/// RPC：automation_run 活水走 snapshot_gateway_crons（cron.runs），会话活水
+/// 走 session_run 同步。保留函数壳是因为前端节拍/刷新命令仍会调用它——
+/// 返回 0 表示"本拍经此路无新增"，同步状态不再被 unknown method 打红。
+pub fn snapshot_gateway_tasks(_connection: &Connection, _target: &GatewayTarget) -> Result<usize> {
+    Ok(0)
 }
 
 /// 快照节流：同一网关 MIN_INTERVAL_MS 内的重复调用直接复用上次结果，
