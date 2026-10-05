@@ -1244,7 +1244,7 @@ fn cron_run_entry_to_task(entry: &Value) -> Option<GatewayTask> {
     let status = status_raw
         .as_deref()
         .filter(|raw| !raw.is_empty())
-        .map(|raw| normalize_cron_run_status(raw));
+        .map(normalize_cron_run_status);
     let started_at = run_at;
     let ended_at = match (run_at, duration) {
         (Some(at), Some(dur)) if dur > 0 => Some(at + dur),
