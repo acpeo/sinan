@@ -1030,8 +1030,6 @@ function TasksWidgetWindow({
       b.at - a.at,
   );
   const miniRows = miniRowsAll.slice(0, 5);
-  // 竖条每星一格（v7.1）：8 格状态实时刷新——格子自描述，悬停详情卡在竖条退役
-  const starCells = buildWidgetStarCells({ tasks, recentlyEnded, active, activeRuns, now, translateProgress });
   // 行的唯一键（shownKeys / otherRows / +N 计数共用）。
   const miniRowKey = (row) =>
     row.kind === "session"
@@ -1065,26 +1063,32 @@ function TasksWidgetWindow({
       return `${name}·${text}${row.tone === "failed" ? "（失败）" : row.tone === "skipped" ? "（跳过）" : ""}`;
     })
     .join("；");
-  // 横条胶卷的跳集：登记任务 = 任务链（竖条已改每星一格，胶卷只在横条用）。
+  // 竖条胶卷的跳集（横条链路同源不受影响）：第一行工作的链。主 Agent 的对话
+  // 轮不进胶卷（v7.1 派点口径，46 跳刷屏的根子）——滤掉 main 跳，纯主 Agent
+  // 轮退回单跳别让胶卷空转；登记任务链同口径。
   const miniVerticalHops = (() => {
     const first = miniRows[0];
     if (!first) return [];
-    return first.kind === "session"
+    const raw = first.kind === "session"
       ? sessionEpisodeHops(sessionRuns, first.run, episodeGapMs)
       : chainHopsFor(first.task, chainIndex);
+    const starHops = raw.filter((hop) => hop.agentId && hop.agentId !== "main");
+    if (!starHops.length) {
+      return first.kind === "session" ? [sessionRunHop(first.run)] : raw.slice(-1);
+    }
+    return starHops;
   })();
   const miniCurrentHopId = miniRows[0]
     ? miniRows[0].kind === "session"
       ? `session-run:${miniRows[0].run.id ?? miniRows[0].run.sessionKey}`
       : miniRows[0].task.taskId
     : null;
-  // 窗口尺寸：横条=跑马灯 244×36；竖条=计数格三格固定（44px/格，不随数据伸缩，
-  // 与原小组件"行集合格子不藏"同一哲学：窗口高度不跳）。
-  // 横竖统一长度（用户指定：竖 196 偏短、横 260 偏长 → 取 224）；
-  // 3 跳在 224 里正好或略紧，更长的链由胶卷滚动承担
+  // 窗口尺寸：横条=跑马灯 224×36；竖条=链路胶卷竖放 42×224（旧原形，Leo 拍板
+  // 恢复），控制开合竖条长高到 376。窗口高度不随数据伸缩；更长/更短的链由
+  // 胶卷滚动与当前跳居中承担。
   const miniSize = (vertical, controlsOpenState) =>
     vertical
-      ? { width: 232, height: controlsOpenState ? 376 : 224 }
+      ? { width: 42, height: controlsOpenState ? 376 : 224 }
       : { width: controlsOpenState ? 308 : 224, height: 36 };
   // 尺寸变化统一走这一个副作用（折叠/开合/切向/行数），处理器只改状态。
   // 折叠态锁死原生拖拽并解除展开态的尺寸下限（细条边缘全是热区）。
@@ -1301,32 +1305,25 @@ function TasksWidgetWindow({
           }}
         >
           {miniVertical ? (
-            // 竖条 = 每星一格（v7.1 Leo 拍板"每星只有一个、实时更新"）：8 格封顶，
-            // 活着的星那格进度行原地刷新；不再按 run 罗列聊天流水（46 行刷屏的根）。
-            // 格子自带状态与进度，悬停详情卡/扩窗机制在竖条退役——跳跃 bug 连根拔。
-            // 未同步空态只在"从没拿到过任何数据"时出现（有账本数据就亮格子，
-            // 全灰=舰队空闲，也是真状态）。
-            !feed.live && !tasks.length && !sessionRuns.length ? (
-              <span className="tasks-mini-empty tasks-mini-empty--vertical">
-                未同步
-              </span>
-            ) : (
+            // 竖条 = 链路胶卷竖放（旧原形恢复，Leo 拍板）：星名竖排一字一格，
+            // 当前跳呼吸点在名字上方，滚轮/按住拖动翻链、当前跳居中；悬停跳
+            // 出详情卡（壳钉缘修复仍在），点击唤主窗。主 Agent 对话轮不进
+            // 胶卷（miniVerticalHops 派点口径），46 跳刷屏的根不回来。
+            miniRows.length > 0 ? (
               <>
-                <div ref={railWrapRef} className="tasks-mini-starcells">
-                  {starCells.map((cell) => (
-                    <button
-                      key={cell.agentId}
-                      type="button"
-                      className={`tasks-mini-starcell is-${cell.state}`}
-                      onClick={onOpenExpanded}
-                      title={cell.title ? `${STAR_NAME_FALLBACK[cell.agentId]} · ${cell.title}` : `${STAR_NAME_FALLBACK[cell.agentId]} · 空闲`}
-                    >
-                      <i className="tasks-mini-starcelldot" aria-hidden="true" />
-                      <span className="tasks-mini-starcellname">{STAR_NAME_FALLBACK[cell.agentId]}</span>
-                      <span className="tasks-mini-starcellline">{cell.line}</span>
-                      {cell.dur ? <span className="tasks-mini-starcelldur">{cell.dur}</span> : null}
-                    </button>
-                  ))}
+                <div
+                  ref={railWrapRef}
+                  className={`tasks-mini-railwrap${(hoverCard?.layout?.side ?? hoverCard?.side) ? ` tasks-mini--hover-${hoverCard.layout?.side ?? hoverCard.side}` : ""}`}
+                  onPointerLeave={hideHopCard}
+                >
+                  <ChainFilmstrip
+                    vertical
+                    hops={miniVerticalHops}
+                    currentTaskId={miniCurrentHopId}
+                    agentNameMap={agentNameMap}
+                    onExpand={onOpenExpanded}
+                    onHopHover={showHopCard}
+                  />
                 </div>
                 {otherRows.length > 0 && (
                   <button
@@ -1340,6 +1337,12 @@ function TasksWidgetWindow({
                   </button>
                 )}
               </>
+            ) : (
+              // 竖条空态：文字竖排，横排文本在 42px 窄条里会一字一行摞下来；
+              // 有账本数据=暂无运行中任务，零数据才是未同步（不谎报）
+              <span className="tasks-mini-empty tasks-mini-empty--vertical">
+                {tasks.length || sessionRuns.length ? "暂无运行中任务" : "未同步"}
+              </span>
             )
           ) : (
             // 横条 = 跑马灯：只显示第一份工作（登记任务有链成胶卷、悬停出详情卡；
@@ -2928,7 +2931,7 @@ const DIAL_TONE = { live: "#3DD68C", fail: "#F26D6D", done: "#4E9DB8", cancel: "
 const TONE_LABEL = { live: "运行中", fail: "有失败", done: "已完成", cancel: "已取消", idle: "空闲" };
 const STAR_NAME_FALLBACK = {
   tianshu: "天枢", tianxuan: "天璇", tianji: "天玑", tianquan: "天权",
-  yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "主 Agent",
+  yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "客星",
 };
 function starNameOf(agentId) {
   const key = String(agentId || "main");
@@ -3156,12 +3159,12 @@ function buildTasksFeedModel({ rows, episodes, now }) {
     const at = ep.lastActivityMs ?? ep.startedAtMs ?? 0;
     if (epAgent === "main") {
       cards.push({
-        key, type: "mainchat", episode: ep, agentId: "main", agent: "主 Agent",
+        key, type: "mainchat", episode: ep, agentId: "main", agent: "客星",
         kind: "对话", at,
         tone: tone === "failed" ? "fail" : "done",
         color: DIAL_TONE[tone === "failed" ? "fail" : "done"],
         title: cleanSessionTitle(latest.title) || cleanSessionTitle(latest.fallbackTitle)
-          || (summary ? summary.slice(0, 24) : "主 Agent 会话"),
+          || (summary ? summary.slice(0, 24) : "客星 会话"),
         slug: false, summary: "", cjk: false,
         status: latest.status, error: latest.error, decayed: false,
         mainChat: true,
@@ -3236,55 +3239,6 @@ function caseChainText(episode) {
       return `${name} ○ 待派`;
     })
     .join("  →  ");
-}
-
-// 迷你胶囊竖条的每星一格（v7.1 Leo："对应 agent 只有一个然后实时更新对话"）：
-// 8 格封顶（7 星 + 主 Agent），活着的星那格进度行原地刷新——不再按 run 罗列
-// 聊天流水。优先级：运行中任务 > 运行中会话 > 窗口内最近收班 > 空闲。
-const WIDGET_CELL_ORDER = ["tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang", "main"];
-function buildWidgetStarCells({ tasks, recentlyEnded, active, activeRuns, now, translateProgress }) {
-  const byAgent = (items) => {
-    const map = new Map();
-    for (const item of items) {
-      const id = item.agentId || "main";
-      if (!map.has(id)) map.set(id, item);
-    }
-    return map;
-  };
-  const runningTasks = byAgent(active);
-  const runningRuns = byAgent(activeRuns);
-  const doneTasks = byAgent(recentlyEnded);
-  const firstLine = (text) => String(text ?? "").split("\n")[0].trim();
-  return WIDGET_CELL_ORDER.map((agentId) => {
-    const task = runningTasks.get(agentId);
-    const run = runningRuns.get(agentId);
-    if (task) {
-      return {
-        agentId, state: "live",
-        line: toolProgressLabel(task.lastToolName, translateProgress) || firstLine(task.progressSummary) || taskTitleOf(task),
-        dur: formatTaskDuration(task.startedAtMs, Number.isFinite(task.endedAtMs) ? task.endedAtMs : now),
-        title: taskTitleOf(task),
-      };
-    }
-    if (run) {
-      return {
-        agentId, state: "live",
-        line: firstLine(run.progressSummary) || cleanSessionTitle(run.title || run.fallbackTitle) || "会话工作中",
-        dur: formatTaskDuration(run.startedAtMs, Number.isFinite(run.endedAtMs) ? run.endedAtMs : now),
-        title: cleanSessionTitle(run.title || run.fallbackTitle || "会话工作"),
-      };
-    }
-    const done = doneTasks.get(agentId);
-    if (done) {
-      return {
-        agentId, state: "done",
-        line: `${taskKindOf(done)} · ✓`,
-        dur: formatTaskDuration(done.startedAtMs, done.endedAtMs),
-        title: taskTitleOf(done),
-      };
-    }
-    return { agentId, state: "idle", line: "空闲", dur: "", title: "" };
-  });
 }
 
 function dayLabelOf(ms, now) {  const d = new Date(ms);

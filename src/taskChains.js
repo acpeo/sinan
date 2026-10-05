@@ -6,9 +6,10 @@
 /// Agent 显示名映射：tasks.list 的 agentId 是短 id（如 tianshu），
 /// agents.list 的是 gateway 前缀全 id（如 VPS-北斗:tianshu）——两种都注册。
 // 星名兜底：网关 agents.list 的 name 字段缺席时（2026-10-05 真机实测为空），
-// 北斗七星 + 主 Agent 用固定中文名，任何消费方（胶卷/悬停卡/星位上下文）不再露裸 id。
+// 北斗七星 + 客星（openclaw 内置 main，编外，对话救援用）用固定中文名，
+// 任何消费方（胶卷/悬停卡/星位上下文）不再露裸 id。
 const STAR_DISPLAY_FALLBACK = {
-  main: "主 Agent", tianshu: "天枢", tianxuan: "天璇", tianji: "天玑",
+  main: "客星", tianshu: "天枢", tianxuan: "天璇", tianji: "天玑",
   tianquan: "天权", yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光",
 };
 
