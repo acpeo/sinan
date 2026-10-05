@@ -2950,6 +2950,17 @@ function taskKindOf(row) {
 function isBriefingRow(row) {
   return taskKindOf(row) === "巡检简报";
 }
+// 定时任务显示名：网关 job 名是英文标识符，显示层换人话；未知名字原样透传
+//（Leo：定时任务不能只能英文显示）。
+function jobDisplayName(name) {
+  const t = String(name ?? "").trim();
+  let m = /^skill-collection-review-(\w+)$/.exec(t);
+  if (m) return `skill 检查 · ${starNameOf(m[1])}`;
+  m = /^heartbeat-(\w+)$/.exec(t);
+  if (m) return `心跳保活 · ${starNameOf(m[1])}`;
+  if (/^memory dreaming promotion$/i.test(t)) return "记忆整理晋升";
+  return t;
+}
 function taskTitleOf(row) {
   const id = row.taskId ?? "";
   const degenerate = !cleanTaskTitle(row) && !row.label && !row.title
@@ -2957,7 +2968,7 @@ function taskTitleOf(row) {
   if (degenerate) {
     return row.kind === "automation_run" ? "定时运行" : `${row.runtime ?? "任务"} 运行`;
   }
-  return cleanTaskTitle(row) || row.label || row.title || row.taskId || "未命名任务";
+  return jobDisplayName(cleanTaskTitle(row) || row.label || row.title || row.taskId || "未命名任务");
 }
 function isSlugTitle(row) {
   return /skill-collection-review/i.test(row.label || row.title || "");
@@ -3342,8 +3353,9 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   const LOG_GLYPH = { live: ["●", DIAL_TONE.live], fail: ["✕", DIAL_TONE.fail], done: ["✓", DIAL_TONE.done], cancel: ["○", DIAL_TONE.idle] };
   const logRows = filteredCards.filter((card) => !isConclusionCard(card)).map((card) => {
     const [glyph, glyphColor] = LOG_GLYPH[card.tone] ?? ["○", DIAL_TONE.idle];
+    // 折叠卡标题自带「· N 次」，时长列不再重复计数（Leo：事件流水排版错位）
     const dur = card.type === "fold"
-      ? `${card.rows.length} 次`
+      ? ""
       : Number.isFinite(card.endedAtMs) && Number.isFinite(card.startedAtMs) && card.endedAtMs > card.startedAtMs
         ? formatCompactDuration(card.startedAtMs, card.endedAtMs)
         : "";
@@ -3459,9 +3471,9 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
                 points={DIAL_CHAIN.map(([, x, y]) => `${x},${y}`).join(" ")}
                 fill="none" strokeWidth="1.6"
               />
-              <line x1={DIAL_CHAIN[6][1] + 8} y1="88" x2="424" y2="85" stroke="rgba(217,168,96,.45)" strokeWidth="1" strokeDasharray="2 3" />
-              <text x="428" y="89" fill="#D9A860" fontSize="12">›</text>
-              <path d="M 24 136 Q 276 128 496 136" fill="none" stroke="#1E2735" strokeWidth="1" />
+          <line className="dial-leader" x1={DIAL_CHAIN[6][1] + 8} y1="88" x2="424" y2="85" stroke="rgba(217,168,96,.45)" strokeWidth="1" strokeDasharray="2 3" />
+          <text x="428" y="89" fill="#D9A860" fontSize="12">›</text>
+          <path d="M 24 136 Q 276 128 496 136" fill="none" stroke="#1E2735" strokeWidth="1" />
               {starState.map((star) => {
                 const [, x, y] = DIAL_CHAIN.find(([id]) => id === star.id);
                 const color = DIAL_TONE[star.tone];
@@ -3492,9 +3504,9 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
               })}
               <g className="dial-hub" transform={`translate(${DIAL_HUB.x},${DIAL_HUB.y})`}>
                 <title>星君 · 北斗最高层（hermes，与网关同机）{live ? " · 在线" : " · 网关未连接"}</title>
-                <circle r="7" fill="none" stroke={live ? "#D9A860" : "#6b6e78"} strokeWidth="1.4" />
-                <text x="12" y="4" textAnchor="start" fontSize="9">星君</text>
-                {!live && <text x="12" y="15" textAnchor="start" fontSize="8" fill="#F26D6D">未连接</text>}
+                <circle r="5.5" fill="none" stroke={live ? "#D9A860" : "#6b6e78"} strokeWidth="1.4" />
+                <text x="11" y="4" textAnchor="start" fontSize="9">星君</text>
+                {!live && <text x="11" y="15" textAnchor="start" fontSize="8" fill="#F26D6D">未连接</text>}
               </g>
             </svg>
             <div className="dial-next">
@@ -3508,7 +3520,7 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
           <div className="v7-mhead">定时队列<span className="v7-mcount">{enabledJobs.length} 启用</span></div>
           {queueRows.map(({ job, at }) => (
             <div key={job.id} className="v7-qrow">
-              <span className="v7-qname" title={job.description || job.name || job.id}>{job.name || job.id}</span>
+              <span className="v7-qname" title={job.description || job.name || job.id}>{jobDisplayName(job.name || job.id)}</span>
               <span className="v7-qnext">{formatCronNext(at, now)}<em> · {starNameOf(lastRunByJob.get(job.id)?.agentId)}</em></span>
             </div>
           ))}
@@ -3536,13 +3548,6 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
           </span>
           <em className="v7-peak">峰 {sparkPeak}</em>
         </span>
-        <div className="v5-filters">
-          {[["all", "全部"], ["failed", "失败"], ["cron", "定时"]].map(([id, label]) => (
-            <button key={id} type="button" className={`v5-chip${feedFilter === id ? " is-on" : ""}`} onClick={() => setFeedFilter(id)}>
-              {label}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="v7row v7-dutyrow">
@@ -3561,6 +3566,17 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
         )}
       </div>
 
+      {/* 筛选 chips 贴着它们管的东西：动态流（v7.1 Leo"管下面的就该放下面"） */}
+      <div className="v7-feedhead">
+        <span className="v7-feedtitle">动态流</span>
+        <div className="v5-filters">
+          {[["all", "全部"], ["failed", "失败"], ["cron", "定时"]].map(([id, label]) => (
+            <button key={id} type="button" className={`v5-chip${feedFilter === id ? " is-on" : ""}`} onClick={() => setFeedFilter(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="v7-feedrow">
         <div className="v7-feedmain">
           {isEmpty && (
@@ -3804,7 +3820,7 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
     const tone = raw ? hopToneOf({ status: raw.status, taskId: job.id, error: raw.error }) : null;
     return {
       id: job.id,
-      name: job.name,
+      name: jobDisplayName(job.name),
       description: job.description,
       enabled: job.enabled,
       scheduleText: cronScheduleTextOf(job),

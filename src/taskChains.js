@@ -292,8 +292,12 @@ export function benignStateOf(errorText, status) {
 /// 这个壳，星盘副行/接力卡标题切前 8 字就露出 "[cron:a7…" 生料。非 cron 主题原样透传。
 export function cleanSessionTitle(text) {
   const t = String(text ?? "");
+  // cron 会话壳：取任务名
   const m = /^\[cron:[0-9a-f][0-9a-f-]*\s+([^\]]+)\]\s*/i.exec(t);
-  return m ? m[1].trim() : t;
+  if (m) return m[1].trim();
+  // 回复引用壳："[Replying to: "..."] 真消息" → 真消息（星盘副行/接力卡标题
+  // 切前 8 字会露出 "[Replyin…" 生料，Leo 装机截图抓到）
+  return t.replace(/^\[Replying to:[^\]]*\]\s*/i, "");
 }
 
 export function sessionRunHop(run) {

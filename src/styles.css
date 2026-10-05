@@ -8401,7 +8401,10 @@ html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background:
 .dial-hub text { fill: #9aa5b5; }
 .dial-halo { animation: v5-breath 1.6s ease-in-out infinite; }
 @keyframes v5-breath { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-.dial-next { position: absolute; left: 77%; top: 44%; text-align: left; }
+/* 摇光→读数块引导线：暗色淡金；浅色下淡金几乎不可见（Leo），加深加重 */
+.dial-leader { stroke: rgba(217, 168, 96, 0.5); }
+html:not([data-theme="dark"]) .console-root .dial-leader { stroke: rgba(146, 100, 26, 0.75); }
+.dial-next { position: absolute; left: 78.6%; top: 46%; text-align: left; }
 .dial-next .lb { font-size: 10.5px; color: #9aa5b5; letter-spacing: .06em; margin-bottom: 3px; }
 .dial-next .tm { font-size: 20px; font-weight: 650; color: #d9a860; font-variant-numeric: tabular-nums; line-height: 1.2; margin-bottom: 3px; }
 .dial-next .sub { font-size: 11.5px; color: #9aa5b5; font-variant-numeric: tabular-nums; line-height: 1.5; }
@@ -8435,6 +8438,9 @@ html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background:
 .v7-progress i { width: 5px; height: 5px; border-radius: 50%; background: #3dd68c; animation: v5-breath 1.6s ease-in-out infinite; flex-shrink: 0; }
 
 .v7-feedmain { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* 筛选 chips 的归属行：动态流头上，管谁贴谁（v7.1） */
+.v7-feedhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 0; }
+.v7-feedtitle { font-size: 10.5px; color: #5c6779; letter-spacing: .1em; }
 .v7-logcard { padding: 10px 14px 8px; }
 .v7-lday { font-size: 10px; color: #5c6779; letter-spacing: .1em; margin: 8px 0 2px; }
 .v7-mhead + .v7-lday { margin-top: 4px; }
