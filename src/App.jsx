@@ -1265,6 +1265,11 @@ function TasksWidgetWindow({
           // 折叠壳不受 .widget-shell 的 320×260 下限约束（那是完整卡片的下限）
           minWidth: 0,
           minHeight: 0,
+          // 悬停详情卡扩窗：原生窗朝卡片对侧平移+扩宽，DOM 壳仍是折叠尺寸——
+          // 不钉到扩窗对应缘上，整条胶囊随窗口平移（真机=悬停瞬间竖条跳到屏左、
+          // 横条向上蹿）。竖条侧弹朝左(=right)壳钉右缘，横条向上长(=above)壳钉底缘。
+          ...(miniVertical && hoverCard?.layout?.side === "right" ? { marginLeft: "auto" } : {}),
+          ...(!miniVertical && hoverCard?.layout?.side === "above" ? { marginTop: "auto" } : {}),
         }}
         onPointerEnter={() => {
           window.clearTimeout(miniLeaveTimerRef.current);
@@ -1958,7 +1963,7 @@ function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassT
       )}
       <SliderRow
         label="玻璃浓度"
-        hint="同时作用于卡片和胶囊；越低越通透，越高越厚实。"
+        hint="作用于任务追踪小组件和贴边胶囊的透明/玻璃档；主窗是实底控制台不受影响。越低越通透，越高越厚实。"
         min={5}
         max={96}
         step={2}
