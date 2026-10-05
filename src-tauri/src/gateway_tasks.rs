@@ -2381,6 +2381,7 @@ mod tests {
                 expr: Some(expr.to_owned()),
                 ..Default::default()
             }),
+            ..Default::default()
         };
         let crons = vec![
             job("j1", "北斗巡检", true, "0 14 * * *"),
