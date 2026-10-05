@@ -39,7 +39,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, refreshGatewayTasks, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { desyncHealRetryDelayMs, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -794,6 +794,15 @@ function TasksWidgetWindow({
   // 空闲会话明细开关（星位上下文卡头"另有 N 个空闲会话"点开/收起）：
   // 默认收起，卡面只留水位行；要盘库时点一下看全量。
   const [showIdleSessions, setShowIdleSessions] = useState(false);
+  // 舰队模块板抽屉（Leo 2026-10-06 拍板）：点模块展开该星今夜明细，默认收起。
+  // hook 必须在折叠早退之前声明（胶囊/面板同一组件）。
+  const [fleetOpenSet, setFleetOpenSet] = useState(() => new Set());
+  const toggleFleetModule = (agentId) => setFleetOpenSet((current) => {
+    const next = new Set(current);
+    if (next.has(agentId)) next.delete(agentId);
+    else next.add(agentId);
+    return next;
+  });
   const miniShellRef = useRef(null);
   const miniLeaveTimerRef = useRef(null);
   // 延时关闭回调里读的是注册时刻的闭包，方向要经 ref 取最新值。
@@ -921,7 +930,7 @@ function TasksWidgetWindow({
         });
       } else {
         layout = await expandTasksHover({
-          width: 42 + TASKS_HOPCARD_WIDTH + TASKS_HOPCARD_GAP,
+          width: 36 + TASKS_HOPCARD_WIDTH + TASKS_HOPCARD_GAP,
           height: Math.max(miniControlsOpen ? 376 : 300, cardHeight),
           anchorY: hoverCard.windowY,
           cardHeight,
@@ -1083,12 +1092,12 @@ function TasksWidgetWindow({
       ? `session-run:${miniRows[0].run.id ?? miniRows[0].run.sessionKey}`
       : miniRows[0].task.taskId
     : null;
-  // 窗口尺寸：横条=跑马灯 224×36；竖条=链路胶卷竖放 42×224（旧原形，Leo 拍板
-  // 恢复），控制开合竖条长高到 376。窗口高度不随数据伸缩；更长/更短的链由
-  // 胶卷滚动与当前跳居中承担。
+  // 窗口尺寸：横条=跑马灯 224×36；竖条=链路胶卷竖放 36×224——厚度跟横条
+  // 统一（Leo 2026-10-06：横竖一个截面一个视觉），控制开合竖条长高到 376。
+  // 窗口高度不随数据伸缩；更长/更短的链由胶卷滚动与当前跳居中承担。
   const miniSize = (vertical, controlsOpenState) =>
     vertical
-      ? { width: 42, height: controlsOpenState ? 376 : 224 }
+      ? { width: 36, height: controlsOpenState ? 376 : 224 }
       : { width: controlsOpenState ? 308 : 224, height: 36 };
   // 尺寸变化统一走这一个副作用（折叠/开合/切向/行数），处理器只改状态。
   // 折叠态锁死原生拖拽并解除展开态的尺寸下限（细条边缘全是热区）。
@@ -1472,157 +1481,102 @@ function TasksWidgetWindow({
       </main>
     );
   }
-  // 运行中/排队：完整行（状态 pill + 状态色小竖条 + 标题 + 时长）。
-  const renderActiveRow = (task) => {
-    const lastSeen = Number.isFinite(task.lastSeenMs) ? task.lastSeenMs : 0;
-    const stale = now - lastSeen > staleMs;
+  // 舰队模块板（Leo 2026-10-06 拍板"一个 agent 一个区域模块，实时覆盖"）：
+  // 旧面板一轮一张卡（长会话时间线一晚几十跳，滚动看不到底）——改每 agent
+  // 一块固定模块：跑着的星=呼吸绿框，标题+进度行原地刷新（新覆盖旧）；
+  // 第三行=记事（最近一次收班的结论原话，覆盖式）；账（第 N 轮/时长）进
+  // 头部右侧。窗口=今天 0 点起，今夜没活动的 agent 不占位；点模块展开该星
+  // 明细抽屉（时间线/胶卷随标题栏"明细"按钮），默认收起。
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+  const fleetModules = buildFleetModules({ tasks, runs: sessionRuns, now, dayStartMs: dayStart.getTime() });
+  const renderFleetModule = (mod) => {
+    const name = agentDisplayName(agentNameMap, mod.agentId) || mod.agentId;
+    const run = mod.running;
+    const live = Boolean(run);
+    const ended = mod.lastEnded;
+    const open = fleetOpenSet.has(mod.agentId);
+    const accent = live
+      ? (run.status === "queued" ? "queued" : "running")
+      : ended
+        ? hopToneOf(ended).tone
+        : "idle";
+    const stale = live && run.kind === "task" && Number.isFinite(run.lastSeenMs) && now - run.lastSeenMs > staleMs;
+    // 头部 meta（记账）：跑着的会话="第 N 轮 · 已跑"（首轮只写时长）、任务=已跑；
+    // 收班=多久之前。
+    const meta = live
+      ? `${run.kind === "session" && mod.roundIndex > 1 ? `第 ${mod.roundIndex} 轮 · ` : ""}${formatTaskDuration(run.startedAtMs, now) || formatTaskAge(run.startedAtMs)}`
+      : ended
+        ? formatTaskAge(ended.endedAtMs ?? 0)
+        : "";
+    // 正在行：活模块的心跳，原地刷新不换行；排队=灰"排队中"。
+    const progressLine = (() => {
+      if (!live) return null;
+      if (run.status === "queued") return { text: "排队中", tone: "queued", raw: null };
+      const text = run.kind === "task"
+        ? toolProgressLabel(run.lastToolName, translateProgress) || run.progressSummary || "执行中"
+        : toolProgressLabel(run.progressSummary, translateProgress) || "会话工作中";
+      const count = run.kind === "task" && run.toolUseCount > 0 ? ` · 本轮 ${run.toolUseCount} 次工具` : "";
+      return { text: `${text}${count}`, tone: "run", raw: run.progressSummary ?? run.lastToolName ?? text };
+    })();
+    // 记事行（覆盖式）：活模块=上一次收班的 ✓/✕ + 结论原话；收班模块=自己的
+    // 结果。没有历史就写"今夜首轮"，不硬凑空行。
+    const note = (() => {
+      if (!ended) return live ? { text: "今夜首轮", tone: "quiet", raw: null } : null;
+      const { tone, state } = hopToneOf(ended);
+      const dur = formatCompactDuration(ended.startedAtMs, ended.endedAtMs) || "";
+      const brief = ended.terminalSummary
+        || (tone === "failed" ? sessionErrorText(ended.error, translateProgress) : "")
+        || state;
+      return { text: `${hopGlyphOf(tone)}${dur ? ` ${dur}` : ""} — ${brief}`, tone, raw: brief };
+    })();
     return (
-      <div className="widget-task-row" key={`${task.gateway}:${task.taskId}`}>
-        <i className={`widget-task-accent ${taskAccentClass(task.status)}`} aria-hidden="true" />
-        <span className="widget-task-main">
-          <TaskStatusPill status={task.status} />
-          {stale && <span className="task-pill task-pill--stale" title="运行中但超过阈值没有新事件（设置页可调）">滞后?</span>}
-          <span className="widget-task-title" title={task.title || task.taskId}>
-            {cleanTaskTitle(task) || task.taskId}
-          </span>
-          {isSubagentTask(task) ? <span className="widget-session-flag">子</span> : null}
-        </span>
-        <small>{formatTaskDuration(task.startedAtMs, task.endedAtMs) || formatTaskAge(lastSeen)}</small>
+      <div key={mod.agentId} className={`tasks-fleet-mod${live ? " is-live" : " is-dimmed"}`}>
+        <button
+          type="button"
+          className="tasks-fleet-head"
+          aria-expanded={open}
+          onClick={() => toggleFleetModule(mod.agentId)}
+          title={live ? `${name} · ${run.title}${stale ? " · 滞后?" : ""}` : ended ? `${name} · ${ended.title}` : name}
+        >
+          <i className={`tasks-fleet-dot is-${accent}`} aria-hidden="true" />
+          <span className="tasks-fleet-name">{name}</span>
+          {live?.sub ? <span className="widget-session-flag">子</span> : null}
+          <span className="tasks-fleet-work">{live ? run.title : (ended?.title ?? "")}</span>
+          {meta ? <span className="tasks-fleet-meta">{meta}</span> : null}
+          {stale ? <span className="task-pill task-pill--stale" title="运行中但超过阈值没有新事件（设置页可调）">滞后?</span> : null}
+        </button>
+        {progressLine ? (
+          <p className={`tasks-fleet-line is-${progressLine.tone}`} title={progressLine.raw ?? progressLine.text}>
+            <em>正在：</em>
+            {progressLine.text}
+          </p>
+        ) : null}
+        {note ? (
+          <p className={`tasks-fleet-note is-${note.tone ?? "quiet"}`} title={note.raw ?? note.text}>
+            {note.text}
+          </p>
+        ) : null}
+        {open && (
+          <div className="tasks-fleet-drawer">
+            {mod.records.length >= 2 ? (
+              chainStyle === "strip" ? (
+                <div className="task-chain">
+                  <ChainFilmstrip hops={mod.records} currentTaskId={run?.taskId ?? null} agentNameMap={agentNameMap} />
+                </div>
+              ) : (
+                <TaskChainTimeline hops={mod.records} currentTaskId={run?.taskId ?? null} agentNameMap={agentNameMap} translate={translateProgress} />
+              )
+            ) : (
+              <p className="tasks-fleet-drawer-empty">
+                {mod.records[0]?.terminalSummary || "今夜就这一条"}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     );
   };
-  // 运行中任务的进度一行小字：优先 cli 行的 lastToolName（中文化的最后工具，
-  // ⑤实时工具流水小版），回退网关 progressSummary 原话；带累计调用数。
-  // 只有 running 且真有内容才渲染，别给行硬凑空行。
-  const renderProgressLine = (task) => {
-    if (task.status !== "running") return null;
-    const text = toolProgressLabel(task.lastToolName, translateProgress) || task.progressSummary;
-    if (!text) return null;
-    const count = Number.isFinite(task.toolUseCount) && task.toolUseCount > 0
-      ? ` · 本轮 ${task.toolUseCount} 次工具`
-      : "";
-    return (
-      <p className="task-progress-line" title={task.lastToolName ?? task.progressSummary ?? text}>
-        <em>正在：</em>
-        {text}
-        {count}
-      </p>
-    );
-  };
-  // 成果速览（六案①）：收工行附北斗写的中文结论（terminalSummary 原话，
-  // 台账/任务行透传）。只在终态行上出现，悬浮看全文。
-  const renderSummaryLine = (text) => {
-    if (!text) return null;
-    return (
-      <p className="task-summary-line" title={text}>
-        <em>成果：</em>
-        {text}
-      </p>
-    );
-  };
-  // 会话工作行（群聊派活，session_run 台账）：标题=派活原话，行尾「会话」小标
-  // 与登记任务区分；附属信息行与登记任务的进度行同结构（失败=错误原话红字；
-  // 良性未跑=灰显跳过档，不染红——失败分诊六案②）。
-  const renderSessionRow = (run) => {
-    const failed = run.status === "failed";
-    const benign = failed && failureClassOf(run.error) !== "real";
-    const lastSeen = run.endedAtMs ?? run.lastSeenMs ?? 0;
-    return (
-      <div className="widget-task-row">
-        <i
-          className={`widget-task-accent ${failed && !benign ? "widget-task-accent--failed" : benign ? "widget-task-accent--skipped" : "widget-task-accent--running"}`}
-          aria-hidden="true"
-        />
-        <span className="widget-task-main">
-          <TaskStatusPill status={failed ? (benign ? "skipped" : "failed") : "running"} />
-          <span className="widget-task-title" title={run.title || ""}>
-            {run.title || run.fallbackTitle || "会话工作"}
-          </span>
-          <span className="widget-session-flag">会话</span>
-        </span>
-        <small>{formatTaskDuration(run.startedAtMs, run.endedAtMs) || formatTaskAge(lastSeen)}</small>
-      </div>
-    );
-  };
-  const renderSessionSubLine = (run) => {
-    const failed = run.status === "failed";
-    const benign = failed && failureClassOf(run.error) !== "real";
-    const agentName = agentDisplayName(agentNameMap, run.agentId) || run.agentId || "";
-    if (benign) {
-      const label = benignStateOf(run.error, "failed");
-      return (
-        <p className="task-progress-line task-progress-line--benign" title={run.error || label}>
-          {agentName ? `${agentName} · ` : ""}
-          {label}
-          {run.error ? `（${run.error}）` : ""}
-        </p>
-      );
-    }
-    if (failed) {
-      const text = sessionErrorText(run.error, translateProgress) || "run 失败";
-      return (
-        <p className="task-progress-line task-progress-line--error" title={run.error || text}>
-          {agentName ? `${agentName} · ` : ""}
-          {text}
-        </p>
-      );
-    }
-    const text = toolProgressLabel(run.progressSummary, translateProgress) || "会话工作中";
-    return (
-      <p className="task-progress-line" title={run.progressSummary || text}>
-        {agentName ? `${agentName} · ` : ""}
-        <em>正在：</em>
-        {text}
-      </p>
-    );
-  };
-  // 链内排队跳不再单独占行（竖直时间线里已经有了）——只收运行中任务链上的成员。
-  const chainMemberIds = new Set();
-  for (const task of active) {
-    if (task.status !== "running") continue;
-    for (const hop of chainHopsFor(task, chainIndex)) {
-      if (hop.taskId !== task.taskId) chainMemberIds.add(hop.taskId);
-    }
-  }
-  // 展开窗面板 = 活跃登记任务 + 会话工作按轮次合并：同一轮接力（与迷你条
-  // 同一把 gap 链）不管几个 run 都占一行，同轮失败不再逐 run 刷屏（Leo
-  // 2026-10-04 "很多很多条失败记录"的解法之二）。代表行取轮内最新 run，
-  // 时长按整轮算（首跳开始 → 最新一跳）；行序与迷你条同一条两档制规则。
-  const panelSessionRows = (() => {
-    const rows = [];
-    const claimed = new Set();
-    const runKeyOf = (item) => String(item.id ?? item.runId ?? item.sessionKey);
-    const ordered = [...activeRuns, ...failedRuns].sort(
-      (a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0),
-    );
-    for (const run of ordered) {
-      if (claimed.has(runKeyOf(run))) continue;
-      const hops = sessionRuns.length ? sessionEpisodeHops(sessionRuns, run) : [];
-      hops.forEach((hop) => claimed.add(String(hop.taskId).replace("session-run:", "")));
-      // 轮内最新 run = hops 末位（升序）；台账里可能查得到原行（含 fallbackTitle
-      // 等渲染字段），查不到退回当前 run。
-      const latestId = hops.length ? String(hops[hops.length - 1].taskId).replace("session-run:", "") : runKeyOf(run);
-      const latestRun = sessionRuns.find((item) => runKeyOf(item) === latestId) ?? run;
-      const roundStartMs = hops.length ? hops[0].startedAtMs : latestRun.startedAtMs;
-      rows.push({
-        kind: "session",
-        run: latestRun,
-        hops,
-        at: latestRun.endedAtMs ?? latestRun.startedAtMs ?? 0,
-        roundStartMs,
-      });
-    }
-    return rows;
-  })();
-  const panelRowTier = (row) => {
-    if (row.kind !== "session" || row.run.status !== "failed") return 0;
-    // 三档制：运行中 0 → 真失败 1 → 良性未跑 2（分诊口径同 miniRowsAll）。
-    return failureClassOf(row.run.error) === "real" ? 1 : 2;
-  };
-  const panelRows = [
-    ...active.map((task) => ({ kind: "task", task, at: taskStartedAt(task) })),
-    ...panelSessionRows,
-  ].sort((a, b) => panelRowTier(a) - panelRowTier(b) || b.at - a.at);
   // 星位上下文收敛：全网关跑同一个模型时（北斗常态）模型名进卡头只说一次，
   // 行内不再重复；模型混跑时才逐行标注。空闲会话数量进卡头（不逐行占位）。
   const usageModelSet = new Set(
@@ -1769,81 +1723,16 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
       </header>
       <div className="tasks-window-content">
         <section className="widget-tasks tasks-window-body" aria-label="Gateway 任务">
-          {panelRows.length === 0 && usageSessions.length === 0 && (
+          {fleetModules.length === 0 && usageSessions.length === 0 && (
             <p className="widget-tasks-empty">
-              {tasks.length || sessionRuns.length ? "暂无任务记录" : "等待首次同步…（主窗口 设置 → 任务追踪 配置 Gateway）"}
+              {tasks.length || sessionRuns.length ? "今夜还没开工" : "等待首次同步…（主窗口 设置 → 任务追踪 配置 Gateway）"}
             </p>
           )}
-          <div className="tasks-card">
-            {panelRows.map((row) => {
-              if (row.kind === "session") {
-                const run = row.run;
-                const hops = row.hops ?? [];
-                const hasEpisode = hops.length >= 2;
-                // 轮次行：胶卷/时间线与登记任务链同一套结构规则——时间线接管时
-                // 进度/错误行让位（每跳自带），胶卷速览时保留。时长按整轮算。
-                const roundRun = Number.isFinite(row.roundStartMs)
-                  ? { ...run, startedAtMs: row.roundStartMs }
-                  : run;
-                return (
-                  <div className="widget-task-group" key={`session-run:${run.id}`}>
-                    {renderSessionRow(roundRun)}
-                    {hasEpisode && chainStyle === "strip" && (
-                      <div className="task-chain">
-                        <ChainFilmstrip
-                          hops={hops}
-                          currentTaskId={`session-run:${run.id ?? run.runId ?? run.sessionKey}`}
-                          agentNameMap={agentNameMap}
-                        />
-                      </div>
-                    )}
-                    {hasEpisode && chainStyle === "timeline" && (
-                      <TaskChainTimeline
-                        hops={hops}
-                        currentTaskId={`session-run:${run.id ?? run.runId ?? run.sessionKey}`}
-                        agentNameMap={agentNameMap}
-                        translate={translateProgress}
-                      />
-                    )}
-                    {(!hasEpisode || chainStyle === "strip") && renderSessionSubLine(run)}
-                    {(!hasEpisode || chainStyle === "strip") && renderSummaryLine(run.terminalSummary)}
-                  </div>
-                );
-              }
-              const task = row.task;
-              const hops = task.status === "running" ? chainHopsFor(task, chainIndex) : [];
-              // 排队任务若是某条运行中链上的成员，时间线里已经有了，不再单独占行
-              if (task.status === "queued" && chainMemberIds.has(task.taskId)) return null;
-              // 结构规则（一处管全部）：每个任务整体包成一组 = 任务行 + 它的附属行
-              //（进度行 / 链路），组的底线替代任务行的底线——附属行永远在横线之上，
-              // 不会看起来像下一个任务的。有无进度/链路都走同一条路。
-              const hasChain = hops.length >= 2;
-              return (
-                <div className="widget-task-group" key={`${task.gateway}:${task.taskId}`}>
-                  {renderActiveRow(task)}
-                  {(!hasChain || chainStyle === "strip") && renderProgressLine(task)}
-                  {task.status !== "running" && renderSummaryLine(task.terminalSummary)}
-                  {hasChain &&
-                    (chainStyle === "strip" ? (
-                      <div className="task-chain">
-                        <ChainFilmstrip
-                          hops={hops}
-                          currentTaskId={task.taskId}
-                          agentNameMap={agentNameMap}
-                        />
-                      </div>
-                    ) : (
-                      <TaskChainTimeline
-                        hops={hops}
-                        currentTaskId={task.taskId}
-                        agentNameMap={agentNameMap}
-                        translate={translateProgress}
-                      />
-                    ))}
-                </div>
-              );
-            })}
-          </div>
+          {fleetModules.length > 0 && (
+            <div className="tasks-card tasks-fleet">
+              {fleetModules.map((mod) => renderFleetModule(mod))}
+            </div>
+          )}
           {usageSessions.length > 0 && (
             <div className="tasks-card tasks-usage-card">
               <p className="tasks-card-head">

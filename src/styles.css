@@ -6976,6 +6976,66 @@ button.tasks-usage-idle:hover { text-decoration: underline; }
   padding: 0 12px;
 }
 
+/* ── 舰队模块板（面板 v2，Leo 2026-10-06 拍板"一个 agent 一个区域模块，
+   实时覆盖"）：跑=呼吸绿框原地刷新，收班=变暗，点模块开该星明细抽屉 ── */
+.tasks-fleet { display: flex; flex-direction: column; gap: 6px; }
+.tasks-fleet-mod {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 7px 10px 8px;
+}
+.tasks-fleet-mod.is-live {
+  border-color: rgba(61, 214, 140, 0.28);
+  background: rgba(61, 214, 140, 0.05);
+}
+.tasks-fleet-mod.is-dimmed { opacity: 0.62; }
+.tasks-fleet-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.tasks-fleet-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #4a5568; }
+.tasks-fleet-dot.is-running { background: #3dd68c; box-shadow: 0 0 6px rgba(61, 214, 140, 0.7); animation: v5-breath 1.6s ease-in-out infinite; }
+.tasks-fleet-dot.is-queued { background: transparent; border: 1px solid #4a5568; }
+.tasks-fleet-dot.is-done { background: #4e9db8; }
+.tasks-fleet-dot.is-failed { background: rgba(242, 109, 109, 0.6); }
+.tasks-fleet-dot.is-skipped { background: transparent; border: 1px solid #4a5568; }
+.tasks-fleet-name { flex: none; font-weight: 650; font-size: 12px; }
+.tasks-fleet-work { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: #cfd8e4; }
+.tasks-fleet-mod.is-live .tasks-fleet-work { color: #b8e6cd; }
+.tasks-fleet-meta { flex: none; color: #5c6779; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tasks-fleet-line { margin: 5px 0 0 14px; font-size: 10.5px; color: #8fdcb2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tasks-fleet-line em { font-style: normal; opacity: 0.75; }
+.tasks-fleet-line.is-queued { color: #67718a; }
+.tasks-fleet-note { margin: 4px 0 0 14px; font-size: 10.5px; color: #67718a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tasks-fleet-note.is-failed { color: #e08585; }
+.tasks-fleet-note.is-done, .tasks-fleet-note.is-skipped { color: #8a94a6; }
+.tasks-fleet-drawer { margin: 7px 0 0 14px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.tasks-fleet-drawer-empty { margin: 0; font-size: 10.5px; color: #67718a; }
+
+/* 浅色玻璃壳覆写（模块板） */
+.widget-shell--glass-light .tasks-fleet-mod { border-color: rgba(31, 33, 36, 0.1); background: rgba(31, 33, 36, 0.045); }
+.widget-shell--glass-light .tasks-fleet-mod.is-live { border-color: rgba(31, 122, 77, 0.35); background: rgba(31, 122, 77, 0.06); }
+.widget-shell--glass-light .tasks-fleet-work { color: rgba(29, 31, 35, 0.85); }
+.widget-shell--glass-light .tasks-fleet-mod.is-live .tasks-fleet-work { color: #1f7a4d; }
+.widget-shell--glass-light .tasks-fleet-meta { color: rgba(48, 51, 57, 0.55); }
+.widget-shell--glass-light .tasks-fleet-line { color: #1f7a4d; }
+.widget-shell--glass-light .tasks-fleet-line.is-queued { color: rgba(48, 51, 57, 0.55); }
+.widget-shell--glass-light .tasks-fleet-note { color: rgba(48, 51, 57, 0.6); }
+.widget-shell--glass-light .tasks-fleet-note.is-failed { color: #a1402e; }
+.widget-shell--glass-light .tasks-fleet-drawer { border-top-color: rgba(31, 33, 36, 0.1); }
+.widget-shell--glass-light .tasks-fleet-drawer-empty { color: rgba(48, 51, 57, 0.55); }
+
 /* ── 星位上下文（B 链路）：sessions.list 会话级用量行 ─────────────────
    布局跟任务行同一张网格语言：点 | 名字 | 水位条 | 数字。 */
 .tasks-usage-list {
@@ -7244,12 +7304,12 @@ button.tasks-usage-idle:hover { text-decoration: underline; }
   opacity: 0.5;
 }
 
-/* 竖条空态：文字竖排（与链路竖排名同一语言），从上往下读；
-   vertical-rl 的 CJK 墨迹偏盒中心右侧 ~1.5px（.task-chain-agent 同源），左移补偿 */
+/* 竖条空态：文字竖排（与链路竖排名同一语言），从上往下读。
+   不带 .task-chain-agent 的 -1.5px 补偿——空态是整盒 grid 居中，冒烟实测
+   墨迹本就居中，补偿反而带偏（Leo 2026-10-06 指左缝，量出是 42 条身太肥）。 */
 .tasks-mini-empty--vertical {
   writing-mode: vertical-rl;
   letter-spacing: 2px;
-  transform: translateX(-1.5px);
 }
 
 /* 横条跑马灯：单行任务 + "+N" 提示 */
@@ -7429,7 +7489,7 @@ button.tasks-usage-idle:hover { text-decoration: underline; }
   /* 垂直填满壳内高度（替代原胶卷的直接 flex:1）：内容多时由胶卷自身滚动，
      不能 flex:none 随内容长——那会把滚动约束顶穿，窗口内底部被裁且滚不动 */
   flex: 1 1 auto;
-  width: 34px;
+  width: 28px;
   align-self: center;
   min-height: 0;
   display: flex;

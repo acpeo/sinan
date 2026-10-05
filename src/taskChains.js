@@ -656,3 +656,88 @@ function chatKeyOf(sessionKey) {
   const marker = text.indexOf(":group:");
   return marker >= 0 ? text.slice(marker + 1) : text;
 }
+
+/// 舰队模块板（Leo 2026-10-06 拍板"一个 agent 一个区域模块，实时覆盖"）：
+/// 把登记任务 + 会话台账按 agent 聚合成"每 agent 一块"的模块数据——
+///   running   正在跑的任务/会话（活模块：标题+正在行原地刷新，新覆盖旧）
+///   lastEnded 今夜最近一次收班（记事行：✓/✕ + 结论原话，覆盖式）
+///   roundIndex 同一会话里该 agent 的轮次序（头部"第 N 轮"记账）
+/// 窗口 = 今天 0 点起（"今夜"口径）；今夜没活动的 agent 不出模块。
+/// records 保留 hop 形状（taskId/status/terminalSummary…），抽屉直接喂
+/// TaskChainTimeline / ChainFilmstrip 复用现成组件。
+export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
+  const byAgent = new Map();
+  const ensure = (agentId) => {
+    if (!byAgent.has(agentId)) byAgent.set(agentId, { agentId, records: [] });
+    return byAgent.get(agentId);
+  };
+  for (const task of tasks ?? []) {
+    if (!task?.agentId) continue;
+    const endedAt = Number.isFinite(task.endedAtMs) ? task.endedAtMs : Number.isFinite(task.lastSeenMs) ? task.lastSeenMs : 0;
+    const active = task.status === "running" || task.status === "queued";
+    if (!active && endedAt && endedAt < dayStartMs) continue;
+    ensure(task.agentId).records.push({
+      kind: "task",
+      taskId: task.taskId,
+      gateway: task.gateway ?? "",
+      agentId: task.agentId,
+      status: task.status,
+      title: cleanTaskTitle(task) || task.taskId,
+      startedAtMs: task.startedAtMs ?? task.firstSeenMs ?? 0,
+      endedAtMs: active ? null : endedAt,
+      terminalSummary: task.terminalSummary ?? null,
+      progressSummary: task.progressSummary ?? null,
+      lastToolName: task.lastToolName ?? null,
+      toolUseCount: Number.isFinite(task.toolUseCount) ? task.toolUseCount : null,
+      error: task.error ?? null,
+      lastSeenMs: Number.isFinite(task.lastSeenMs) ? task.lastSeenMs : 0,
+      sub: isSubagentTask(task),
+    });
+  }
+  for (const run of runs ?? []) {
+    if (!run) continue;
+    const agentId = run.agentId || "main";
+    const endedAt = run.endedAtMs ?? run.lastSeenMs ?? 0;
+    if (run.status !== "running" && endedAt && endedAt < dayStartMs) continue;
+    ensure(agentId).records.push({
+      kind: "session",
+      taskId: `session-run:${run.id ?? run.runId ?? run.sessionKey}`,
+      gateway: "",
+      agentId,
+      status: sessionRunHopStatus(run.status),
+      title: cleanSessionTitle(run.title ?? run.fallbackTitle ?? "") || "会话工作",
+      startedAtMs: run.startedAtMs ?? 0,
+      endedAtMs: run.status === "running" ? null : (run.endedAtMs ?? null),
+      terminalSummary: run.terminalSummary ?? null,
+      progressSummary: run.progressSummary ?? null,
+      lastToolName: null,
+      toolUseCount: null,
+      error: run.error ?? null,
+      sessionKey: run.sessionKey ?? "",
+      lastSeenMs: Number.isFinite(run.lastSeenMs) ? run.lastSeenMs : 0,
+    });
+  }
+  const modules = [];
+  for (const { agentId, records } of byAgent.values()) {
+    if (!records.length) continue;
+    records.sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0));
+    const running = records.find((r) => r.status === "running" || r.status === "queued") ?? null;
+    const lastEnded = records.find((r) => r !== running && r.status !== "running" && r.status !== "queued") ?? null;
+    let roundIndex = 0;
+    if (running?.kind === "session") {
+      const chat = chatKeyOf(running.sessionKey);
+      roundIndex = records.filter((r) => r.kind === "session" && chatKeyOf(r.sessionKey) === chat).length;
+    }
+    modules.push({ agentId, running, lastEnded, todayCount: records.length, roundIndex, records });
+  }
+  modules.sort((a, b) => {
+    const ar = a.running ? 0 : 1;
+    const br = b.running ? 0 : 1;
+    if (ar !== br) return ar - br;
+    const at = a.running ? a.running.startedAtMs : (a.lastEnded?.endedAtMs ?? 0);
+    const bt = b.running ? b.running.startedAtMs : (b.lastEnded?.endedAtMs ?? 0);
+    return bt - at;
+  });
+  void now;
+  return modules;
+}

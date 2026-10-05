@@ -25,6 +25,7 @@ import {
   selectUsageSessions,
   sessionEpisodeHops,
   sessionErrorText,
+  buildFleetModules,
   sessionRunHopStatus,
   sessionRunHop,
   toolProgressLabel,
@@ -545,4 +546,46 @@ test("detectRoundNotifications: 免打扰时段整批丢弃", () => {
   // 免打扰里丢掉的失败，failedSeen 已记 → 时段过后也不回放（静默=不发）
   const later = detectRoundNotifications(runs, next, { episodeGapMin: 60 }, now + 3_600_000);
   assert.equal(later.toasts.length, 0);
+});
+
+test("buildFleetModules: 一个 agent 一块，跑的在前收班在后，记事取最近收班结论", () => {
+  const dayStart = 1_000_000_000_000;
+  const now = dayStart + 8 * 3_600_000;
+  const modules = buildFleetModules({
+    tasks: [
+      { taskId: "t1", gateway: "g", agentId: "tianji", status: "running", title: "北斗矩阵", startedAtMs: now - 720_000, lastSeenMs: now - 60_000, toolUseCount: 3 },
+      { taskId: "t0", gateway: "g", agentId: "tianji", status: "succeeded", title: "北斗矩阵", startedAtMs: dayStart + 1_000_000, endedAtMs: dayStart + 1_100_000, terminalSummary: "已定位真相并完成配置修改" },
+    ],
+    runs: [
+      { id: "r1", agentId: "main", status: "done", title: "[Replying to: …] 不对，我之前…", startedAtMs: dayStart + 500_000, endedAtMs: dayStart + 560_000, terminalSummary: "不是必须添个堵", sessionKey: "agent:main:main:group:room1" },
+      { id: "r2", agentId: "main", status: "running", title: "直接降级", startedAtMs: now - 300_000, sessionKey: "agent:main:main:group:room1" },
+      { id: "r9", agentId: "tianquan", status: "done", title: "skill 检查", startedAtMs: dayStart - 86_400_000, endedAtMs: dayStart - 86_000_000, sessionKey: "agent:tianquan:main" },
+    ],
+    now,
+    dayStartMs: dayStart,
+  });
+  assert.equal(modules.length, 2); // tianquan 的 run 在今天 0 点前，不占模块
+  assert.equal(modules[0].agentId, "main"); // 跑着的按开始时间新→旧
+  assert.equal(modules[1].agentId, "tianji");
+  assert.ok(modules[0].running, "main 是活模块");
+  assert.equal(modules[0].roundIndex, 2, "同会话第 2 轮");
+  assert.equal(modules[0].lastEnded.terminalSummary, "不是必须添个堵");
+  assert.ok(modules[1].running, "tianji 任务跑着");
+  assert.equal(modules[1].lastEnded.terminalSummary, "已定位真相并完成配置修改");
+  assert.equal(modules[1].records[0].title, "北斗矩阵");
+});
+
+test("buildFleetModules: 纯收班 agent 出暗模块，空输入不出模块", () => {
+  const dayStart = 1_000_000_000_000;
+  const modules = buildFleetModules({
+    tasks: [],
+    runs: [{ id: "r1", agentId: "yuheng", status: "failed", title: "北斗矩阵", startedAtMs: dayStart + 100, endedAtMs: dayStart + 200, error: "boom", sessionKey: "k" }],
+    now: dayStart + 999_999,
+    dayStartMs: dayStart,
+  });
+  assert.equal(modules.length, 1);
+  assert.equal(modules[0].agentId, "yuheng");
+  assert.equal(modules[0].running, null);
+  assert.equal(modules[0].lastEnded.status, "failed");
+  assert.equal(buildFleetModules({ tasks: [], runs: [], now: dayStart, dayStartMs: dayStart }).length, 0);
 });
