@@ -7255,47 +7255,6 @@ button.tasks-usage-idle:hover { text-decoration: underline; }
 /* 横条跑马灯：单行任务 + "+N" 提示 */
 .tasks-mini:not(.tasks-mini--vertical) { flex-direction: row; align-items: center; padding: 3px 4px 3px 6px; }
 
-/* 竖条计数格：状态点 + 数字 + 小标签（原竖条 icon 上/数字下堆叠的平移），
-   固定 44px 格高，窗口高度不随数据伸缩（原项目"行集合格子不藏"同一哲学） */
-.tasks-mini--vertical .tasks-mini-cell {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  min-height: 44px;
-  padding: 4px 2px;
-  color: inherit;
-  font: inherit;
-  background: transparent;
-  border: 0;
-  border-radius: 9px;
-  cursor: pointer;
-  transition: background-color 240ms var(--motion);
-}
-
-.tasks-mini--vertical .tasks-mini-cell:hover { background: rgba(255, 255, 255, 0.07); }
-.widget-shell--glass-light .tasks-mini--vertical .tasks-mini-cell:hover { background: rgba(31, 33, 36, 0.06); }
-
-.tasks-mini--vertical .tasks-mini-cell em {
-  color: inherit;
-  font-style: normal;
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-
-.tasks-mini--vertical .tasks-mini-cell small {
-  font-size: 9px;
-  line-height: 1.2;
-  opacity: 0.5;
-}
-
-.tasks-mini--vertical .tasks-mini-cell--zero em { opacity: 0.4; }
-.tasks-mini--vertical .tasks-mini-cell--zero .tasks-mini-dot { opacity: 0.35; }
-
 .tasks-mini-ticker {
   display: flex;
   flex: 1;
@@ -7462,27 +7421,68 @@ button.tasks-usage-idle:hover { text-decoration: underline; }
   touch-action: pan-x;
 }
 
-/* 竖条悬停详情卡：胶卷包 42px 定位容器（宽随壳内宽，不随扩窗拉伸），
-   卡片固定朝胶卷左侧弹（Leo 2026-10-03 拍板）——side=right 是"胶卷左侧放得下，
-   卡往左弹"；贴左缘放不下退 side=left 卡往右兜底。 */
-.tasks-mini-railwrap {
-  position: relative;
-  /* 垂直填满壳内高度（替代原胶卷的直接 flex:1）：内容多时由胶卷自身滚动，
-     不能 flex:none 随内容长——那会把滚动约束顶穿，窗口内底部被裁且滚不动 */
-  flex: 1 1 auto;
-  width: 34px;
-  align-self: center;
-  min-height: 0;
+/* 竖条 = 每星一格（v7.1）：8 格状态实时刷新，格子自描述（点格展开完整视图）。
+   悬停详情卡/扩窗机制在竖条退役——原"窗口平移+壳体漂移"的跳跃 bug 连根拔。 */
+.tasks-mini-starcells {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
-.tasks-mini-railwrap .tasks-mini-strip--vertical { width: 100%; }
-/* 定侧类挂在 railwrap 本体上（悬停瞬间同步写），必须复合选择器——曾写成
-   后代选择器永远不命中：竖条悬停扩窗后胶卷不钉窗缘、随窗口平移，指针被甩
-   出胶卷 → 收窗 → 重进 → 再扩，真机表现为"左右跨越跳动+弹窗闪没"（0.20.12
-   真机复现，此类自悬停卡诞生起就是死的）。 */
-.tasks-mini-railwrap.tasks-mini--hover-left { align-self: flex-start; }
-.tasks-mini-railwrap.tasks-mini--hover-right { align-self: flex-end; }
+.tasks-mini-starcell {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1.35;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.tasks-mini-starcell:hover { background: rgba(127, 127, 127, 0.14); }
+.tasks-mini-starcelldot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid #4a5568;
+}
+.tasks-mini-starcell.is-live .tasks-mini-starcelldot {
+  background: #3dd68c;
+  border-color: transparent;
+  animation: v5-breath 1.6s ease-in-out infinite;
+}
+.tasks-mini-starcell.is-done .tasks-mini-starcelldot { background: #4e9db8; border-color: transparent; }
+.tasks-mini-starcellname { width: 46px; flex-shrink: 0; color: inherit; }
+.tasks-mini-starcell.is-idle .tasks-mini-starcellname { opacity: 0.55; }
+.tasks-mini-starcellline {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  opacity: 0.62;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tasks-mini-starcell.is-live .tasks-mini-starcellline { opacity: 0.95; }
+.tasks-mini-starcelldur {
+  flex-shrink: 0;
+  color: inherit;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+  font-size: 9.5px;
+}
 .tasks-hopcard {
   position: fixed;
   z-index: 80;
@@ -7977,9 +7977,6 @@ button.tasks-usage-idle:hover { text-decoration: underline; }
 .widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-row small,
 .widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-empty,
 .widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-more,
-.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini--vertical .tasks-mini-cell small {
-  color: rgba(255, 255, 255, 0.58);
-}
 .widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-row:hover {
   background: rgba(255, 255, 255, 0.07);
 }
