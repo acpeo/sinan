@@ -146,6 +146,10 @@ export function countIdleSessions(sessions, shown) {
 /// 里大半是心跳静默跳过/重启中止/手动取消，全染红会把真失败淹没——灰显
 /// ◌ 档，不占失败区（排序计数都只认 failed）。
 export function hopToneOf(hop, currentTaskId) {
+  // 灯牌空闲星（2026-10-06 七星灯牌）：无今夜记录的 agent，○ 半隐
+  if (hop?.status === "rest") {
+    return { done: false, failed: false, pending: false, current: false, benign: false, tone: "rest", state: "空闲" };
+  }
   const done = hop?.status === "succeeded";
   const pending = hop?.status === "queued";
   const failedRaw = hop?.status === "failed" || hop?.status === "timed_out" || hop?.status === "lost";
@@ -177,7 +181,9 @@ export function hopGlyphOf(tone) {
         ? "◌"
         : tone === "pending"
           ? "○"
-          : "●";
+          : tone === "rest"
+            ? "○"
+            : "●";
 }
 
 /// 活跃任务：运行中或排队。任务卡/任务窗/任务页共用同一条口径。
@@ -740,4 +746,80 @@ export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
   });
   void now;
   return modules;
+}
+
+/// 七星灯牌花名册（Leo 2026-10-06 拍板）：胶囊条常态一格一星、绝不重复，
+/// 链路明细收进悬停卡。每星取今夜最新一跳定灯色——running→● 绿呼吸、
+/// done→✓、failed→✕、queued→○ 排队、无记录→rest ○ 空闲（新灯语）。
+/// order = 北斗星序（App 层传 AGENT_ORDER），花名册之外的 agent 追加尾部；
+/// agents 缺失的星不占格（灯牌只显示真实存在的 agent）。
+export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }) {
+  const recordsByAgent = new Map();
+  const collect = (agentId, record) => {
+    if (!agentId) return;
+    if (!recordsByAgent.has(agentId)) recordsByAgent.set(agentId, []);
+    recordsByAgent.get(agentId).push(record);
+  };
+  for (const run of runs ?? []) {
+    if (!run) continue;
+    const activity = run.endedAtMs ?? run.lastSeenMs ?? run.startedAtMs ?? 0;
+    if (activity && activity < dayStartMs) continue;
+    collect(run.agentId, sessionRunHop(run));
+  }
+  for (const task of tasks ?? []) {
+    if (!task?.agentId) continue;
+    const activity = task.endedAtMs ?? task.lastSeenMs ?? task.startedAtMs ?? 0;
+    if (activity && activity < dayStartMs) continue;
+    collect(task.agentId, {
+      taskId: `${task.gateway ?? ""}:${task.taskId}`,
+      agentId: task.agentId,
+      status: task.status,
+      title: cleanTaskTitle(task) || task.taskId,
+      progressSummary: task.progressSummary ?? null,
+      startedAtMs: task.startedAtMs ?? task.firstSeenMs ?? 0,
+      endedAtMs: task.endedAtMs ?? null,
+      error: task.error ?? null,
+      terminalSummary: task.terminalSummary ?? null,
+      sub: isSubagentTask(task),
+    });
+  }
+  // 星序：order 在前（北斗星序），今夜有活动但不在 order 里的 agent 追加尾部
+  const seen = new Set(order);
+  const extras = [];
+  for (const [agentId, records] of recordsByAgent) {
+    if (!seen.has(agentId)) {
+      seen.add(agentId);
+      extras.push(agentId);
+    }
+  }
+  const rosterAgents = [...order.filter((id) => agents.includes(id) || recordsByAgent.has(id)), ...extras.filter((id) => agents.includes(id) || recordsByAgent.has(id))];
+  // agents.list 里有、但既不在 order 也没活动的 agent 也占一格（暗格）——
+  // 花名册的完整性与加星即生效都靠它。
+  for (const agent of agents ?? []) {
+    const id = typeof agent === "string" ? agent : agent?.agentId;
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      rosterAgents.push(id);
+    }
+  }
+  return rosterAgents.map((agentId) => {
+    const records = (recordsByAgent.get(agentId) ?? []).sort(
+      (a, b) => (b.endedAtMs ?? b.startedAtMs ?? 0) - (a.endedAtMs ?? a.startedAtMs ?? 0),
+    );
+    const running = records.find((r) => r.status === "running" || r.status === "queued") ?? null;
+    const latest = running ?? records[0] ?? null;
+    const tone = latest
+      ? hopToneOf(latest, running ? latest.taskId : null).tone
+      : "rest";
+    const hop = latest ?? {
+      taskId: `roster:${agentId}`,
+      agentId,
+      status: "rest",
+      title: "",
+      progressSummary: null,
+      startedAtMs: 0,
+      endedAtMs: null,
+    };
+    return { agentId, tone, hop, records, running };
+  });
 }

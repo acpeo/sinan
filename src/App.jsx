@@ -1018,73 +1018,28 @@ function TasksWidgetWindow({
   // 分诊见 failureClassOf）灰显垫底——失败再多也不把活的工作挤出前 5 行。
   const failedRunTone = (run) => (failureClassOf(run.error) === "real" ? "failed" : "skipped");
   const failedTaskTone = (task) => (failureClassOf(task.error) === "real" ? "failed" : "skipped");
-  const miniRowsAll = [
-    ...active.map((task) => ({ kind: "task", task, tone: "running", at: taskStartedAt(task) })),
-    ...activeRuns.map((run) => ({ kind: "session", run, tone: "running", at: run.startedAtMs ?? 0 })),
-    ...recentlyEnded
-      .filter((task) => task.status === "failed" || task.status === "timed_out" || task.status === "lost")
-      .map((task) => ({ kind: "task", task, tone: failedTaskTone(task), at: taskEndedAt(task) })),
-    ...failedRuns.map((run) => ({ kind: "session", run, tone: failedRunTone(run), at: sessionActivityAt(run) })),
-  ].sort(
-    (a, b) =>
-      (a.tone === "failed" ? 1 : a.tone === "skipped" ? 2 : 0) -
-        (b.tone === "failed" ? 1 : b.tone === "skipped" ? 2 : 0) ||
-      b.at - a.at,
-  );
-  const miniRows = miniRowsAll.slice(0, 5);
-  // 行的唯一键（shownKeys / otherRows / +N 计数共用）。
-  const miniRowKey = (row) =>
-    row.kind === "session"
-      ? `session-run:${row.run.id ?? row.run.sessionKey}`
-      : `${row.task.gateway ?? ""}:${row.task.taskId}`;
-  // "其余工作" = 首行已上屏部分之外的行：登记任务的链上跳、会话工作的同轮
-  // run 序列都已上屏，不算"其余"（否则角标把看得见的也数进去=新的谎）。
-  // 横条 +N、竖条 +N 角标、悬停卡"其他任务"节共用这一份。
-  const shownWorkKeys = (() => {
-    const first = miniRows[0];
-    if (!first) return new Set();
-    if (first.kind === "session") {
-      return new Set(sessionEpisodeHops(sessionRuns, first.run).map((hop) => hop.taskId));
-    }
-    return new Set(
-      chainHopsFor(first.task, chainIndex).map((hop) => `${hop.gateway ?? ""}:${hop.taskId}`),
-    );
-  })();
-  const otherRows = miniRowsAll.filter((row) => !shownWorkKeys.has(miniRowKey(row)));
-  // +N 角标的悬停清单（横竖同一份口径）：谁·干什么（失败）
-  const otherRowsSummary = otherRows
-    .map((row) => {
-      const name =
-        row.kind === "session"
-          ? agentDisplayName(agentNameMap, row.run.agentId) || row.run.agentId || "?"
-          : agentDisplayName(agentNameMap, row.task.agentId) || row.task.agentId || "?";
-      const text =
-        row.kind === "session"
-          ? row.run.title || row.run.fallbackTitle || "会话工作"
-          : row.task.title || row.task.taskId;
-      return `${name}·${text}${row.tone === "failed" ? "（失败）" : row.tone === "skipped" ? "（跳过）" : ""}`;
-    })
-    .join("；");
-  // 竖条胶卷的跳集（横条链路同源不受影响）：第一行工作的链。主 Agent 的对话
-  // 轮不进胶卷（v7.1 派点口径，46 跳刷屏的根子）——滤掉 main 跳，纯主 Agent
-  // 轮退回单跳别让胶卷空转；登记任务链同口径。
-  const miniVerticalHops = (() => {
-    const first = miniRows[0];
-    if (!first) return [];
-    const raw = first.kind === "session"
-      ? sessionEpisodeHops(sessionRuns, first.run, episodeGapMs)
-      : chainHopsFor(first.task, chainIndex);
-    const starHops = raw.filter((hop) => hop.agentId && hop.agentId !== "main");
-    if (!starHops.length) {
-      return first.kind === "session" ? [sessionRunHop(first.run)] : raw.slice(-1);
-    }
-    return starHops;
-  })();
-  const miniCurrentHopId = miniRows[0]
-    ? miniRows[0].kind === "session"
-      ? `session-run:${miniRows[0].run.id ?? miniRows[0].run.sessionKey}`
-      : miniRows[0].task.taskId
-    : null;
+  // 七星灯牌（Leo 2026-10-06 拍板）：胶囊条常态一格一星、绝不重复——
+  // ●绿呼吸=正在执行（北斗群或私聊主对话都算）、✓/✕=今夜收班、○=空闲
+  // （rest 灯语，新增）。链路明细收进悬停星卡（按星聚合今夜全部跳）；
+  // +N 角标退役（花名册本就全量上屏，不存在"其余工作"）。
+  const roster = buildAgentRoster({
+    agents: [...agentNameMap.keys()],
+    tasks,
+    runs: sessionRuns,
+    now,
+    // 折叠分支早于展开分支的 dayStart（1433 行），这里就地算零点
+    dayStartMs: (() => {
+      const d = new Date(now);
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    })(),
+    order: AGENT_ORDER,
+  });
+  // 灯牌单元格 = 花名册条目；运行中星的 taskId 作当前跳（呼吸居中锚点）。
+  const rosterHops = roster.map((entry) => entry.hop);
+  const rosterLive = roster.find((entry) => entry.running) ?? null;
+  const rosterCurrentTaskId = rosterLive ? rosterLive.hop.taskId : null;
+  const rosterByHopTaskId = new Map(roster.map((entry) => [entry.hop.taskId, entry]));
   // 窗口尺寸：横条=跑马灯 224×36；竖条=链路胶卷竖放 36×224——厚度跟横条
   // 统一（Leo 2026-10-06：横竖一个截面一个视觉），控制开合竖条长高到 376。
   // 窗口高度不随数据伸缩；更长/更短的链由胶卷滚动与当前跳居中承担。
@@ -1154,108 +1109,9 @@ function TasksWidgetWindow({
       setMiniControlsOpen(false);
       runWindowAction(() => applyExpandedPanelSize());
     };
-    const renderMiniRow = ({ kind = "task", task, run, tone, withChain = false, onHopHover }) => {
-      // 会话工作行：接力段 ≥2 run 时与登记任务链同款胶卷（沿用"有链时链优先"
-      // 的拍板，横竖两个方向同一形态），逐跳悬停同一张详情卡；单 run 退回
-      // 状态点 + 星名 + 派活原话，悬停出单跳卡，卡接管后撤原生 title。
-      if (kind === "session") {
-        const agentName = agentDisplayName(agentNameMap, run.agentId);
-        const title = run.title || run.fallbackTitle || "会话工作";
-        const failed = tone === "failed";
-        const skipped = tone === "skipped";
-        const taskId = `session-run:${run.id ?? run.runId ?? run.sessionKey}`;
-        const hops = feed.sessionRuns?.length ? sessionEpisodeHops(feed.sessionRuns, run) : [];
-        const hasEpisode = hops.length >= 2;
-        return (
-          <button
-            key={taskId}
-            type="button"
-            className={`tasks-mini-row${failed ? " tasks-mini-row--failed" : ""}${skipped ? " tasks-mini-row--skipped" : ""}`}
-            onClick={expand}
-            onPointerEnter={onHopHover && !hasEpisode ? (event) => onHopHover(sessionRunHop(run), 0, 1, event) : undefined}
-            title={
-              onHopHover && !hasEpisode
-                ? undefined
-                : `${agentName ? `${agentName} · ` : ""}${title}${failed && run.error ? `（${sessionErrorText(run.error, translateProgress)}）` : ""}${skipped ? `（${benignStateOf(run.error, "failed")}）` : ""} · 点击展开`
-            }
-          >
-            {hasEpisode ? (
-              <ChainFilmstrip
-                hops={hops}
-                currentTaskId={taskId}
-                agentNameMap={agentNameMap}
-                onHopHover={onHopHover}
-              />
-            ) : (
-              <>
-                <i
-                  className={`tasks-mini-dot ${failed ? "tasks-mini-dot--failed" : skipped ? "tasks-mini-dot--skipped" : feed.live ? "tasks-mini-dot--on" : ""}`}
-                  aria-hidden="true"
-                />
-                {agentName && <span className="tasks-mini-agent">{agentName}</span>}
-                <span className="tasks-mini-title">{title}</span>
-              </>
-            )}
-          </button>
-        );
-      }
-      const title = cleanTaskTitle(task) || task.taskId;
-      const lastSeen = Number.isFinite(task.lastSeenMs) ? task.lastSeenMs : 0;
-      // 星名归属：跑马灯一行 = 谁在干 + 干什么；有链时链优先（用户拍板：关联的是链路）
-      const agentName = agentDisplayName(agentNameMap, task.agentId);
-      const hops = withChain ? chainHopsFor(task, chainIndex) : [];
-      const hasChain = hops.length >= 2;
-      const chainText = hops
-        .map((hop) => {
-          const { tone } = hopToneOf(hop);
-          const name = agentDisplayName(agentNameMap, hop.agentId) || hop.agentId || "?";
-          return `${hopGlyphOf(tone)}${name}`;
-        })
-        .join(" → ");
-      return (
-        <button
-          key={`${task.gateway}:${task.taskId}`}
-          type="button"
-          className={`tasks-mini-row${tone === "failed" ? " tasks-mini-row--failed" : ""}${tone === "skipped" ? " tasks-mini-row--skipped" : ""}`}
-          onClick={expand}
-          title={
-            // 悬停详情卡接管提示时撤掉行级原生 title（链上每跳的已在胶卷里撤过），
-            // 避免两层气泡叠出
-            withChain && onHopHover
-              ? undefined
-              : `${hasChain ? `${chainText} | ` : ""}${agentName ? `${agentName} · ` : ""}${title}${tone === "failed" ? "（失败）" : tone === "skipped" ? "（跳过）" : ""} · 点击展开`
-          }
-        >
-          {/* 链内当前跳自带脉冲，行首状态点是重复噪音（尤其胶卷滑走后）——只有无链行保留 */}
-          {!hasChain && (
-            <i
-              className={`tasks-mini-dot ${tone === "failed" ? "tasks-mini-dot--failed" : tone === "skipped" ? "tasks-mini-dot--skipped" : feed.live ? "tasks-mini-dot--on" : ""}`}
-              aria-hidden="true"
-            />
-          )}
-          {hasChain ? (
-            <ChainFilmstrip
-              hops={hops}
-              currentTaskId={task.taskId}
-              agentNameMap={agentNameMap}
-              onHopHover={onHopHover}
-            />
-          ) : (
-            <>
-              {agentName && <span className="tasks-mini-agent">{agentName}</span>}
-              <span className="tasks-mini-title">{title}</span>
-            </>
-          )}
-          {!withChain && (
-            <small>{formatTaskDuration(task.startedAtMs, task.endedAtMs) || formatTaskAge(lastSeen)}</small>
-          )}
-        </button>
-      );
-    };
-    // 悬停卡实时化（发现 6）：拉新数据落地后按 taskId 在最新跳集里找回该跳，
+    // 悬停卡实时化（发现 6）：拉新数据落地后按 taskId 在最新灯牌里找回该跳，
     // 卡片跟着刷新，不再定格在打开瞬间的快照；跳刚好消失则退回快照兜底。
-    // 跳集与竖条胶卷同一份（任务链或会话 run 序列）。
-    const hoverHops = miniVerticalHops;
+    const hoverHops = rosterHops;
     let cardHop = hoverCard?.hop ?? null;
     let cardIndex = hoverCard?.index ?? 0;
     let cardTotal = hoverCard?.total ?? 0;
@@ -1307,71 +1163,48 @@ function TasksWidgetWindow({
           }}
         >
           {miniVertical ? (
-            // 竖条 = 链路胶卷竖放（旧原形恢复，Leo 拍板）：星名竖排一字一格，
-            // 当前跳呼吸点在名字上方，滚轮/按住拖动翻链、当前跳居中；悬停跳
-            // 出详情卡（壳钉缘修复仍在），点击唤主窗。主 Agent 对话轮不进
-            // 胶卷（miniVerticalHops 派点口径），46 跳刷屏的根不回来。
-            miniRows.length > 0 ? (
-              <>
-                <div
-                  ref={railWrapRef}
-                  className={`tasks-mini-railwrap${(hoverCard?.layout?.side ?? hoverCard?.side) ? ` tasks-mini--hover-${hoverCard.layout?.side ?? hoverCard.side}` : ""}`}
-                  onPointerLeave={hideHopCard}
-                >
-                  <ChainFilmstrip
-                    vertical
-                    hops={miniVerticalHops}
-                    currentTaskId={miniCurrentHopId}
-                    agentNameMap={agentNameMap}
-                    onExpand={onOpenExpanded}
-                    onHopHover={showHopCard}
-                  />
-                </div>
-                {otherRows.length > 0 && (
-                  <button
-                    type="button"
-                    className="tasks-mini-more--vertical"
-                    onClick={expand}
-                    aria-label={`还有 ${otherRows.length} 个工作，点击展开`}
-                    title={`还有 ${otherRows.length} 个工作：${otherRowsSummary}`}
-                  >
-                    +{otherRows.length}
-                  </button>
-                )}
-              </>
+            // 竖条 = 七星灯牌竖放（Leo 2026-10-06 拍板）：一星一格绝不重复，
+            // ●绿呼吸=正在执行、✓/✕=今夜收班、○=空闲（rest 灯语）；滚轮/按住
+            // 拖动翻看、悬停星格出该星明细卡，点击唤主窗。+N 角标退役——
+            // 花名册本就全量上屏，不存在"其余工作"。
+            roster.length > 0 ? (
+              <div
+                ref={railWrapRef}
+                className={`tasks-mini-railwrap${(hoverCard?.layout?.side ?? hoverCard?.side) ? ` tasks-mini--hover-${hoverCard.layout?.side ?? hoverCard.side}` : ""}`}
+                onPointerLeave={hideHopCard}
+              >
+                <ChainFilmstrip
+                  vertical
+                  hops={rosterHops}
+                  currentTaskId={rosterCurrentTaskId}
+                  agentNameMap={agentNameMap}
+                  onExpand={onOpenExpanded}
+                  onHopHover={showHopCard}
+                />
+              </div>
             ) : (
               // 竖条空态：文字竖排，横排文本在 42px 窄条里会一字一行摞下来；
-              // 有账本数据=暂无运行中任务，零数据才是未同步（不谎报）
+              // 花名册建不起来（agents.list 空）才是真未同步（不谎报）
               <span className="tasks-mini-empty tasks-mini-empty--vertical">
-                {tasks.length || sessionRuns.length ? "暂无运行中任务" : "未同步"}
+                {feed.live ? "暂无运行中任务" : "未同步"}
               </span>
             )
           ) : (
-            // 横条 = 跑马灯：只显示第一份工作（登记任务有链成胶卷、悬停出详情卡；
-            // 会话工作=普通行），其余用 +N 提示——数字 = 首行已上屏部分之外的真实
-            // 行数（两类工作合计，5 行上限只作用于渲染，不让计数说谎）
-            <>
-              {miniRows.length > 0 ? (
-                <div className="tasks-mini-ticker" onPointerLeave={hideHopCard}>
-                  {renderMiniRow({ ...miniRows[0], withChain: true, onHopHover: showHopCard })}
-                  {otherRows.length > 0 &&
-                    (miniRows[0].kind === "session" ||
-                      chainHopsFor(miniRows[0].task, chainIndex).length < 2) && (
-                      <button
-                        type="button"
-                        className="tasks-mini-more"
-                        onClick={expand}
-                        aria-label={`还有 ${otherRows.length} 个工作，点击展开`}
-                        title={`还有 ${otherRows.length} 个工作：${otherRowsSummary}`}
-                      >
-                        +{otherRows.length}
-                      </button>
-                    )}
-                </div>
-              ) : (
-                <span className="tasks-mini-empty">{feed.live ? "暂无运行中任务" : "未同步"}</span>
-              )}
-            </>
+            // 横条 = 七星灯牌横排：同竖条一套内容口径（一星一格去重 + 灯语），
+            // 悬停星格出该星明细卡，点击唤主窗。
+            roster.length > 0 ? (
+              <div className="tasks-mini-ticker" onPointerLeave={hideHopCard}>
+                <ChainFilmstrip
+                  hops={rosterHops}
+                  currentTaskId={rosterCurrentTaskId}
+                  agentNameMap={agentNameMap}
+                  onExpand={onOpenExpanded}
+                  onHopHover={showHopCard}
+                />
+              </div>
+            ) : (
+              <span className="tasks-mini-empty">{feed.live ? "暂无运行中任务" : "未同步"}</span>
+            )
           )}
           {hoverCard && cardHop &&
             // 唯一路径：卡片恒 Portal 到 body 用 fixed 定位，竖条/横条共用同一张
@@ -1382,9 +1215,10 @@ function TasksWidgetWindow({
                 hop={cardHop}
                 index={cardIndex}
                 total={cardTotal}
-                others={otherRows}
+                records={rosterByHopTaskId.get(cardHop.taskId)?.records ?? null}
+                live={Boolean(rosterLive && rosterLive.hop.taskId === cardHop.taskId)}
                 agentNameMap={agentNameMap}
-                currentTaskId={miniCurrentHopId}
+                currentTaskId={rosterCurrentTaskId}
                 translate={translateProgress}
                 // 卡片跟随壳的有效墨色（与 glassShellAppearance 的 --glass-light
                 // 判定同一条规则）：浅色档、透明档+深色字（白霜）→ 浅色卡；
@@ -2371,7 +2205,7 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
 /// windowClient 的 expandTasksHover(Horizontal) 承担；pointer-events:none 纯
 /// 展示，不截断胶卷的指针进出。light = 跟随胶囊浅色外观（卡片 Portal 在
 /// body 下，壳的 glass-light 类够不到，得显式传）。
-function HopHoverCard({ hop, index, total, others, agentNameMap, currentTaskId, light, translate = true, onHeight, style }) {
+function HopHoverCard({ hop, index, total, others, records, live, agentNameMap, currentTaskId, light, translate = true, onHeight, style }) {
   const { tone, state } = hopToneOf(hop, currentTaskId);
   const name = agentDisplayName(agentNameMap, hop.agentId) || hop.agentId || "?";
   const duration = formatCompactDuration(hop.startedAtMs, hop.endedAtMs);
@@ -2380,6 +2214,69 @@ function HopHoverCard({ hop, index, total, others, agentNameMap, currentTaskId, 
   useLayoutEffect(() => {
     if (rootRef.current && onHeight) onHeight(rootRef.current.offsetHeight);
   });
+  // ── 星卡模式（七星灯牌 2026-10-06）：records = 该星今夜全部跳，按星聚合。
+  // 运行中=实时 kv（任务/已跑/最近动作/今夜第几跳），收班=跳列表（时刻/时长/
+  // 结论），空闲=一句"今夜无活动"。records 为 null 时走旧单跳卡（防御兜底）。──
+  if (records != null) {
+    const runningLive = live && (hop.status === "running" || hop.status === "queued");
+    const endedRecords = records.filter((r) => r.status !== "running" && r.status !== "queued");
+    const clockOf = (ms) =>
+      Number.isFinite(ms) && ms
+        ? new Date(ms).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })
+        : "—";
+    return (
+      <div
+        ref={rootRef}
+        className={`tasks-hopcard${light ? " tasks-hopcard--light" : ""}`}
+        style={style}
+        role="tooltip"
+      >
+        <header className="tasks-hopcard-head">
+          <strong className="tasks-hopcard-title">
+            {runningLive ? `${name} · 执行中` : tone === "rest" ? `${name} · 空闲` : `${name} · ${state}`}
+          </strong>
+          {runningLive ? <TaskStatusPill status="running" /> : tone === "rest" ? null : <TaskStatusPill status={hop.status} />}
+        </header>
+        {runningLive ? (
+          <>
+            <p className="tasks-hopcard-summary">{hop.title || "执行中 · 已接收任务"}</p>
+            {hop.progressSummary || hop.lastToolName ? (
+              <p className="tasks-hopcard-progress" title={hop.lastToolName ?? hop.progressSummary}>
+                <em>正在：</em>
+                {toolProgressLabel(hop.lastToolName, translate) || toolProgressLabel(hop.progressSummary, translate)}
+              </p>
+            ) : null}
+            <div className="tasks-hopcard-kv"><b>已跑</b><span>{formatTaskDuration(hop.startedAtMs, Date.now()) || "刚刚"}</span></div>
+            <div className="tasks-hopcard-kv"><b>今夜</b><span>{total > 0 ? `第 ${total - index} 跳` : "首轮"}</span></div>
+          </>
+        ) : endedRecords.length ? (
+          <div className="tasks-hopcard-extra">
+            {endedRecords.slice(0, 4).map((r) => (
+              <div className="tasks-hopcard-kv" key={r.taskId}>
+                <b>{clockOf(r.startedAtMs)}</b>
+                <span>{formatCompactDuration(r.startedAtMs, r.endedAtMs) || "—"}</span>
+                <span
+                  className="tasks-hopcard-kv-txt"
+                  title={r.terminalSummary || r.title || ""}
+                >
+                  {(r.terminalSummary
+                    || (r.status === "failed" && r.error ? sessionErrorText(r.error, translate) : "")
+                    || r.progressSummary
+                    || r.title
+                    || "—").slice(0, 46)}
+                </span>
+              </div>
+            ))}
+            {endedRecords.length > 4 ? (
+              <div className="tasks-hopcard-kv"><span>… 今夜共 {records.length} 跳，展开任务追踪看全</span></div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="tasks-hopcard-skipped">今夜无活动</p>
+        )}
+      </div>
+    );
+  }
   const othersFailed = (others ?? []).filter((row) => row.tone === "failed").length;
   const othersSkipped = (others ?? []).filter((row) => row.tone === "skipped").length;
   const visibleOthers = (others ?? []).slice(0, 3);
@@ -3016,27 +2913,30 @@ function buildStarState(cards, now) {
   });
 }
 
-// 案卡链路行（v7.1 重锚定）：案 = 星位会话的工作轮次。单星案（常态）显示
-// 轮次与当前进度，不逐 run 罗列；主 Agent 对话不进案卡（走事件流水）。
-function caseChainText(episode) {
+// 案卡链路行（v7.2 折叠芯片，Leo 2026-10-06 拍板）：连续同星同果的跳折叠成
+// 一枚芯片（✓×N），星序一眼可读；悬停芯片弹该星跳列表（时刻/时长/结论），
+// 运行中芯片弹实时卡（任务/已跑/最近动作）。主 Agent 对话不进案卡。
+function foldCaseChain(episode) {
   const hops = (episode?.hops ?? []).filter((hop) => hop.agentId && hop.agentId !== "main");
-  const n = hops.length;
-  if (!n) return "";
-  const names = [...new Set(hops.map((hop) => starNameOf(hop.agentId)))];
-  if (names.length === 1) {
-    if (hops.some((hop) => hop.status === "running")) return `${names[0]} ● 执行中（第 ${n} 轮）`;
-    return `${names[0]} · ${n} 轮往返 ✓`;
-  }
-  return hops
-    .map((hop, i) => {
-      const name = starNameOf(hop.agentId);
-      if (hop.status === "running") return `${name} ● 执行中（第 ${i + 1}/${n} 跳）`;
-      const { tone } = hopToneOf({ status: hop.status, taskId: hop.taskId ?? hop.id, error: hop.error });
-      if (tone === "done") return `${name} ✓`;
-      if (tone === "failed") return `${name} ✕`;
-      return `${name} ○ 待派`;
-    })
-    .join("  →  ");
+  const segments = [];
+  hops.forEach((hop, i) => {
+    const { tone } = hopToneOf({ status: hop.status, taskId: hop.taskId ?? hop.id, error: hop.error });
+    const toneKey = hop.status === "running" ? "running" : tone;
+    const last = segments[segments.length - 1];
+    if (last && last.agentId === hop.agentId && last.toneKey === toneKey && toneKey !== "running") {
+      last.count += 1;
+      last.hops.push({ ...hop, seq: i + 1 });
+    } else {
+      segments.push({
+        agentId: hop.agentId,
+        toneKey,
+        count: 1,
+        running: hop.status === "running",
+        hops: [{ ...hop, seq: i + 1 }],
+      });
+    }
+  });
+  return segments;
 }
 
 function dayLabelOf(ms, now) {  const d = new Date(ms);
@@ -3156,8 +3056,45 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
   );
 }
 
+/// 案卡折叠芯片的悬停明细（v7.2）：运行中=实时卡（任务/已跑/最近动作/本轮），
+/// 收班=该星那几跳的列表（时刻/时长/结论首行）。绝对定位挂在案卡左上，
+/// 不挤压芯片行。
+function CaseChipPop({ seg, now }) {
+  if (seg.running) {
+    const hop = seg.hops[seg.hops.length - 1];
+    return (
+      <div className="v5-chain-pop" role="tooltip">
+        <div className="v5-chain-pop-h"><i />{starNameOf(seg.agentId)} · 执行中</div>
+        <div className="v5-chain-pop-kv"><b>任务</b><span>{hop.title || "执行中 · 已接收任务"}</span></div>
+        <div className="v5-chain-pop-kv"><b>已跑</b><span>{formatTaskDuration(hop.startedAtMs, now) || "刚刚"}</span></div>
+        <div className="v5-chain-pop-kv"><b>最近动作</b><span>{toolProgressLabel(hop.progressSummary) || hop.progressSummary || "—"}</span></div>
+        <div className="v5-chain-pop-kv"><b>本轮</b><span>第 {hop.seq} 跳</span></div>
+      </div>
+    );
+  }
+  return (
+    <div className="v5-chain-pop" role="tooltip">
+      <div className="v5-chain-pop-h">{starNameOf(seg.agentId)} · {seg.count > 1 ? `${seg.count} 跳明细` : "跳明细"}</div>
+      {seg.hops.map((hop) => (
+        <div className="v5-chain-pop-kv" key={hop.taskId ?? hop.seq}>
+          <b>{formatHistoryTime(hop.startedAtMs, now)}</b>
+          <span>{formatCompactDuration(hop.startedAtMs, hop.endedAtMs) || "—"}</span>
+          <span className="txt">
+            {(hop.terminalSummary
+              || (seg.toneKey === "failed" && hop.error ? sessionErrorText(hop.error) : "")
+              || hop.progressSummary
+              || "—").slice(0, 44)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap, usageSessions, idleSessions, live }) {
   const [selectedStar, setSelectedStar] = useState(null);
+  // 案卡折叠芯片的悬停态：null=无悬停，数字=悬停中的芯片序号
+  const [hoverChip, setHoverChip] = useState(null);
   const [feedFilter, setFeedFilter] = useState("all"); // all | failed | cron
   // 动态流视图（Leo 2026-10-06 拍板 B）：速览=按星分组（默认），明细=跨星时间线。
   // 「速览/明细」按钮从小组件标题栏换岗到这里（那边只剩抽屉一个用途=删除）。
@@ -3253,6 +3190,8 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   const isEmpty = !feed.cards.length && !feed.execAgg.size && !activeEpisodes.length;
   // 值班案卡只装星位案（v7.1）：主 Agent 的纯对话轮不成案
   const dutyCase = starEpisodes[0] ?? null;
+  // 接力链折叠芯片（v7.2）：连续同星同果的跳并成一枚，悬停弹该星明细
+  const dutyChain = useMemo(() => foldCaseChain(dutyCase), [dutyCase]);
   const dutyProgress = (() => {
     const hop = dutyCase?.hops?.find((h) => h.status === "running");
     const text = String(hop?.progressSummary ?? "").split("\n")[0].trim();
@@ -3474,7 +3413,24 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
           <article className="v5card v5case">
             <div className="v5-l1"><i className="v5-dot" style={{ background: DIAL_TONE.live }} /><b style={{ color: DIAL_TONE.live }}>案 · 接力</b><span className="v5-kind v5-kind--run">进行中</span><span className="v5-when">已跑 {formatCompactDuration(dutyCase.startedAtMs, now) || "1 分内"}</span></div>
             <div className="v5-l2">{dutyCase.hops?.[0]?.title || "接力进行中"}</div>
-            <div className="v5-chain">{caseChainText(dutyCase)}</div>
+            <div className="v5-chain">
+              {dutyChain.map((seg, i) => (
+                <Fragment key={`${seg.agentId}:${i}`}>
+                  {i > 0 ? <span className="v5-chain-sep">→</span> : null}
+                  <span
+                    className={`v5-chain-chip v5-chain-chip--${seg.toneKey}${seg.running ? " v5-chain-chip--live" : ""}${hoverChip === i ? " is-hover" : ""}`}
+                    onMouseEnter={() => setHoverChip(i)}
+                    onMouseLeave={() => setHoverChip((cur) => (cur === i ? null : cur))}
+                  >
+                    <i aria-hidden="true" />
+                    {starNameOf(seg.agentId)}{" "}
+                    {seg.running ? "● 执行中" : seg.toneKey === "done" ? "✓" : seg.toneKey === "failed" ? "✕" : "○"}
+                    {seg.count > 1 ? `×${seg.count}` : ""}
+                  </span>
+                </Fragment>
+              ))}
+            </div>
+            {hoverChip != null && dutyChain[hoverChip] ? <CaseChipPop seg={dutyChain[hoverChip]} now={now} /> : null}
             {dutyProgress ? <div className="v7-progress"><i />{dutyProgress}</div> : null}
           </article>
         )}

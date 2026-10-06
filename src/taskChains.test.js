@@ -25,6 +25,7 @@ import {
   selectUsageSessions,
   sessionEpisodeHops,
   sessionErrorText,
+  buildAgentRoster,
   buildFleetModules,
   sessionRunHopStatus,
   sessionRunHop,
@@ -588,4 +589,52 @@ test("buildFleetModules: 纯收班 agent 出暗模块，空输入不出模块", 
   assert.equal(modules[0].running, null);
   assert.equal(modules[0].lastEnded.status, "failed");
   assert.equal(buildFleetModules({ tasks: [], runs: [], now: dayStart, dayStartMs: dayStart }).length, 0);
+});
+
+test("buildAgentRoster: 一星一格去重，灯色取今夜最新一跳，无记录=rest", () => {
+  const dayStart = 1_000_000_000_000;
+  const roster = buildAgentRoster({
+    agents: ["tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang", "main"],
+    tasks: [],
+    runs: [
+      // 天璇今夜两跳（最新=done），天玑跑着，天权今夜失败，玉衡昨天跳过（不算）
+      { id: "r1", agentId: "tianxuan", status: "done", startedAtMs: dayStart + 100, endedAtMs: dayStart + 200 },
+      { id: "r2", agentId: "tianxuan", status: "running", startedAtMs: dayStart + 300, sessionKey: "k" },
+      { id: "r3", agentId: "tianji", status: "running", startedAtMs: dayStart + 150 },
+      { id: "r4", agentId: "tianquan", status: "failed", startedAtMs: dayStart + 120, endedAtMs: dayStart + 180, error: "boom" },
+      { id: "r5", agentId: "yuheng", status: "done", startedAtMs: dayStart - 86_400_000, endedAtMs: dayStart - 86_000_000 },
+    ],
+    now: dayStart + 999_999,
+    dayStartMs: dayStart,
+    order: ["tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang", "main"],
+  });
+  assert.equal(roster.length, 8); // 花名册全量：无记录的星也占一格（rest 暗格）
+  assert.equal(roster[0].agentId, "tianshu");
+  assert.equal(roster[0].tone, "rest"); // 今夜无活动
+  const tianxuan = roster.find((e) => e.agentId === "tianxuan");
+  assert.equal(tianxuan.tone, "current"); // 最新一跳 running → ● 绿呼吸
+  assert.equal(tianxuan.records.length, 2); // 悬停星卡按星聚合今夜全部跳
+  const tianji = roster.find((e) => e.agentId === "tianji");
+  assert.equal(tianji.tone, "current");
+  const tianquan = roster.find((e) => e.agentId === "tianquan");
+  assert.equal(tianquan.tone, "failed");
+  const yuheng = roster.find((e) => e.agentId === "yuheng");
+  assert.equal(yuheng.tone, "rest"); // 昨天的跳不入灯（今夜窗口）
+});
+
+test("buildAgentRoster: order 外的新星追加尾部，agents.list 独占的星也占格", () => {
+  const dayStart = 1_000_000_000_000;
+  const roster = buildAgentRoster({
+    agents: ["tianshu", "xinbin"],
+    tasks: [{ gateway: "vps", taskId: "t1", agentId: "xinbin", status: "succeeded", startedAtMs: dayStart + 10, endedAtMs: dayStart + 20 }],
+    runs: [],
+    now: dayStart + 999,
+    dayStartMs: dayStart,
+    order: ["tianshu", "tianxuan"],
+  });
+  assert.equal(roster.length, 2);
+  assert.equal(roster[0].agentId, "tianshu"); // order 在前
+  assert.equal(roster[1].agentId, "xinbin"); // 新星追加尾部
+  assert.equal(roster[0].tone, "rest");
+  assert.equal(roster[1].tone, "done"); // 登记任务也参与灯色
 });
