@@ -97,6 +97,20 @@ fn import_legacy_ledger(local_dir: &Path, target: &Path) {
 /// 同步勾选（监听方要幂等——emit 会回到发送方）。
 const TASK_WIDGET_VISIBILITY: &str = "tasks://tasks-widget-visibility";
 
+/// 托盘「任务小组件」勾选态句柄：set_tasks_widget_window 每次显隐后回写，
+/// 菜单勾选 = 窗实际可见性（Leo 2026-10-06：托盘项看不出开关 = 逻辑毛病之一）。
+static TASKS_WIDGET_MENU: std::sync::OnceLock<Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>> = std::sync::OnceLock::new();
+
+fn set_tasks_widget_menu_checked(checked: bool) {
+    if let Some(cell) = TASKS_WIDGET_MENU.get() {
+        if let Ok(guard) = cell.lock() {
+            if let Some(item) = guard.as_ref() {
+                let _ = item.set_checked(checked);
+            }
+        }
+    }
+}
+
 /// 首次创建任务小组件窗（仅在 label 未被占用时调用）。
 fn spawn_tasks_widget_window(app: &tauri::AppHandle) -> Result<(), String> {
     let mut builder = tauri::WebviewWindowBuilder::new(
@@ -154,6 +168,7 @@ async fn set_tasks_widget_window(app: tauri::AppHandle, visible: bool) -> Result
             }
         }
     }
+    set_tasks_widget_menu_checked(visible);
     app.emit(TASK_WIDGET_VISIBILITY, visible).map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -565,7 +580,10 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
     let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏 任务台", true, None::<&str>)?;
-    let tasks_widget = MenuItem::with_id(app, "tasks-widget", "任务小组件", true, None::<&str>)?;
+    let tasks_widget = tauri::menu::CheckMenuItem::with_id(app, "tasks-widget", "任务小组件", true, false, None::<&str>)?;
+    if TASKS_WIDGET_MENU.get().is_none() {
+        let _ = TASKS_WIDGET_MENU.set(Mutex::new(Some(tasks_widget.clone())));
+    }
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出司南", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&toggle, &tasks_widget, &separator, &quit])?;

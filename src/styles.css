@@ -170,8 +170,8 @@ button:focus-visible {
   z-index: 7;
   top: 0;
   right: 180px;
-  left: 128px;
-  height: 26px;
+  left: 0;
+  height: 34px;
   cursor: move;
 }
 
@@ -6829,7 +6829,24 @@ html:has(.strip-shell--detail-open.strip-shell--glass-clear) #root::after {
 .tasks-window-shell {
   width: 100vw;
   min-width: 0;
+  position: relative;
 }
+
+/* ── 面板八向拖拽热区：无边框窗在 Windows 没有原生 resize 边带，DOM 自绘
+   （Leo 2026-10-06"不能手动拉宽或者拉长"）。按下交原生 startResizeDragging，
+   尺寸记忆走既有 resize 去抖监听；胶囊态不渲染热区（resizable 已锁死）。 */
+.rsz { position: absolute; z-index: 90; touch-action: none; }
+.rsz-n, .rsz-s { left: 10px; right: 10px; height: 5px; }
+.rsz-n { top: 0; cursor: ns-resize; }
+.rsz-s { bottom: 0; cursor: ns-resize; }
+.rsz-e, .rsz-w { top: 10px; bottom: 10px; width: 5px; }
+.rsz-e { right: 0; cursor: ew-resize; }
+.rsz-w { left: 0; cursor: ew-resize; }
+.rsz-nw, .rsz-ne, .rsz-sw, .rsz-se { width: 10px; height: 10px; }
+.rsz-nw { top: 0; left: 0; cursor: nwse-resize; }
+.rsz-ne { top: 0; right: 0; cursor: nesw-resize; }
+.rsz-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.rsz-se { bottom: 0; right: 0; cursor: nwse-resize; }
 
 /* 任务小组件（胶囊与面板）禁用根级原生滚动条：胶囊 36/224 高永远命中上面
    "极小工作区"的 overflow:auto 兜底，WebView2 合成晚于 setSize 时视口差
@@ -6899,6 +6916,15 @@ button.tasks-usage-idle {
 button.tasks-usage-idle:hover { text-decoration: underline; }
 
 /* 展开出的空闲会话行：整体调暗——它们是"在场但没内容"的盘库信息。 */
+/* 主窗任务台的星位上下文皮（与小组件同一份数据/行渲染） */
+.tasks-usage-card--board { padding: 10px 14px 8px; margin: 12px 16px 16px; }
+.tasks-usage-card--board .tasks-usage-list { padding: 2px 0 0; }
+.tasks-usage-card--board .tasks-usage-idle { border: 0; background: none; font: inherit; color: inherit; opacity: .55; cursor: pointer; padding: 0; }
+.tasks-usage-card--board .tasks-usage-idle:hover { opacity: .85; }
+html:not([data-theme="dark"]) .console-root .tasks-usage-name em { background: rgba(31, 33, 36, 0.08); }
+html:not([data-theme="dark"]) .console-root .task-context-bar { background: rgba(31, 33, 36, 0.1); }
+html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .55; }
+
 .tasks-usage-row--idle { opacity: 0.55; }
 
 .tasks-window-body::-webkit-scrollbar {
@@ -8273,6 +8299,15 @@ button.tasks-usage-idle:hover { text-decoration: underline; }
   color: #1c1c20;
 }
 
+/* 浅色主题边缘定义：浅底（白墙/白网页）上主窗轮廓会融掉——一圈细边 + 落地
+   投影把窗从背景里托出来。深色自带反差不需要。 */
+html:not([data-theme="dark"]) .console-root {
+  box-shadow:
+    inset 0 0 0 1px rgba(31, 33, 36, 0.14),
+    0 22px 56px rgba(15, 18, 25, 0.26),
+    0 4px 14px rgba(15, 18, 25, 0.14);
+}
+
 html[data-theme="dark"] .console-root {
   background: #101013;
   color: #e8e8ec;
@@ -8293,7 +8328,7 @@ html[data-theme="dark"] .console-root {
 
 /* ===== 司南任务台：状态头 + 签页 + 星轨时间线 ===== */
 .console-hidden { display: none !important; }
-.console-head { position: absolute; top: 10px; left: 16px; right: 232px; display: flex; align-items: center; gap: 8px; z-index: 4; white-space: nowrap; }
+.console-head { position: absolute; top: 10px; left: 16px; right: 232px; display: flex; align-items: center; gap: 8px; z-index: 4; white-space: nowrap; user-select: none; }
 .console-head > * { white-space: nowrap; }
 .console-brand { font-weight: 600; font-size: 15px; }
 .console-brand small { color: var(--fg-faint, #6a6b73); font-weight: 400; margin-left: 6px; font-size: 12px; }
@@ -8407,7 +8442,17 @@ html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background:
 .v7row { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; }
 .v7-feedrow { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; align-items: stretch; }
 /* 左右底部对齐：矮的一栏末卡吃满剩余高（空腔收进卡内，不再裸在页面上） */
-.v7-feedmain > .v5card:last-child { flex: 1 1 auto; }
+.v7-feedmain > .v5card:last-child, .v7-feedmain > .v7-gsec:last-child { flex: 1 1 auto; margin-bottom: 0; }
+.v7-feedmain > .v7-gsec:last-child > .v5card:last-child { flex: 1 1 auto; margin-bottom: 0; }
+/* 速览 = 按星分组（Leo 2026-10-06 拍板 B）：节头 = 点+星名+案数 */
+.v7-gsec { display: flex; flex-direction: column; }
+.v7-gsec + .v7-gsec { margin-top: 12px; }
+.v7-ghead { display: flex; align-items: center; gap: 7px; padding: 4px 2px 6px; border-bottom: 1px solid rgba(240, 240, 240, 0.08); font-size: 11.5px; color: #e7ecf4; }
+.v7-ghead b { font-weight: 650; }
+.v7-ghead small { color: #5c6779; font-size: 10px; }
+.v7-gsec .v5card:last-child { margin-bottom: 0; }
+/* 天条贴卡内头（与右卡 mhead+lday 的 4px 同款），框内不再下坠 */
+.v7-mhead + .v5-daybar { margin-top: 4px; }
 .v7card { background: #131a26; border: 1px solid #202938; border-radius: 10px; min-width: 0; }
 .v7-dialcard { padding: 6px 10px; position: relative; overflow: hidden; }
 .dial { position: relative; aspect-ratio: 552 / 146; }
@@ -8459,10 +8504,8 @@ html:not([data-theme="dark"]) .console-root .dial-leader { stroke: rgba(146, 100
 .v7-progress { margin-top: 6px; font-size: 11.5px; color: #8fbfa6; display: flex; align-items: center; gap: 6px; }
 .v7-progress i { width: 5px; height: 5px; border-radius: 50%; background: #3dd68c; animation: v5-breath 1.6s ease-in-out infinite; flex-shrink: 0; }
 
-.v7-feedmain { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.v7-feedmain { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 10px 14px 8px; }
 /* 筛选 chips 的归属行：动态流头上，管谁贴谁（v7.1） */
-.v7-feedhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 0; }
-.v7-feedtitle { font-size: 10.5px; color: #5c6779; letter-spacing: .1em; }
 .v7-logcard { padding: 10px 14px 8px; }
 .v7-lday { font-size: 10px; color: #5c6779; letter-spacing: .1em; margin: 8px 0 2px; }
 .v7-mhead + .v7-lday { margin-top: 4px; }
@@ -8548,6 +8591,8 @@ html:not([data-theme="dark"]) .console-root .v7-qrow,
 html:not([data-theme="dark"]) .console-root .v7-lrow,
 html:not([data-theme="dark"]) .console-root .v7-execblock { border-color: rgba(31,33,36,.1); }
 html:not([data-theme="dark"]) .console-root .v7-mhead,
+html:not([data-theme="dark"]) .console-root .v7-ghead { color: rgba(29, 31, 35, 0.9); border-bottom-color: rgba(31, 33, 36, 0.1); }
+html:not([data-theme="dark"]) .console-root .v7-ghead small { color: rgba(48, 51, 57, 0.55); }
 html:not([data-theme="dark"]) .console-root .v7-lday,
 html:not([data-theme="dark"]) .console-root .v7-lt,
 html:not([data-theme="dark"]) .console-root .v7-qnext em,

@@ -1897,6 +1897,16 @@ async function startWindowDragging() {
   await api.getCurrentWindow().startDragging();
 }
 
+/// 展开面板的边缘拖拽调尺寸：Tauri v2 的 startResizeDragging（八向）。无边框
+/// 窗在 Windows 上没有原生 resize 边带（resizable 标志只放行程序化/命中测试
+/// 尺寸），热区由面板 DOM 自绘（Leo 2026-10-06："不能手动拉宽或者拉长"）。
+async function startWindowResizing(direction) {
+  if (isMacPlatform()) return;
+  const api = await windowApi();
+  if (!api) return;
+  await api.getCurrentWindow().startResizeDragging(direction);
+}
+
 /// Linux 托盘菜单的“置顶/取消置顶”请求。其 payload 是后端已经切换过的目标值，
 /// 前端只负责把窗口与持久化状态同步到该值。
 async function onTrayPinnedChange(handler) {
@@ -1935,6 +1945,47 @@ async function onGlassTintChanged(handler) {
   }
   const { listen } = await import("@tauri-apps/api/event");
   return listen("metrik://glass-tint", () => handler());
+}
+
+/// 玻璃浓度跨窗口同步：主窗设置页拖浓度，小组件/胶囊/提醒窗实时跟随。
+/// （此前只有外观档位有广播，浓度改了玻璃窗纹丝不动——Leo 2026-10-06 真机实锤。）
+async function emitGlassAlpha(value) {
+  if (!isDesktop()) {
+    window.dispatchEvent(new Event("metrik-glass-alpha-changed"));
+    return;
+  }
+  const { emit } = await import("@tauri-apps/api/event");
+  await emit("metrik://glass-alpha", value).catch(() => {});
+}
+
+async function onGlassAlphaChanged(handler) {
+  if (!isDesktop()) {
+    const h = () => handler();
+    window.addEventListener("metrik-glass-alpha-changed", h);
+    return () => window.removeEventListener("metrik-glass-alpha-changed", h);
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("metrik://glass-alpha", () => handler());
+}
+
+/// 透明档文字颜色跨窗口同步：同玻璃浓度，此前同样漏广播。
+async function emitGlassInk(value) {
+  if (!isDesktop()) {
+    window.dispatchEvent(new Event("metrik-glass-ink-changed"));
+    return;
+  }
+  const { emit } = await import("@tauri-apps/api/event");
+  await emit("metrik://glass-ink", value).catch(() => {});
+}
+
+async function onGlassInkChanged(handler) {
+  if (!isDesktop()) {
+    const h = () => handler();
+    window.addEventListener("metrik-glass-ink-changed", h);
+    return () => window.removeEventListener("metrik-glass-ink-changed", h);
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("metrik://glass-ink", () => handler());
 }
 
 /// 任务追踪独立小组件：显隐开关（幂等——窗已存在只 show/hide，绝不销毁重建，
@@ -2300,7 +2351,11 @@ export {
   closeCurrentWindow,
   emitAgentNames,
   emitGlassTint,
+  emitGlassAlpha,
+  emitGlassInk,
   onGlassTintChanged,
+  onGlassAlphaChanged,
+  onGlassInkChanged,
   applyExpandedPanelSize,
   applyMiniCapsuleSize,
   resizeCurrentWindow,
@@ -2312,6 +2367,7 @@ export {
   startEdgeDock,
   startPositionMemory,
   startWindowDragging,
+  startWindowResizing,
   syncLinuxTrayPinned,
   stripContentSize,
   toggleMaximizeWindow,

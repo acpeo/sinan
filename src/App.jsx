@@ -11,7 +11,6 @@ import {
   CornersOut,
   DotsThree,
   ListChecks,
-  ListNumbers,
   Minus,
   Moon,
   PushPinSimple,
@@ -20,7 +19,6 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowsInLineVertical,
-  GitCommit,
   ShieldCheck,
 } from "@phosphor-icons/react";
 import antigravityAppIcon from "./assets/antigravity-app-icon.png";
@@ -52,6 +50,10 @@ import {
   collapseTasksHover,
   collapseVerticalStripHover,
   emitGlassTint,
+  emitGlassAlpha,
+  emitGlassInk,
+  onGlassAlphaChanged,
+  onGlassInkChanged,
   expandRoundDetails,
   expandTasksHover,
   expandTasksHoverHorizontal,
@@ -87,6 +89,7 @@ import {
   startEdgeDock,
   startPositionMemory,
   startWindowDragging,
+  startWindowResizing,
   syncLinuxTrayPinned,
   toggleMaximizeWindow,
 } from "./windowClient";
@@ -547,9 +550,9 @@ function WindowActions({ mode, pinned, transparent = false, glassTint = "dark", 
           type="button"
           className={`window-action ${tasksWidgetEnabled ? "window-action--active" : ""}`}
           onClick={onToggleTasksWidget}
-          aria-label={tasksWidgetEnabled ? "关闭任务追踪小组件" : "打开任务追踪小组件"}
+          aria-label="显示 / 隐藏 任务小组件"
           aria-pressed={tasksWidgetEnabled}
-          title={tasksWidgetEnabled ? "关闭任务追踪小组件" : "打开任务追踪小组件"}
+          title="显示 / 隐藏 任务小组件" 
         >
           <ListChecks size={16} weight={tasksWidgetEnabled ? "fill" : "light"} aria-hidden="true" />
         </button>
@@ -781,16 +784,6 @@ function TasksWidgetWindow({
   };
   // 链路样式：竖排链路（方案 2）/ 横排链路（方案 1）共存，标题栏一键切换。
   // 只作用于展开卡；迷你胶囊是胶囊形态，恒用横排。
-  const [chainStyle, setChainStyle] = useState(() =>
-    localStorage.getItem("metrik:chainStyle") === "strip" ? "strip" : "timeline",
-  );
-  const toggleChainStyle = () => {
-    setChainStyle((style) => {
-      const next = style === "timeline" ? "strip" : "timeline";
-      localStorage.setItem("metrik:chainStyle", next);
-      return next;
-    });
-  };
   // 空闲会话明细开关（星位上下文卡头"另有 N 个空闲会话"点开/收起）：
   // 默认收起，卡面只留水位行；要盘库时点一下看全量。
   const [showIdleSessions, setShowIdleSessions] = useState(false);
@@ -1560,13 +1553,7 @@ function TasksWidgetWindow({
         {open && (
           <div className="tasks-fleet-drawer">
             {mod.records.length >= 2 ? (
-              chainStyle === "strip" ? (
-                <div className="task-chain">
-                  <ChainFilmstrip hops={mod.records} currentTaskId={run?.taskId ?? null} agentNameMap={agentNameMap} />
-                </div>
-              ) : (
-                <TaskChainTimeline hops={mod.records} currentTaskId={run?.taskId ?? null} agentNameMap={agentNameMap} translate={translateProgress} />
-              )
+              <TaskChainTimeline hops={mod.records} currentTaskId={run?.taskId ?? null} agentNameMap={agentNameMap} translate={translateProgress} />
             ) : (
               <p className="tasks-fleet-drawer-empty">
                 {mod.records[0]?.terminalSummary || "今夜就这一条"}
@@ -1577,71 +1564,31 @@ function TasksWidgetWindow({
       </div>
     );
   };
-  // 星位上下文收敛：全网关跑同一个模型时（北斗常态）模型名进卡头只说一次，
-  // 行内不再重复；模型混跑时才逐行标注。空闲会话数量进卡头（不逐行占位）。
-  const usageModelSet = new Set(
-    usageSessions.map((session) => session.model).filter(Boolean),
-  );
-  const usageModelUniform = usageModelSet.size === 1 ? [...usageModelSet][0] : null;
-  // 星位上下文行：水位行与空闲行同一渲染路径（dimmed 只调透明度），省一份口径。
-  // 水位预警（2026-10-04 六案⑥）：超阈值（设置 watermarkWarnPct，默认 80%，
-  // 0=关）或网关应答 shouldCompact 时琥珀高亮 + "建议清理"角标——快满要吭声。
-  const watermarkWarnPct = loadMonitorConfig().watermarkWarnPct;
-  const renderUsageRow = (session, dimmed) => {
-    const name = agentDisplayName(agentNameMap, session.agentId) || session.agentId || session.key;
-    const running = Boolean(session.hasActiveRun);
-    const model = session.model || null;
-    const estimate = Number.isFinite(session.estimatedPromptTokens) ? session.estimatedPromptTokens : null;
-    const budget = Number.isFinite(session.contextTokenBudget) ? session.contextTokenBudget : null;
-    const fillPct = estimate != null && budget > 0 ? Math.min(100, Math.round((estimate / budget) * 100)) : null;
-    const hot = session.shouldCompact || (fillPct != null && watermarkWarnPct > 0 && fillPct >= watermarkWarnPct);
-    const tone = hot ? "warn" : "";
-    // 刚接活还没产出上下文：数字位显示"启动中"（运行中无水位的会话，Leo 补的场景）
-    const starting = running && estimate == null;
-    const nums = starting
-      ? "启动中"
-      : estimate != null && budget != null
-        ? `${formatCompactTokens(estimate)} / ${formatCompactTokens(budget)}`
-        : budget != null
-          ? `预算 ${formatCompactTokens(budget)}`
-          : "—";
-    const msgs = Number.isFinite(session.promptMessageCount) ? session.promptMessageCount : null;
-    const lastSeen = Number.isFinite(session.updatedAt) ? session.updatedAt : 0;
-    // 会话形态角标：群 = 北斗矩阵群会话（接力跳所在），主 = 该星位主会话。
-    const badge = session.isGroup ? "群" : (session.key ?? "").endsWith(":main") ? "主" : null;
-    return (
-      <div
-        key={session.key}
-        className={`tasks-usage-row${dimmed ? " tasks-usage-row--idle" : ""}`}
-        title={`${session.key}${model ? `
-模型 ${model}` : ""}
-${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "运行中，上下文尚未产出" : "空闲会话，无上下文估算"}${budget != null ? ` · 预算 ${budget.toLocaleString()} tok` : ""}${msgs != null ? ` · ${msgs} 条消息` : ""}${lastSeen ? `
-最近活动 ${formatTaskAge(lastSeen)}` : ""}`}
-      >
-        <i className={`agent-status-dot tasks-usage-dot ${running ? "" : "tasks-usage-dot--idle"}`} aria-hidden="true" />
-        <span className="tasks-usage-name">
-          {name}
-          {badge ? <em>{badge}</em> : null}
-          {!usageModelUniform && model ? (
-            <small className="tasks-usage-model">{model}</small>
-          ) : null}
-        </span>
-        <span className={`task-context-bar ${fillPct == null ? "task-context-bar--empty" : ""}`}>
-          <i className={tone ? `task-context-fill--${tone}` : undefined} style={fillPct != null ? { width: `${fillPct}%` } : undefined} />
-        </span>
-        <span className="tasks-usage-nums">
-          {nums}
-          {hot ? <small className="tasks-usage-hot">建议清理</small> : null}
-          {msgs != null ? <small>{msgs}条</small> : null}
-        </span>
-      </div>
-    );
-  };
+  // 面板八向拖拽热区（无边框窗在 Windows 没有原生 resize 边带）：5px 边 +
+  // 10px 角，按下即交原生 startResizeDragging 拖尺寸，松手后既有 resize
+  // 监听去抖存尺寸。
+  const resizeHandles = [
+    ["n", "North"], ["s", "South"], ["e", "East"], ["w", "West"],
+    ["nw", "NorthWest"], ["ne", "NorthEast"], ["sw", "SouthWest"], ["se", "SouthEast"],
+  ];
   return (
     // tasks-window-shell：面板跟随窗口尺寸（用户可拖拽调宽高）；.widget-shell
     // 的 320 定宽是主窗小组件的规矩，这里放开到满窗。
     <main className={`${shellAppearance.className} tasks-window-shell`}>
       <h1 className="sr-only">司南 任务追踪小组件</h1>
+      {resizeHandles.map(([edge, direction]) => (
+        <div
+          key={edge}
+          className={`rsz rsz-${edge}`}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            runWindowAction(() => startWindowResizing(direction));
+          }}
+          aria-hidden="true"
+        />
+      ))}
       <header className="widget-titlebar" onPointerDown={(event) => {
         if (event.target.closest("button")) return;
         startWindowDragging();
@@ -1671,20 +1618,6 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
             title={`切到${glassTint === "dark" ? "浅色" : glassTint === "light" ? "透明" : "深色"}`}
           >
             <CircleHalfTilt size={16} weight={transparent ? "fill" : "light"} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className={`window-action ${chainStyle === "timeline" ? "window-action--active" : ""}`}
-            onClick={toggleChainStyle}
-            aria-label={chainStyle === "timeline" ? "明细" : "速览"}
-            aria-pressed={chainStyle === "timeline"}
-            title={chainStyle === "timeline" ? "明细" : "速览"}
-          >
-            {chainStyle === "timeline" ? (
-              <ListNumbers size={16} weight="light" aria-hidden="true" />
-            ) : (
-              <GitCommit size={16} weight="light" aria-hidden="true" />
-            )}
           </button>
           <button
             type="button"
@@ -1729,34 +1662,16 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
             </p>
           )}
           {fleetModules.length > 0 && (
-            <div className="tasks-card tasks-fleet">
+            <div className="tasks-fleet">
               {fleetModules.map((mod) => renderFleetModule(mod))}
             </div>
           )}
-          {usageSessions.length > 0 && (
-            <div className="tasks-card tasks-usage-card">
-              <p className="tasks-card-head">
-                星位上下文
-                {usageModelUniform ? ` · ${usageModelUniform}` : ""}
-                {idleSessions.length > 0 ? (
-                  <button
-                    type="button"
-                    className="tasks-usage-idle"
-                    aria-expanded={showIdleSessions}
-                    title="点开看全部空闲会话（从未对话或未产生用量）；再点收起"
-                    onClick={() => setShowIdleSessions((open) => !open)}
-                  >
-                    {" · 另有 "}{idleSessions.length}{" 个空闲会话"}
-                  </button>
-                ) : null}
-              </p>
-              <div className="tasks-usage-list">
-                {usageSessions.map((session) => renderUsageRow(session, false))}
-                {showIdleSessions &&
-                  idleSessions.map((session) => renderUsageRow(session, true))}
-              </div>
-            </div>
-          )}
+          <TasksUsageCard
+            variant="panel"
+            usageSessions={usageSessions}
+            idleSessions={idleSessions}
+            agentNameMap={agentNameMap}
+          />
         </section>
       </div>
       <footer className="widget-footer tasks-window-footer">
@@ -1938,10 +1853,9 @@ function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassT
   );
 }
 
-function MonitorSettingsCard() {
+function MonitorSettingsCard({ tasksWidgetEnabled, onToggleTasksWidget }) {
   const [draft, setDraft] = useState(() => loadMonitorConfig());
   const [saved, setSaved] = useState(false);
-  const [widgetTasks, setWidgetTasks] = useState(() => localStorage.getItem("metrik:tasksWidget") !== "off");
 
   const current = loadMonitorConfig();
   const dirty =
@@ -2105,15 +2019,8 @@ function MonitorSettingsCard() {
             <label className="monitor-field monitor-field--check">
               <input
                 type="checkbox"
-                checked={widgetTasks}
-                onChange={(event) => {
-                  const next = event.target.checked;
-                  localStorage.setItem("metrik:tasksWidget", next ? "on" : "off");
-                  setWidgetTasks(next);
-                  // 独立小组件：勾选即开/关那扇常驻窗（幂等），不等下次启动。
-                  setTasksWidgetWindow(next);
-                  window.dispatchEvent(new Event("metrik-monitor-changed"));
-                }}
+                checked={tasksWidgetEnabled}
+                onChange={onToggleTasksWidget}
               />
               <span>显示任务小组件（独立小窗）</span>
             </label>
@@ -3137,9 +3044,128 @@ function dayLabelOf(ms, now) {  const d = new Date(ms);
 }
 
 // 任务台主内容（v5）：星盘仪 → 统计行 → 值班区（在办案件/最新简报）→ 动态流。
-function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap, live }) {
+/// 星位上下文卡（B 链路会话级用量）：小组件面板与主窗任务台共用。
+/// variant = panel（小组件内的 tasks-card 皮）| board（主窗 v7card 皮）。
+/// 行渲染从小组件原样搬入（水位/预算/条数/群主角标/预警一个口径）。
+function TasksUsageCard({ usageSessions, idleSessions, agentNameMap, variant = "panel" }) {
+  const [showIdleSessions, setShowIdleSessions] = useState(false);
+  const usageModelSet = new Set(
+    usageSessions.map((session) => session.model).filter(Boolean),
+  );
+  const usageModelUniform = usageModelSet.size === 1 ? [...usageModelSet][0] : null;
+  const watermarkWarnPct = loadMonitorConfig().watermarkWarnPct;
+  const renderUsageRow = (session, dimmed) => {
+    const name = agentDisplayName(agentNameMap, session.agentId) || session.agentId || session.key;
+    const running = Boolean(session.hasActiveRun);
+    const model = session.model || null;
+    const estimate = Number.isFinite(session.estimatedPromptTokens) ? session.estimatedPromptTokens : null;
+    const budget = Number.isFinite(session.contextTokenBudget) ? session.contextTokenBudget : null;
+    const fillPct = estimate != null && budget > 0 ? Math.min(100, Math.round((estimate / budget) * 100)) : null;
+    const hot = session.shouldCompact || (fillPct != null && watermarkWarnPct > 0 && fillPct >= watermarkWarnPct);
+    const tone = hot ? "warn" : "";
+    const starting = running && estimate == null;
+    const nums = starting
+      ? "启动中"
+      : estimate != null && budget != null
+        ? `${formatCompactTokens(estimate)} / ${formatCompactTokens(budget)}`
+        : budget != null
+          ? `预算 ${formatCompactTokens(budget)}`
+          : "—";
+    const msgs = Number.isFinite(session.promptMessageCount) ? session.promptMessageCount : null;
+    const lastSeen = Number.isFinite(session.updatedAt) ? session.updatedAt : 0;
+    const badge = session.isGroup ? "群" : (session.key ?? "").endsWith(":main") ? "主" : null;
+    return (
+      <div
+        key={session.key}
+        className={`tasks-usage-row${dimmed ? " tasks-usage-row--idle" : ""}`}
+        title={`${session.key}${model ? `
+模型 ${model}` : ""}
+${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "运行中，上下文尚未产出" : "空闲会话，无上下文估算"}${budget != null ? ` · 预算 ${budget.toLocaleString()} tok` : ""}${msgs != null ? ` · ${msgs} 条消息` : ""}${lastSeen ? `
+最近活动 ${formatTaskAge(lastSeen)}` : ""}`}
+      >
+        <i className={`agent-status-dot tasks-usage-dot ${running ? "" : "tasks-usage-dot--idle"}`} aria-hidden="true" />
+        <span className="tasks-usage-name">
+          {name}
+          {badge ? <em>{badge}</em> : null}
+          {!usageModelUniform && model ? (
+            <small className="tasks-usage-model">{model}</small>
+          ) : null}
+        </span>
+        <span className={`task-context-bar ${fillPct == null ? "task-context-bar--empty" : ""}`}>
+          <i className={tone ? `task-context-fill--${tone}` : undefined} style={fillPct != null ? { width: `${fillPct}%` } : undefined} />
+        </span>
+        <span className="tasks-usage-nums">
+          {nums}
+          {hot ? <small className="tasks-usage-hot">建议清理</small> : null}
+          {msgs != null ? <small>{msgs}条</small> : null}
+        </span>
+      </div>
+    );
+  };
+  if (!usageSessions.length) return null;
+  if (variant === "board") {
+    return (
+      <div className="v7card tasks-usage-card--board">
+        <p className="v7-mhead">
+          <span>星位上下文{usageModelUniform ? ` · ${usageModelUniform}` : ""}</span>
+          {idleSessions.length > 0 ? (
+            <button
+              type="button"
+              className="tasks-usage-idle"
+              aria-expanded={showIdleSessions}
+              title="点开看全部空闲会话（从未对话或未产生用量）；再点收起"
+              onClick={() => setShowIdleSessions((open) => !open)}
+            >
+              {" · 另有 "}{idleSessions.length}{" 个空闲会话"}
+            </button>
+          ) : null}
+        </p>
+        <div className="tasks-usage-list">
+          {usageSessions.map((session) => renderUsageRow(session, false))}
+          {showIdleSessions &&
+            idleSessions.map((session) => renderUsageRow(session, true))}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="tasks-card tasks-usage-card">
+      <p className="tasks-card-head">
+        星位上下文
+        {usageModelUniform ? ` · ${usageModelUniform}` : ""}
+        {idleSessions.length > 0 ? (
+          <button
+            type="button"
+            className="tasks-usage-idle"
+            aria-expanded={showIdleSessions}
+            title="点开看全部空闲会话（从未对话或未产生用量）；再点收起"
+            onClick={() => setShowIdleSessions((open) => !open)}
+          >
+            {" · 另有 "}{idleSessions.length}{" 个空闲会话"}
+          </button>
+        ) : null}
+      </p>
+      <div className="tasks-usage-list">
+        {usageSessions.map((session) => renderUsageRow(session, false))}
+        {showIdleSessions &&
+          idleSessions.map((session) => renderUsageRow(session, true))}
+      </div>
+    </div>
+  );
+}
+
+function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap, usageSessions, idleSessions, live }) {
   const [selectedStar, setSelectedStar] = useState(null);
   const [feedFilter, setFeedFilter] = useState("all"); // all | failed | cron
+  // 动态流视图（Leo 2026-10-06 拍板 B）：速览=按星分组（默认），明细=跨星时间线。
+  // 「速览/明细」按钮从小组件标题栏换岗到这里（那边只剩抽屉一个用途=删除）。
+  const [feedView, setFeedView] = useState(() =>
+    localStorage.getItem("metrik:feedView") === "timeline" ? "timeline" : "stars",
+  );
+  const toggleFeedView = (next) => {
+    setFeedView(next);
+    localStorage.setItem("metrik:feedView", next);
+  };
   const [expandedSet, setExpandedSet] = useState(() => new Set());
   const toggleExpanded = (key) => setExpandedSet((current) => {
     const next = new Set(current);
@@ -3306,15 +3332,42 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
     );
   };
 
-  let lastDay = null;
   const feedNodes = [];
-  for (const card of conclusionCards) {
-    const label = dayLabelOf(card.at, now);
-    if (label !== lastDay) {
-      feedNodes.push(<div className="v5-daybar" key={`day:${label}:${card.key}`}><span>{label}</span></div>);
-      lastDay = label;
+  if (feedView === "stars") {
+    // 速览 = 按星分组：星按最近活跃排前，节内案按时间新→旧；一节 = 谁干了几案
+    const groups = new Map();
+    for (const card of conclusionCards) {
+      if (!groups.has(card.agentId)) groups.set(card.agentId, []);
+      groups.get(card.agentId).push(card);
     }
-    feedNodes.push(renderCard(card));
+    const ordered = [...groups.entries()].sort(
+      (a, b) => Math.max(...b[1].map((c) => c.at)) - Math.max(...a[1].map((c) => c.at)),
+    );
+    for (const [agentId, cards] of ordered) {
+      const running = cards.filter((c) => c.tone === "live").length;
+      const name = agentDisplayName(agentNameMap, agentId) || agentId;
+      feedNodes.push(
+        <section key={`g:${agentId}`} className="v7-gsec">
+          <div className="v7-ghead">
+            <i className="v5-dot" style={{ background: cards[0]?.color }} />
+            <b>{name}</b>
+            <small>{cards.length} 案{running ? ` · 进行中 ${running}` : ""}</small>
+          </div>
+          {cards.map(renderCard)}
+        </section>,
+      );
+    }
+  } else {
+    // 明细 = 跨星时间线（原顺序：按天分组的案流）
+    let lastDay = null;
+    for (const card of conclusionCards) {
+      const label = dayLabelOf(card.at, now);
+      if (label !== lastDay) {
+        feedNodes.push(<div className="v5-daybar" key={`day:${label}:${card.key}`}><span>{label}</span></div>);
+        lastDay = label;
+      }
+      feedNodes.push(renderCard(card));
+    }
   }
 
   return (
@@ -3330,7 +3383,7 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
               />
           <line className="dial-leader" x1={DIAL_CHAIN[6][1] + 8} y1="88" x2="424" y2="85" stroke="rgba(217,168,96,.45)" strokeWidth="1" strokeDasharray="2 3" />
           <text x="428" y="89" fill="#D9A860" fontSize="12">›</text>
-          <path d="M 24 136 Q 276 128 496 136" fill="none" stroke="#1E2735" strokeWidth="1" />
+          <path d="M 24 143 Q 276 137 496 143" fill="none" stroke="#1E2735" strokeWidth="1" />
               {starState.map((star) => {
                 const [, x, y] = DIAL_CHAIN.find(([id]) => id === star.id);
                 const color = DIAL_TONE[star.tone];
@@ -3423,19 +3476,28 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
         )}
       </div>
 
-      {/* 筛选 chips 贴着它们管的东西：动态流（v7.1 Leo"管下面的就该放下面"） */}
-      <div className="v7-feedhead">
-        <span className="v7-feedtitle">动态流</span>
-        <div className="v5-filters">
-          {[["all", "全部"], ["failed", "失败"], ["cron", "定时"]].map(([id, label]) => (
-            <button key={id} type="button" className={`v5-chip${feedFilter === id ? " is-on" : ""}`} onClick={() => setFeedFilter(id)}>
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* 动态流与事件流水 = 对称双卡（Leo 2026-10-06 复报"框边没对齐"）：
+          左卡也装框，卡内头=标题+筛选 chips，与右侧事件流水卡同框同顶同底；
+          此前的"对齐"只对齐了看不见的容器，卡框仍然一头高一头低 */}
       <div className="v7-feedrow">
-        <div className="v7-feedmain">
+        <div className="v7card v7-feedmain">
+          <div className="v7-mhead">
+            <span>动态流</span>
+            <div className="v5-filters" style={{ marginLeft: "auto", marginRight: "10px" }}>
+              {[["stars", "速览"], ["timeline", "明细"]].map(([id, label]) => (
+                <button key={id} type="button" className={`v5-chip${feedView === id ? " is-on" : ""}`} onClick={() => toggleFeedView(id)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="v5-filters">
+              {[["all", "全部"], ["failed", "失败"], ["cron", "定时"]].map(([id, label]) => (
+                <button key={id} type="button" className={`v5-chip${feedFilter === id ? " is-on" : ""}`} onClick={() => setFeedFilter(id)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           {isEmpty && (
             <p className="v5-empty">舰队还没有活动记录 · 连上网关派一轮活，这里会长出动态</p>
           )}
@@ -3466,6 +3528,12 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
           })()}
         </aside>
       </div>
+      <TasksUsageCard
+        variant="board"
+        usageSessions={usageSessions}
+        idleSessions={idleSessions}
+        agentNameMap={agentNameMap}
+      />
     </div>
   );
 }
@@ -3497,6 +3565,16 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
   });
   // 钩子必须全在条件 return 之前（loading 早退时少跑钩子 = React 崩）。
   const agentNameMap = useMemo(() => buildAgentNameMap(agentsSnap?.agents), [agentsSnap]);
+  // 星位上下文（B 链路）：主窗任务台与小组件同一份口径（agents snapshot 会话级用量）。
+  // 必须挂早退返回之前——hooks 数量在 loading/loaded 两次渲染要一致（React #310）。
+  const boardUsageSessions = useMemo(
+    () => selectUsageSessions(agentsSnap?.sessions),
+    [agentsSnap],
+  );
+  const boardIdleSessions = useMemo(
+    () => listIdleSessions(agentsSnap?.sessions, boardUsageSessions),
+    [agentsSnap, boardUsageSessions],
+  );
   const historyEpisodes = useMemo(() => {
     const windowMs = (monitor.historyWindowMin ?? 0) * 60_000;
     if (!windowMs || !sessionRuns.length) return [];
@@ -3717,6 +3795,8 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
           cronJobs={cronJobs}
           lastRunByJob={lastRunByJob}
           agentNameMap={agentNameMap}
+          usageSessions={boardUsageSessions}
+          idleSessions={boardIdleSessions}
           now={now}
           live={live}
         />
@@ -3798,13 +3878,12 @@ export function App() {
       stopPromise.then((stop) => stop?.());
     };
   }, []);
-  // 任务台一键开/关任务小组件：与托盘/设置勾选同一条 Rust 通道（幂等 show/hide），
-  // 本窗先给即时反馈，Rust 广播回声后由上面的监听校准。
+  // 任务台一键显示/隐藏任务小组件：只发 Rust 命令，状态 = 广播回声
+  // （v2 Leo 拍板：此前"先翻状态再调命令"在建窗失败时按钮与实际脱钩，
+  // 按了没反应要按两下；现在按钮态永远等于窗的实际可见性）。
+  // localStorage 由可见性监听统一写——它就是"上次关闭时的状态"，启动照着恢复。
   const handleToggleTasksWidget = useCallback(() => {
-    const next = !tasksWidgetEnabled;
-    setTasksWidgetEnabled(next);
-    localStorage.setItem("metrik:tasksWidget", next ? "on" : "off");
-    setTasksWidgetWindow(next);
+    setTasksWidgetWindow(!tasksWidgetEnabled);
   }, [tasksWidgetEnabled]);
   // 独立常驻：设置开着且已配网关 → 启动时把任务小窗带起来（set 幂等，绝不重建）。
   useEffect(() => {
@@ -3844,6 +3923,8 @@ export function App() {
   const handleGlassAlpha = useCallback((next) => {
     setGlassAlpha(next);
     localStorage.setItem("metrik:glassAlpha", String(next));
+    // 玻璃窗是独立 webview：浓度改动要广播（此前漏广播，玻璃窗纹丝不动）
+    emitGlassAlpha(next);
   }, []);
   const [glassTint, setGlassTint] = useState(() =>
     normalizeGlassTint(localStorage.getItem("metrik:glassTint")),
@@ -3863,6 +3944,23 @@ export function App() {
       stopPromise.then((stop) => stop?.());
     };
   }, []);
+  useEffect(() => {
+    const stopPromise = onGlassAlphaChanged(() => {
+      const stored = Number(localStorage.getItem("metrik:glassAlpha"));
+      setGlassAlpha(Number.isFinite(stored) && stored >= 0.05 && stored <= 0.96 ? stored : 0.82);
+    });
+    return () => {
+      stopPromise.then((stop) => stop?.());
+    };
+  }, []);
+  useEffect(() => {
+    const stopPromise = onGlassInkChanged(() => {
+      setGlassInk(normalizeGlassInk(localStorage.getItem("metrik:glassInk")));
+    });
+    return () => {
+      stopPromise.then((stop) => stop?.());
+    };
+  }, []);
   const [glassInk, setGlassInk] = useState(() =>
     normalizeGlassInk(localStorage.getItem("metrik:glassInk")),
   );
@@ -3870,6 +3968,7 @@ export function App() {
     const value = normalizeGlassInk(next);
     setGlassInk(value);
     localStorage.setItem("metrik:glassInk", value);
+    emitGlassInk(value);
   }, []);
   // 任务台的明暗主题：自动/亮/暗。默认深色（与小组件的深色 HUD 同一气质；
   // 跟随系统会在浅色系统上亮成一页纸，Leo 2026-10-05 点名）。设置过就以设置为准。
@@ -4038,7 +4137,7 @@ export function App() {
           />
         </div>
         <div className={consoleTab === "settings" ? "console-settings" : "console-settings console-hidden"}>
-          <MonitorSettingsCard />
+          <MonitorSettingsCard tasksWidgetEnabled={tasksWidgetEnabled} onToggleTasksWidget={handleToggleTasksWidget} />
           <GatewaySettingsCard gateways={gateways} onGatewaysChanged={reloadGateways} />
           <AppearanceCard
             theme={theme}
