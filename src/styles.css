@@ -2507,11 +2507,13 @@ html:has(.strip-shell--glass-clear) #root::after {
 /* ---- 透明档：白色字（--glass-ink-light） ----
    桌面挂件常见的另一种风格：白字直接压在壁纸上，靠深色阴影而不是面板拉开
    层次。白字不能配白霜（往白底加白不改对比度），所以这一档把罩层换成一层
-   薄暗 scrim；前景直接沿用深色档那套白字，不挂 --glass-light。 */
+   薄暗 scrim；前景直接沿用深色档那套白字，不挂 --glass-light。
+   浓度全程线性：滑杆 0.05→0.96 对应纱 0.12→0.60。旧配方上限写死 0.44，
+   Leo 实测明暗反差大的壁纸上拉满也看不清（2026-10-06 玻璃壳体检报告④→⑥）。 */
 html:has(.widget-shell--glass-ink-light) #root,
 html:has(.strip-shell--glass-ink-light) #root {
   background: rgb(
-    18 24 36 / clamp(0.14, calc(0.1 + var(--shell-glass-alpha, 0.82) * 0.34), 0.44)
+    18 24 36 / clamp(0.12, calc(0.0936 + var(--shell-glass-alpha, 0.82) * 0.5275), 0.6)
   );
 }
 
@@ -2628,8 +2630,9 @@ html:has(.strip-shell--detail-open.strip-shell--glass-clear) #root::after {
 }
 
 .strip-shell--detail-open.strip-shell--glass-clear.strip-shell--glass-ink-light:not(.strip-shell--glass-css) {
+  /* 详情打开时与底纱同一条曲线，别退回旧的 0.44 上限。 */
   --strip-detail-surface: rgb(
-    18 24 36 / clamp(0.14, calc(0.1 + var(--shell-glass-alpha, 0.82) * 0.34), 0.44)
+    18 24 36 / clamp(0.12, calc(0.0936 + var(--shell-glass-alpha, 0.82) * 0.5275), 0.6)
   );
   --strip-detail-background:
     radial-gradient(120% 160% at 12% 0%, rgba(178, 200, 255, 0.07), transparent 55%),
@@ -6690,8 +6693,11 @@ html:has(.strip-shell--detail-open.strip-shell--glass-clear) #root::after {
 }
 
 /* 深色玻璃档补白墨：任务卡片直接坐在壳上，不套列表的浅色卡底，
-   继承的深墨在深色玻璃上不可见（2026-10-02 真机截图确认）。 */
-.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .widget-tasks {
+   继承的深墨在深色玻璃上不可见（2026-10-02 真机截图确认）。
+   白字档（--glass-ink-light）同补白墨：纱加浓后白字才成立；此前该档漏补，
+   任务行继承 :root 深墨坐在暗纱上看不清（2026-10-06 玻璃壳体检报告④）。
+   浅色档（--glass-light）白霜配深墨，维持排除不动。 */
+.widget-shell--transparent:not(.widget-shell--glass-light) .widget-tasks {
   color: rgba(255, 255, 255, 0.92);
 }
 
