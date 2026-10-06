@@ -638,3 +638,29 @@ test("buildAgentRoster: order 外的新星追加尾部，agents.list 独占的�
   assert.equal(roster[0].tone, "rest");
   assert.equal(roster[1].tone, "done"); // 登记任务也参与灯色
 });
+
+test("buildAgentRoster: agents.list 全 id（VPS-北斗:x）与账本短 id 同星归一，绝不双格", () => {
+  const dayStart = 1_000_000_000_000;
+  // 真机形态：agentNameMap 同时注册短 id 与网关全 id（buildAgentNameMap 双注），
+  // 2026-10-07 装机实锤：不归一=天枢✓后面跟着第二个○天枢。
+  const roster = buildAgentRoster({
+    agents: [
+      "main", "tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang",
+      "VPS-北斗:tianshu", "VPS-北斗:tianxuan", "VPS-北斗:tianji", "VPS-北斗:tianquan",
+      "VPS-北斗:yuheng", "VPS-北斗:kaiyang", "VPS-北斗:yaoguang",
+    ],
+    tasks: [],
+    runs: [
+      { id: "r1", agentId: "tianshu", status: "done", startedAtMs: dayStart + 100, endedAtMs: dayStart + 200 },
+    ],
+    now: dayStart + 999_999,
+    dayStartMs: dayStart,
+    order: ["tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang", "main"],
+  });
+  const ids = roster.map((entry) => entry.agentId);
+  assert.equal(new Set(ids).size, ids.length, "同星只能占一格");
+  assert.equal(roster.length, 8);
+  assert.equal(ids.filter((id) => id === "tianshu").length, 1);
+  assert.equal(roster.find((entry) => entry.agentId === "tianshu").tone, "done");
+});
+

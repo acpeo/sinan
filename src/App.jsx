@@ -37,7 +37,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, refreshGatewayTasks, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { desyncHealRetryDelayMs, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -732,6 +732,21 @@ function TasksWidgetWindow({
   onPinnedChange,
 }) {
   const [pinned, setPinned] = useState(false);
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+  // 贴边自动隐藏（Leo 2026-10-07 实锤"从未生效"）：挂靠引擎 startEdgeDock 一直在，
+  // 缺的是这里——没人点火。只在小组件窗跑；设置勾选实时生效（每拍现读 monitor
+  // 配置，改完即走，无需重启）；置顶时不收（引擎 poll 里 getPinned 直接 undock）。
+  useEffect(() => {
+    const stopPromise = startEdgeDock({
+      getMode: () => "tasks-widget",
+      getPinned: () => pinnedRef.current,
+      canDockTasksWidget: () => loadMonitorConfig().tasksEdgeDock === true,
+    });
+    return () => {
+      stopPromise.then((stop) => stop?.());
+    };
+  }, []);
   // 折叠态记进 localStorage（metrik:tasksWidgetCollapsed）：横竖形态有记忆、
   // 折叠却重启弹回展开，同一件事只记一半（审计发现 3）。
   const [collapsed, setCollapsed] = useState(

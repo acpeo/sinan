@@ -754,11 +754,19 @@ export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
 /// order = 北斗星序（App 层传 AGENT_ORDER），花名册之外的 agent 追加尾部；
 /// agents 缺失的星不占格（灯牌只显示真实存在的 agent）。
 export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }) {
+  // agent id 归一：agents.list 的全 id（VPS-北斗:tianshu）与账本的短 id（tianshu）
+  // 是同一颗星——不归一花名册就同星双格（真机实锤），口径与 buildAgentNameMap
+  // 的 suffix 注册一致。
+  const canonicalAgentId = (id) => {
+    if (typeof id !== "string" || !id) return "";
+    return id.includes(":") ? id.slice(id.lastIndexOf(":") + 1) : id;
+  };
   const recordsByAgent = new Map();
   const collect = (agentId, record) => {
-    if (!agentId) return;
-    if (!recordsByAgent.has(agentId)) recordsByAgent.set(agentId, []);
-    recordsByAgent.get(agentId).push(record);
+    const key = canonicalAgentId(agentId);
+    if (!key) return;
+    if (!recordsByAgent.has(key)) recordsByAgent.set(key, []);
+    recordsByAgent.get(key).push(record);
   };
   for (const run of runs ?? []) {
     if (!run) continue;
@@ -783,24 +791,29 @@ export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }
       sub: isSubagentTask(task),
     });
   }
-  // 星序：order 在前（北斗星序），今夜有活动但不在 order 里的 agent 追加尾部
-  const seen = new Set(order);
-  const extras = [];
-  for (const [agentId, records] of recordsByAgent) {
-    if (!seen.has(agentId)) {
-      seen.add(agentId);
-      extras.push(agentId);
-    }
+  // 星序去重：order（北斗星序）在前，今夜有活动的其余 agent 次之，agents.list
+  // 里剩余的星（暗格）垫底——全 id/短 id 归一后按 canonicalAgentId 去重；
+  // order 星既不在 agents.list 也没今夜活动的不占格（灯牌只显示真实存在的星）。
+  const agentIdSet = new Set(
+    (agents ?? [])
+      .map((agent) => canonicalAgentId(typeof agent === "string" ? agent : agent?.agentId))
+      .filter(Boolean),
+  );
+  const seen = new Set();
+  const rosterAgents = [];
+  const pushAgent = (rawId) => {
+    const id = canonicalAgentId(rawId);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    rosterAgents.push(id);
+  };
+  for (const raw of order) {
+    const id = canonicalAgentId(raw);
+    if (agentIdSet.has(id) || recordsByAgent.has(id)) pushAgent(id);
   }
-  const rosterAgents = [...order.filter((id) => agents.includes(id) || recordsByAgent.has(id)), ...extras.filter((id) => agents.includes(id) || recordsByAgent.has(id))];
-  // agents.list 里有、但既不在 order 也没活动的 agent 也占一格（暗格）——
-  // 花名册的完整性与加星即生效都靠它。
-  for (const agent of agents ?? []) {
-    const id = typeof agent === "string" ? agent : agent?.agentId;
-    if (id && !seen.has(id)) {
-      seen.add(id);
-      rosterAgents.push(id);
-    }
+  for (const agentId of recordsByAgent.keys()) pushAgent(agentId);
+  for (const raw of agents ?? []) {
+    pushAgent(typeof raw === "string" ? raw : raw?.agentId);
   }
   return rosterAgents.map((agentId) => {
     const records = (recordsByAgent.get(agentId) ?? []).sort(
