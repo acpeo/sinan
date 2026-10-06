@@ -1530,12 +1530,14 @@ function TasksWidgetWindow({
           className="tasks-fleet-head"
           aria-expanded={open}
           onClick={() => toggleFleetModule(mod.agentId)}
-          title={live ? `${name} · ${run.title}${stale ? " · 滞后?" : ""}` : ended ? `${name} · ${ended.title}` : name}
+          title={live ? `${name} · ${run.title || "执行中"}${stale ? " · 滞后?" : ""}` : ended ? `${name} · ${ended.title}` : name}
         >
           <i className={`tasks-fleet-dot is-${accent}`} aria-hidden="true" />
           <span className="tasks-fleet-name">{name}</span>
           {live?.sub ? <span className="widget-session-flag">子</span> : null}
-          <span className="tasks-fleet-work">{live ? run.title : (ended?.title ?? "")}</span>
+          <span className="tasks-fleet-work">{live
+            ? cleanSessionTitle(run.title ?? "") || (run.kind === "task" ? "执行中" : "执行中 · 已接收任务")
+            : (ended?.title ?? "")}</span>
           {meta ? <span className="tasks-fleet-meta">{meta}</span> : null}
           {stale ? <span className="task-pill task-pill--stale" title="运行中但超过阈值没有新事件（设置页可调）">滞后?</span> : null}
         </button>
@@ -3214,7 +3216,11 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
     .sort((a, b) => a.at - b.at);
   const queueRows = runQueue.slice(0, 4);
   const nextEntry = queueRows[0] ?? null;
-  const nextStar = nextEntry ? starNameOf(lastRunByJob.get(nextEntry.job.id)?.agentId) : "";
+  // 归星优先级：cron.list job 自带 agentId（网关权威）> 上次运行账本归属
+  // （runs 无 agentId 字段，由 sessionKey 解析兜底）。都缺时 starNameOf 回落 main。
+  const nextStar = nextEntry
+    ? starNameOf(nextEntry.job.agentId ?? lastRunByJob.get(nextEntry.job.id)?.agentId)
+    : "";
 
   const execTotal = [...feed.execAgg.values()].reduce((sum, agg) => sum + agg.total, 0);
   const execDetail = [...feed.execAgg.entries()].map(([agent, agg]) => `${starNameOf(agent)} ${agg.total}`).join(" · ");
@@ -3250,7 +3256,10 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   const dutyProgress = (() => {
     const hop = dutyCase?.hops?.find((h) => h.status === "running");
     const text = String(hop?.progressSummary ?? "").split("\n")[0].trim();
-    return text ? (text.length > 30 ? `${text.slice(0, 30)}…` : text) : "";
+    if (!text) return "";
+    // 裸工具名（exec/message/…）过一遍人话映射，不是工具名则原样透传
+    const label = toolProgressLabel(text);
+    return (label.length > 30 ? `${label.slice(0, 30)}…` : label);
   })();
 
   const renderCard = (card) => {
@@ -3431,7 +3440,7 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
           {queueRows.map(({ job, at }) => (
             <div key={job.id} className="v7-qrow">
               <span className="v7-qname" title={job.description || job.name || job.id}>{jobDisplayName(job.name || job.id)}</span>
-              <span className="v7-qnext">{formatCronNext(at, now)}<em> · {starNameOf(lastRunByJob.get(job.id)?.agentId)}</em></span>
+              <span className="v7-qnext">{formatCronNext(at, now)}<em> · {starNameOf(job.agentId ?? lastRunByJob.get(job.id)?.agentId)}</em></span>
             </div>
           ))}
           {!queueRows.length && <div className="v7-qempty">没有启用的定时任务</div>}

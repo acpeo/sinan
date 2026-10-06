@@ -1056,6 +1056,10 @@ pub struct GatewayCronJob {
     pub description: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// 网关权威归属（skill 周检等 job 由北斗建任务时写明归哪颗星）。
+    /// 缺失时（如 Memory Dreaming Promotion）看板回落用 runs 的 sessionKey 归属。
+    #[serde(default)]
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub schedule: Option<CronSchedule>,
     #[serde(default)]
@@ -1094,6 +1098,7 @@ pub struct GatewayCronRow {
     pub name: Option<String>,
     pub description: Option<String>,
     pub enabled: bool,
+    pub agent_id: Option<String>,
     pub schedule_expr: Option<String>,
     pub schedule_every_ms: Option<i64>,
     pub next_run_at_ms: Option<i64>,
@@ -1123,6 +1128,16 @@ pub fn ensure_gateway_cron_table(connection: &Connection) -> Result<()> {
     let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN next_run_at_ms INTEGER");
     let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN last_run_at_ms INTEGER");
     let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN last_status TEXT");
+    // 网关权威归属（cron.list job.agentId）：定时队列按它归星，runs 兜底。
+    let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN agent_id TEXT");
+    // 同一 job id 跨 gateway 标签去重（label 大小写漂移历史遗留：vps/VPS 各一份，
+    // 旧份 next_run_at_ms 全 NULL 靠推算混进定时队列=同一条目出现两次）。
+    // 保留每个 id 里 updated_at_ms 最新的一行；幂等，每拍顺手清。
+    let _ = connection.execute_batch(
+        "DELETE FROM gateway_cron WHERE updated_at_ms < (
+            SELECT MAX(updated_at_ms) FROM gateway_cron AS g2 WHERE g2.id = gateway_cron.id
+        );",
+    );
     Ok(())
 }
 
@@ -1141,8 +1156,8 @@ pub fn upsert_crons(
             continue;
         };
         connection.execute(
-            "INSERT INTO gateway_cron (id, gateway, name, description, enabled, schedule_expr, schedule_every_ms, next_run_at_ms, last_run_at_ms, last_status, updated_at_ms)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+            "INSERT INTO gateway_cron (id, gateway, name, description, enabled, schedule_expr, schedule_every_ms, next_run_at_ms, last_run_at_ms, last_status, agent_id, updated_at_ms)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
              ON CONFLICT(id, gateway) DO UPDATE SET
                 name = COALESCE(excluded.name, name),
                 description = COALESCE(excluded.description, description),
@@ -1152,6 +1167,7 @@ pub fn upsert_crons(
                 next_run_at_ms = excluded.next_run_at_ms,
                 last_run_at_ms = excluded.last_run_at_ms,
                 last_status = excluded.last_status,
+                agent_id = COALESCE(excluded.agent_id, agent_id),
                 updated_at_ms = excluded.updated_at_ms",
             rusqlite::params![
                 id,
@@ -1164,6 +1180,7 @@ pub fn upsert_crons(
                 cron.state.as_ref().and_then(|s| s.next_run_at_ms),
                 cron.state.as_ref().and_then(|s| s.last_run_at_ms),
                 cron.state.as_ref().and_then(|s| s.last_status.clone()),
+                cron.agent_id,
                 now,
             ],
         )?;
@@ -1238,6 +1255,18 @@ pub fn snapshot_gateway_crons(connection: &Connection, target: &GatewayTarget) -
     Ok(mirror_written + recorded)
 }
 
+/// 会话键里的归属：`agent:<星位>:...` → 星位 id（cron.runs 条目没有 agentId
+/// 字段，权威归属在 sessionKey；2026-10-06 实测定时队列全显示客星的根因）。
+fn session_agent_id(session_key: &str) -> Option<String> {
+    let rest = session_key.strip_prefix("agent:")?;
+    let id = rest.split(':').next()?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_owned())
+    }
+}
+
 /// cron.runs 单条 → 任务账本行。字段宽容：网关版本间字段名可能漂移
 /// （runAtMs/ts、completionStatus/status、agentId/agent_id），逐个回退。
 fn cron_run_entry_to_task(entry: &Value) -> Option<GatewayTask> {
@@ -1262,14 +1291,18 @@ fn cron_run_entry_to_task(entry: &Value) -> Option<GatewayTask> {
         (Some(at), Some(dur)) if dur > 0 => Some(at + dur),
         _ => None,
     };
+    let session_key = str_of(entry, &["sessionKey", "session_key"]);
+    let agent_id = str_of(entry, &["agentId", "agent_id"])
+        .filter(|s| !s.is_empty())
+        .or_else(|| session_key.as_deref().and_then(session_agent_id));
     Some(GatewayTask {
         task_id: Some(task_id),
         kind: Some("automation_run".to_owned()),
         runtime: Some("cron".to_owned()),
         status,
         title: None,
-        agent_id: str_of(entry, &["agentId", "agent_id"]).filter(|s| !s.is_empty()),
-        session_key: None,
+        agent_id,
+        session_key,
         child_session_key: None,
         run_id: str_of(entry, &["runId", "run_id"]).filter(|s| !s.is_empty()),
         source_id: Some(job_id),
@@ -1348,7 +1381,7 @@ pub fn list_crons(connection: &Connection, limit: Option<u32>) -> Result<Vec<Gat
     let limit = limit.unwrap_or(200).min(2000);
     let sql = format!(
         "SELECT id, gateway, name, description, enabled, schedule_expr, updated_at_ms, \
-         schedule_every_ms, next_run_at_ms, last_run_at_ms, last_status \
+         schedule_every_ms, next_run_at_ms, last_run_at_ms, last_status, agent_id \
          FROM gateway_cron \
          ORDER BY enabled DESC, name ASC LIMIT {limit}"
     );
@@ -1368,6 +1401,7 @@ pub fn list_crons(connection: &Connection, limit: Option<u32>) -> Result<Vec<Gat
             next_run_at_ms: row.get(8)?,
             last_run_at_ms: row.get(9)?,
             last_status: row.get(10)?,
+            agent_id: row.get(11)?,
         });
     }
     Ok(out)
