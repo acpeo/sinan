@@ -713,3 +713,40 @@ test("buildCronNextByAgent keeps the earliest enabled next run per star, skips u
   // 过期时刻按 everyMs 滚动到未来（cronNextAtOf 语义）。
   assert.ok(map.get("yuheng").atMs > now);
 });
+
+test("buildAgentRoster: 实时活跃融合与僵尸行判死（Leo 2026-10-07 实锤胶囊慢/常亮）", () => {
+  const now = 1_700_000_000_000;
+  const dayStart = now - 8 * 3_600_000;
+  const roster = buildAgentRoster({
+    agents: ["tianji", "yuheng", "tianquan", "tianshu"],
+    tasks: [],
+    runs: [
+      // 天玑：台账今夜收班，但快照说在跑 → 立即亮 ●（合成"已接收"跳）
+      { id: 1, agentId: "tianji", status: "done", startedAtMs: dayStart + 3_600_000, endedAtMs: dayStart + 3_600_000 + 60_000, lastSeenMs: dayStart + 3_600_000 + 60_000, title: "镜像去重" },
+      // 玉衡：台账 running 但 last_seen 停在 1 小时前 = 僵尸 → 不亮灯按收班呈现
+      { id: 2, agentId: "yuheng", status: "running", startedAtMs: now - 3_600_000, lastSeenMs: now - 3_600_000 },
+      // 天权：台账 running 且新鲜（cron 类会话不在 sessions.list）→ 保持 ●
+      { id: 3, agentId: "tianquan", status: "running", startedAtMs: now - 30_000, lastSeenMs: now - 3_000 },
+    ],
+    dayStartMs: dayStart,
+    order: ["tianji", "yuheng", "tianquan", "tianshu"],
+    nowMs: now,
+    staleMs: 120_000,
+    liveActiveAgentIds: new Set(["tianji", "tianshu"]),
+  });
+  const byId = new Map(roster.map((entry) => [entry.agentId, entry]));
+  // 快照活跃压过台账收班：同一拍亮、同一拍熄（与星位上下文同源）。
+  assert.equal(byId.get("tianji").tone, "current");
+  assert.equal(byId.get("tianji").hop.startedAtMs, now);
+  assert.equal(byId.get("tianji").hop.title, "镜像去重");
+  // 僵尸 running 行：running 判死 + 呈现层降级，绝不呼吸。
+  assert.equal(byId.get("yuheng").running, null);
+  assert.equal(byId.get("yuheng").tone, "done");
+  // 新鲜的台账 running 行（cron 类不在 sessions.list）保持 ●。
+  assert.equal(byId.get("tianquan").tone, "current");
+  assert.equal(byId.get("tianquan").running.lastSeenMs, now - 3_000);
+  // 台账零行但快照活跃：合成"已接收"跳占格亮灯。
+  assert.equal(byId.get("tianshu").tone, "current");
+  assert.equal(byId.get("tianshu").hop.taskId, "live:tianshu");
+  assert.equal(byId.get("tianshu").hop.title, "");
+});

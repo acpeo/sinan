@@ -315,6 +315,8 @@ export function sessionRunHop(run) {
     progressSummary: run.progressSummary ?? null,
     startedAtMs: run.startedAtMs ?? 0,
     endedAtMs: run.endedAtMs ?? null,
+    // 台账行的最后心跳：灯牌 running 判定的新鲜度门槛用（僵尸行判死）。
+    lastSeenMs: run.lastSeenMs ?? null,
     error: run.error ?? null,
     // 成果速览（六案①）：收行时抓的最后一跳 assistant 原话。
     terminalSummary: run.terminalSummary ?? null,
@@ -780,7 +782,16 @@ export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
 /// 今夜有活动才进末位（兜底星动了才值得看）。
 const IDLE_EXEMPT_AGENTS = new Set(["main"]);
 
-export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }) {
+export function buildAgentRoster({
+  agents,
+  tasks,
+  runs,
+  dayStartMs,
+  order = [],
+  nowMs = Date.now(),
+  staleMs = 0,
+  liveActiveAgentIds = new Set(),
+}) {
   // agent id 归一：agents.list 的全 id（VPS-北斗:tianshu）与账本的短 id（tianshu）
   // 是同一颗星——不归一花名册就同星双格（真机实锤），口径与 buildAgentNameMap
   // 的 suffix 注册一致。
@@ -813,6 +824,7 @@ export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }
       progressSummary: task.progressSummary ?? null,
       startedAtMs: task.startedAtMs ?? task.firstSeenMs ?? 0,
       endedAtMs: task.endedAtMs ?? null,
+      lastSeenMs: task.lastSeenMs ?? null,
       error: task.error ?? null,
       terminalSummary: task.terminalSummary ?? null,
       sub: isSubagentTask(task),
@@ -851,8 +863,60 @@ export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }
     const records = (recordsByAgent.get(agentId) ?? []).sort(
       (a, b) => (b.endedAtMs ?? b.startedAtMs ?? 0) - (a.endedAtMs ?? a.startedAtMs ?? 0),
     );
-    const running = records.find((r) => r.status === "running" || r.status === "queued") ?? null;
-    const latest = running ?? records[0] ?? null;
+    // running 判定（Leo 2026-10-07 实锤"胶囊比星位上下文慢"+ 疑似僵尸行常亮）：
+    // ①实时优先——agents 快照 hasActiveRun 的星（与主窗星位上下文同源同拍）
+    //   立即 ●；台账还没落行就把最近一跳提升为 running，没跳则合成"已接收"。
+    // ②台账行要新鲜——running/queued 行的 last_seen 超过 stale 阈值即视为
+    //   僵尸（tasks.list 时代的旧行永不更新，会永远闪），不参与亮灯。
+    //   cron 类会话若不在 sessions.list 里，靠这半边保持 ●。
+    const freshRunning = (record) => {
+      if (!Number.isFinite(staleMs) || staleMs <= 0) return true;
+      const seen = record.lastSeenMs ?? record.endedAtMs ?? record.startedAtMs ?? 0;
+      if (!Number.isFinite(seen) || seen <= 0) return true;
+      return nowMs - seen <= staleMs;
+    };
+    const ledgerRunning =
+      records.find((r) => (r.status === "running" || r.status === "queued") && freshRunning(r)) ??
+      null;
+    const liveActive = liveActiveAgentIds.has(agentId);
+    const running =
+      ledgerRunning ??
+      (liveActive
+        ? records[0] &&
+          (records[0].status === "running" || records[0].status === "queued") &&
+          freshRunning(records[0])
+          ? records[0]
+          : // 快照说在跑、台账还没落行（落行与快照同拍，这是缝隙兜底）：
+            // 不把旧收班跳硬提升成 running（已跑会从旧起点起算），
+            // 合成"已接收"跳，标题沿用最近一跳原话，起点=现在。
+            {
+              taskId: `live:${agentId}`,
+              agentId,
+              status: "running",
+              title: records[0]?.title ?? "",
+              progressSummary: records[0]?.progressSummary ?? null,
+              startedAtMs: nowMs,
+              endedAtMs: null,
+              lastSeenMs: nowMs,
+              error: null,
+              terminalSummary: null,
+              sub: false,
+            }
+        : null);
+    // 呈现层兜底：僵尸 running 行（stale 判死又没被快照确认）按收班呈现、
+    // 绝不呼吸——hopToneOf 对 running 状态恒给 current 灯色，不降级就永远闪
+    // （Leo 实锤"回复都收到了胶囊还在闪"的病灶之一）。
+    const presentable = (record) => {
+      if (
+        (record.status === "running" || record.status === "queued") &&
+        !freshRunning(record) &&
+        running?.taskId !== record.taskId
+      ) {
+        return { ...record, status: "succeeded" };
+      }
+      return record;
+    };
+    const latest = running ?? (records[0] ? presentable(records[0]) : null);
     const tone = latest
       ? hopToneOf(latest, running ? latest.taskId : null).tone
       : "rest";

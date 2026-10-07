@@ -1066,6 +1066,16 @@ function TasksWidgetWindow({
   // ●绿呼吸=正在执行（北斗群或私聊主对话都算）、✓/✕=今夜收班、○=空闲
   // （rest 灯语，新增）。链路明细收进悬停星卡（按星聚合今夜全部跳）；
   // +N 角标退役（花名册本就全量上屏，不存在"其余工作"）。
+  // 实时活跃融合（Leo 2026-10-07 实锤"胶囊比星位上下文慢"）：灯牌的 running
+  // 判定与主窗星位上下文同源——agents 快照里 hasActiveRun 的星立即亮 ●，
+  // 台账 run 行只兜 cron 路径与新鲜度；回复一到、卡片熄灯的同一拍胶囊也熄。
+  const liveActiveAgentIds = useMemo(() => {
+    const ids = new Set();
+    for (const session of feed.agents?.sessions ?? []) {
+      if (session?.hasActiveRun && session.agentId) ids.add(session.agentId);
+    }
+    return ids;
+  }, [feed.agents]);
   const roster = buildAgentRoster({
     agents: [...agentNameMap.keys()],
     tasks,
@@ -1078,6 +1088,8 @@ function TasksWidgetWindow({
       return d.getTime();
     })(),
     order: ROSTER_STAR_ORDER,
+    liveActiveAgentIds,
+    staleMs,
   });
   // 灯牌单元格 = 花名册条目；运行中星的 taskId 作当前跳（呼吸居中锚点）。
   const rosterHops = roster.map((entry) => entry.hop);
