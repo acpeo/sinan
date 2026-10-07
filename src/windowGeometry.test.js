@@ -225,7 +225,9 @@ test("vertical strip hover stays inside the work area near the top-left", () => 
   );
 });
 
-test("vertical strip hover pops the card to the rail's left when there is room", () => {
+test("vertical strip hover prefers the card on the rail's right (window TL fixed)", () => {
+  // 2026-10-07 改：卡优先朝条右侧（side=left）——窗口 x 完全不动、只向右长宽，
+  // 胶卷钉窗口左上角，原生帧与 WebView 重排帧条位置一致=零闪动。
   assert.deepEqual(
     verticalStripHoverLayout({
       railPosition: { x: 400, y: 300 },
@@ -235,21 +237,23 @@ test("vertical strip hover pops the card to the rail's left when there is room",
       anchorY: 69,
       cardHeight: 280,
     }),
-    { side: "right", x: 50, y: 240, cardCenter: 148, railOffsetY: 60 },
+    { side: "left", x: 400, y: 240, cardCenter: 148, railOffsetY: 60 },
   );
 });
 
-test("vertical strip hover falls back to the rail's right side near the left edge", () => {
+test("vertical strip hover falls back to the rail's left side near the right edge", () => {
+  // 条贴工作区右缘（右侧放不下整卡）：退回朝左兜底——此时窗口必须左挪，
+  // 闪动仅存于这一兜底形态。
   assert.deepEqual(
     verticalStripHoverLayout({
-      railPosition: { x: 120, y: 300 },
+      railPosition: { x: 1878, y: 300 },
       railSize: { width: 42, height: 260 },
       workArea: { x: 0, y: 0, width: 1920, height: 1040 },
       targetSize: { width: 392, height: 320 },
       anchorY: 69,
       cardHeight: 280,
     }),
-    { side: "left", x: 120, y: 240, cardCenter: 148, railOffsetY: 60 },
+    { side: "right", x: 1528, y: 240, cardCenter: 148, railOffsetY: 60 },
   );
 });
 
@@ -353,11 +357,10 @@ test("desync heal retry cadence tolerates invalid attempt counters", () => {
   assert.equal(desyncHealRetryDelayMs(2.8), 600);
 });
 
-test("horizontal strip hover grows upward and keeps the card gap above the cell", () => {
-  // 条 224×36 @ (100,500)，长高 6+168=174：上方放得下 → 向上长，x 不动，
-  // 卡片与条同宽通栏（cardLeft=0）。卡底贴条顶（隔 gap）：卡顶 = anchorTop
-  // - gap - cardHeight——此前 cardTop=anchorTop 让整张卡压在条上（Leo：
-  // "弹窗跑到上面、横条没了"的根因）。
+test("horizontal strip hover grows downward and keeps the card gap below the strip", () => {
+  // 条 224×36 @ (100,500)，长高 6+168=174：下方放得下 → 优先向下长（2026-10-07
+  // 改：窗口顶角不动=条零闪动；旧"向上长"要上挪 growHeight，WebView 重排滞后
+  // 一帧=条闪），x 不动，卡片与条同宽通栏（cardLeft=0）。卡顶贴条底（隔 gap）。
   assert.deepEqual(
     horizontalTasksHoverLayout({
       stripPosition: { x: 100, y: 500 },
@@ -369,12 +372,13 @@ test("horizontal strip hover grows upward and keeps the card gap above the cell"
       gap: 6,
       cardHeight: 168,
     }),
-    { side: "above", y: 326, cardTop: 326, cardLeft: 0 },
+    { side: "below", y: 500, cardTop: 542, cardLeft: 0 },
   );
 });
 
-test("horizontal strip hover falls back to below when the top has no room", () => {
-  // 条贴着工作区顶（y=0）：向上放不下 → 向下长，卡贴格子下缘 + 间距
+test("horizontal strip hover prefers below (window top fixed) whenever it fits", () => {
+  // 条贴着工作区顶（y=0）：下方放得下 → 优先向下长（窗口顶角不动=零闪动），
+  // 卡贴格子下缘 + 间距
   assert.deepEqual(
     horizontalTasksHoverLayout({
       stripPosition: { x: 100, y: 0 },

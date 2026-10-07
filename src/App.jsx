@@ -876,39 +876,41 @@ function TasksWidgetWindow({
       alive = false;
     };
   }, []);
-  // 竖条卡片固定朝胶卷左侧弹（Leo 2026-10-03 拍板，替代"朝屏幕中心"）：
-  // 左侧放得下整卡才朝左，贴屏幕左缘放不下时退回朝右兜底（卡片不被屏幕边裁掉）。
+  // 竖条卡片优先朝胶卷右侧弹（side=left，2026-10-07 改）：窗口左上角完全不动、
+  // 只向右长宽——原生帧与 WebView 重排帧里条的位置一致，悬停/移开零闪动
+  // （旧"朝左弹"要朝左挪窗 230px，WebView 重排滞后一帧=整条闪，原子
+  // SetWindowPos 也救不了内容那一帧）。右侧放不下才退朝左兜底。
   // 定侧要在悬停瞬间同步给出——钉边类若等原生扩窗返回 layout 才上，类提交晚于
-  // 窗口扩宽，胶卷会先漂到变宽后的居中位再弹回钉边位——指针在这个间隙离开胶卷
-  // → 260ms 收窗 → 又进入 → 再扩，拉锯循环（0.20.10 真机实测：竖条左右跑动、
-  // 详情卡停不住）。预览（无原生扩窗）以视口左缘为界，真机以工作区左缘为界。
+  // 窗口扩宽，条会先漂再弹回（0.20.10 真机拉锯循环）。预览以视口右缘为界，
+  // 真机以工作区右缘为界。
   const verticalHoverSide = () => {
     const rail = railWrapRef.current;
     if (!rail) return "left";
     const rect = rail.getBoundingClientRect();
     const need = TASKS_HOPCARD_WIDTH + TASKS_HOPCARD_GAP;
     if (!isTauriRuntime()) {
-      return rect.left - need >= 8 ? "right" : "left";
+      return rect.right + need <= window.innerWidth - 8 ? "left" : "right";
     }
-    const railLeftScreen = window.screenX + rect.left;
-    const availLeft = Number.isFinite(window.screen?.availLeft) ? window.screen.availLeft : 0;
-    return railLeftScreen - need >= availLeft + 8 ? "right" : "left";
+    const railRightScreen = window.screenX + rect.right;
+    const availRight = (Number.isFinite(window.screen?.availLeft) ? window.screen.availLeft : 0)
+      + (Number.isFinite(window.screen?.availWidth) ? window.screen.availWidth : window.innerWidth);
+    return railRightScreen + need <= availRight - 8 ? "left" : "right";
   };
-  // 横条定侧与竖条同一纪律：悬停瞬间同步给（window.screenY 是同步 API），
-  // 钉边样式先于原生扩窗落 DOM——等 layout 回来才钉=壳随窗上长跳一拍
-  // （Leo 装机实锤"横条上下跨跳"的第二半边）。阈值必须与
-  // horizontalTasksHoverLayout 的判定严格同界（growHeight=卡高+gap，
-  // 卡高含 +24 余量）——阈值不一致时临界悬停会钉边朝上、窗体朝下长=反向跳。
+  // 横条定侧同一纪律：卡优先朝条下方（side=below）——窗口顶角不动、只向下长高
+  // =零闪动；下方放不下退朝上兜底。阈值与 horizontalTasksHoverLayout 严格同界
+  // （growHeight=卡高+gap，卡高含 +24 余量）——不一致时临界悬停会钉边与窗体
+  // 反向=跳。定侧同步给，先于原生扩窗落 DOM。
   const horizontalHoverSide = () => {
     const shell = miniShellRef.current?.getBoundingClientRect();
-    if (!shell) return "above";
+    if (!shell) return "below";
     const growHeight = (lastCardHRef.current ?? TASKS_HOPCARD_HEIGHT) + 24 + TASKS_HOPCARD_GAP;
     if (!isTauriRuntime()) {
-      return shell.top - growHeight >= 0 ? "above" : "below";
+      return shell.bottom + growHeight <= window.innerHeight ? "below" : "above";
     }
-    const shellTopScreen = window.screenY + shell.top;
-    const availTop = Number.isFinite(window.screen?.availTop) ? window.screen.availTop : 0;
-    return shellTopScreen - growHeight >= availTop ? "above" : "below";
+    const shellBottomScreen = window.screenY + shell.bottom;
+    const availBottom = (Number.isFinite(window.screen?.availTop) ? window.screen.availTop : 0)
+      + (Number.isFinite(window.screen?.availHeight) ? window.screen.availHeight : window.innerHeight);
+    return shellBottomScreen + growHeight <= availBottom ? "below" : "above";
   };
   const showHopCard = (hop, index, total, event) => {
     // 拖拽期不出卡不挪窗：OS 窗口拖拽跟手、内容拖拽滚动改条内滚动——
@@ -1265,9 +1267,9 @@ function TasksWidgetWindow({
           }
           onPointerDown={(event) => {
             if (event.button !== 0 || event.target.closest("button")) return;
-            // 按下即收卡+撤扩窗（异步队列落地）：OS 窗口拖拽是跟手的模态循环，
-            // 任何程序化挪窗都会和它互相拉扯成"点一下吸附住、鼠标动来回滑动"
-            // （Leo 装机实锤）；拖拽期间悬停卡停发（showHopCard 看 pointerDownRef）。
+            // 胶囊不再 OS 拖拽（挪窗走展开面板标题栏）：此前按下即 startDragging，
+            // 跟手模态循环与内容拖拽滚动、悬停扩窗互相拉扯——吸附/来回滑动/抖动
+            // 的总根源。条上按下=内容拖拽滚动或点击展开面板的手势。
             pointerDownRef.current = true;
             if (hoverCardRef.current) {
               hoverEpochRef.current += 1;
@@ -1277,10 +1279,6 @@ function TasksWidgetWindow({
                 if (hoverEpochRef.current === epoch) setHoverCard(null);
               });
             }
-            // 星格/胶卷上按下 = 内容拖拽滚动 + 点击唤主窗的手势，不抢成挪窗；
-            // 挪窗手势保留在条边缘衬垫与控制簇（非 button 的其余区域）。
-            if (event.target.closest(".tasks-mini-strip")) return;
-            startWindowDragging();
           }}
           onPointerMove={(event) => {
             // OS 拖拽的模态循环可能吞掉 pointerup——首个无按键的 move 视为已松开
@@ -1309,7 +1307,7 @@ function TasksWidgetWindow({
                   hops={rosterHops}
                   currentTaskId={rosterCurrentTaskId}
                   agentNameMap={agentNameMap}
-                  onExpand={onOpenExpanded}
+                  onExpand={expand}
                   onHopHover={showHopCard}
                 />
               </div>
@@ -1329,7 +1327,7 @@ function TasksWidgetWindow({
                   hops={rosterHops}
                   currentTaskId={rosterCurrentTaskId}
                   agentNameMap={agentNameMap}
-                  onExpand={onOpenExpanded}
+                  onExpand={expand}
                   onHopHover={showHopCard}
                 />
               </div>

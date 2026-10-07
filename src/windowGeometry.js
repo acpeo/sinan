@@ -196,12 +196,13 @@ function verticalStripHoverLayout({ railPosition, railSize, workArea, targetSize
 
   const workRight = workArea.x + workArea.width;
   const workBottom = workArea.y + workArea.height;
-  // 卡片固定朝胶卷左侧弹（Leo 2026-10-03 拍板，替代"朝屏幕中心"）：左侧放得下
-  // 整卡才朝左（side=right，窗口朝左扩、胶卷钉右缘不动）；胶囊贴左缘放不下时
-  // 退回朝右兜底（side=left），卡片不被屏幕边裁掉。
-  const side = railPosition.x + railSize.width - targetSize.width - margin >= workArea.x
-    ? "right"
-    : "left";
+  // 卡片优先朝胶卷右侧弹（side=left，2026-10-07 改）：窗口 x 完全不动、只向右
+  // 长宽，胶卷钉窗口左上角——原生帧与 WebView 重排帧里条的位置完全一致，
+  // 悬停/移开零闪动（旧"朝左弹"要朝左挪窗 230px，WebView 滞后一帧=条闪；
+  // 原子 SetWindowPos 也救不了内容重排那一帧）。右侧放不下才退朝左兜底。
+  const side = railPosition.x + targetSize.width + margin <= workRight
+    ? "left"
+    : "right";
   const local = verticalStripHoverLocalLayout({
     targetHeight: targetSize.height,
     anchorY,
@@ -269,12 +270,15 @@ function horizontalTasksHoverLayout({
   if (values.some((value) => !Number.isFinite(value))) return null;
 
   const workBottom = workArea.y + workArea.height;
-  const aboveY = stripPosition.y - growHeight;
-  const cardAbove = aboveY >= workArea.y;
-  if (!cardAbove && stripPosition.y + stripSize.height + growHeight > workBottom) return null;
-  const y = cardAbove ? aboveY : stripPosition.y;
-  // 卡底贴条顶（隔 gap）：条不被卡盖住，卡紧贴条上方。此前 cardTop=anchorTop
-  // 让整张卡压在条上再向上伸——Leo 看到的"弹窗跑到上面、横条没了"就是它。
+  // 卡片优先朝条下方弹（side=below，2026-10-07 改）：窗口 y 完全不动、只向下
+  // 长高，条钉窗口左上角——原生帧与 WebView 重排帧里条的位置完全一致，
+  // 悬停/移开零闪动（旧"朝上弹"要上挪 growHeight，WebView 滞后一帧=条闪）。
+  // 下方放不下才退朝上兜底；上下都放不下返回 null。
+  const belowFits = stripPosition.y + stripSize.height + growHeight <= workBottom;
+  const cardAbove = !belowFits && stripPosition.y - growHeight >= workArea.y;
+  if (!cardAbove && !belowFits) return null;
+  const y = cardAbove ? stripPosition.y - growHeight : stripPosition.y;
+  // 卡底贴条顶（隔 gap）：条不被卡盖住，卡紧贴条上方/下方。
   const cardTop = cardAbove ? anchorTop - gap - cardHeight : anchorBottom + gap;
   return { side: cardAbove ? "above" : "below", y, cardTop, cardLeft: 0 };
 }

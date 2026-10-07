@@ -304,7 +304,8 @@ test("opening strip controls over a hover card restores the rail, not the hover 
     width: 312, height: 300, railWidth: 42, railHeight: 300,
     anchorY: 150, cardHeight: 120,
   });
-  assert.equal(position.x, 1600 + 42 - 312);
+  // 卡优先朝条右侧（side=left）：窗口 x 完全不动（零闪动方向）。
+  assert.equal(position.x, 1600);
   // 点 … 时详情卡还开着：还原几何捕获排在悬停收回之前。
   await context.beginStripControlsExpand();
   await context.collapseVerticalStripHover();
