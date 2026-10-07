@@ -667,7 +667,7 @@ async fn set_window_bounds(
     unsafe {
         SetWindowPos(
             HWND(hwnd.0 as *mut _),
-            HWND(std::ptr::null_mut()),
+            Some(HWND(std::ptr::null_mut())),
             x,
             y,
             width,
