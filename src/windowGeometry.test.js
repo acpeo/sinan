@@ -253,6 +253,43 @@ test("vertical strip hover falls back to the rail's right side near the left edg
   );
 });
 
+test("vertical strip hover static anchor keeps the window vertically still mid-screen", () => {
+  // 同一组输入：shift 模式为对中锚点上移 60（railOffsetY=60，胶卷必须补偿）；
+  // static 模式窗口顶=胶卷顶，纵向零位移——胶卷钉窗顶，零位移=零跨跳。
+  const shared = {
+    railPosition: { x: 1878, y: 300 },
+    railSize: { width: 42, height: 260 },
+    workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+    targetSize: { width: 392, height: 320 },
+    anchorY: 69,
+    cardHeight: 280,
+  };
+  assert.deepEqual(verticalStripHoverLayout({ ...shared, anchorMotion: "static" }), {
+    side: "right",
+    x: 1528,
+    y: 300,
+    cardCenter: 148,
+    railOffsetY: 0,
+  });
+});
+
+test("vertical strip hover static anchor still dodges the work-area bottom edge", () => {
+  // 胶卷贴工作区底（y=780+260=1040=workBottom）：目标高 320 下缘会出界 60，
+  // static 模式此时才上收 60——唯一允许的纵向位移。
+  assert.deepEqual(
+    verticalStripHoverLayout({
+      railPosition: { x: 1878, y: 780 },
+      railSize: { width: 42, height: 260 },
+      workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+      targetSize: { width: 392, height: 320 },
+      anchorY: 69,
+      cardHeight: 280,
+      anchorMotion: "static",
+    }),
+    { side: "right", x: 1528, y: 720, cardCenter: 148, railOffsetY: 60 },
+  );
+});
+
 test("Wayland-local strip hover clamps the card and pointer without global coordinates", () => {
   assert.deepEqual(
     verticalStripHoverLocalLayout({

@@ -7552,6 +7552,11 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
   color: rgba(255, 255, 255, 0.92);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   display: grid;
+  /* 单列轨道必须钳在容器宽内：默认 auto 轨道按最宽子项的 max-content 取尺寸，
+     收班行的 46 字 nowrap 结论会把轨道撑到 ~536px，整行（含药丸/文本列）溢出
+     卡片右侧渲染到卡外——真机窗口裁掉=文本列"空白"（Leo 实锤，75a2cd5 起就在）。
+     minmax(0,1fr) 强制轨道=卡内容宽，长文本走 span 自带的 ellipsis。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   font-size: 11.5px;
   /* 纯展示不截断指针：胶卷的 enter/leave 语义不被卡片打断 */
@@ -7562,6 +7567,12 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+}
+
+/* grid 项目的默认 min-width:auto 会拿 nowrap 结论的 min-content 当下限，
+   把卡内容撑破轨道溢出卡外（上一条注释的另一半）——直接子项全部放开。 */
+.tasks-hopcard > * {
   min-width: 0;
 }
 .tasks-hopcard-title {
@@ -7615,9 +7626,16 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
 /* "其他任务"节：首行链路之外的任务（与竖条 +N 角标同源），最多 3 行+溢出提示 */
 .tasks-hopcard-extra {
   display: grid;
+  /* 与 .tasks-hopcard 同病：auto 轨道被 kv 行的 nowrap 结论 max-content 撑爆，
+     kv 行溢出到卡外——轨道钳回容器宽，行内 span 靠自身 min-width:0 收缩省略 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   padding-top: 6px;
   border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.tasks-hopcard-extra > * {
+  min-width: 0;
 }
 .tasks-hopcard-extra-head {
   font-size: 10px;
@@ -7683,7 +7701,7 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
 }
 .tasks-hopcard-kv + .tasks-hopcard-kv { border-top: 1px solid rgba(255, 255, 255, 0.05); }
 .tasks-hopcard-kv b { color: #dfe4ec; font-weight: 600; flex: none; width: 66px; }
-.tasks-hopcard-kv span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tasks-hopcard-kv span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tasks-hopcard--light .tasks-hopcard-kv { color: #5c6472; border-top-color: rgba(31, 33, 36, 0.06); }
 .tasks-hopcard--light .tasks-hopcard-kv b { color: #202124; }
 
@@ -7700,6 +7718,21 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
 .tasks-mini-strip .task-chain-glyph,
 .tasks-mini-strip .task-chain-hop small {
   line-height: 1;
+}
+
+/* 横条行高放宽（Leo 2026-10-07 真机实锤：星名首字被削顶——天→大、玉→土、
+   开→升）：line-height 1 的行盒正好 13px=条盒高，CJK 字形墨迹超出 em 盒顶部
+   ~1px，被条的 overflow-y:hidden 齐沿削掉——顶笔画最高的 天/玉/开 中招，
+   玑/衡/阳 顶稍低幸免。1.35 让行盒（≈18px）包住墨迹，条盒随之长高，视觉
+   居中由 ticker 的 align-items:center 保持；竖条一字一行不受此影响，维持 1。 */
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) {
+  line-height: 1.35;
+}
+
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-agent,
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-glyph,
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-hop small {
+  line-height: 1.35;
 }
 
 .tasks-mini-strip .task-chain-link {

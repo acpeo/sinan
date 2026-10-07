@@ -177,7 +177,7 @@ function verticalStripHoverLocalLayout({ targetHeight, anchorY, cardHeight, marg
   return { cardCenter, pointerY };
 }
 
-function verticalStripHoverLayout({ railPosition, railSize, workArea, targetSize, anchorY, cardHeight, margin = 8 }) {
+function verticalStripHoverLayout({ railPosition, railSize, workArea, targetSize, anchorY, cardHeight, margin = 8, anchorMotion = "shift" }) {
   const values = [
     railPosition?.x,
     railPosition?.y,
@@ -213,7 +213,12 @@ function verticalStripHoverLayout({ railPosition, railSize, workArea, targetSize
   const desiredX = side === "left"
     ? railPosition.x
     : railPosition.x + railSize.width - targetSize.width;
-  const desiredY = railPosition.y - (cardCenter - anchorY);
+  // anchorMotion "static"（任务小组件专用）：窗口纵向尽量不动——顶=胶卷顶，
+  // 仅当下缘要出工作区才上收。胶卷钉在窗顶，窗不动=胶卷纵向零位移；
+  // 卡片纵向可见性由 cardCenter 钳制独立保证，不依赖挪窗。
+  const desiredY = anchorMotion === "static"
+    ? Math.min(railPosition.y, workBottom - targetSize.height)
+    : railPosition.y - (cardCenter - anchorY);
   const x = Math.min(Math.max(desiredX, workArea.x), Math.max(workRight - targetSize.width, workArea.x));
   // 窗口不仅要留在工作区，也必须完整包住原胶囊。只按卡片锚点移动时，
   // 悬停下方条目会让 railOffsetY 变成负数，把胶囊上半段推出透明窗口。

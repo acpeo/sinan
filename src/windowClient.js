@@ -705,6 +705,9 @@ async function startPositionMemory(getMode) {
     window.clearTimeout(timer);
     timer = window.setTimeout(() => {
       if (!positionMemoAllowed(getMode(), Boolean(stripHoverRestore))) return;
+      // 任务小组件悬停扩窗在途时不记位：窗口左上角此刻是"透明承载区"的，
+      // 不是用户摆放的条——记了下次开机条就落在老位置（跨跳残留）。
+      if (mode === "tasks-widget" && isTasksHoverExpanded()) return;
       rememberWindowPosition(api, appWindow, mode).catch(() => {});
     }, 400);
   });
@@ -1192,7 +1195,46 @@ async function collapseVerticalStripHover() {
 /// 条身缩放（任务窗不参与 stripScale）、不写条身尺寸缓存——那是另一个窗的记忆。
 let tasksHoverRestore = null;
 
-async function expandTasksHover({ width, height, anchorY, cardHeight }) {
+/// 悬停扩窗是否在途（restore 非空 = 已扩或正在收）。位置记忆用它拒记
+/// 扩窗态的左上角——那是承载卡的透明区，不是条的摆放位置。
+function isTasksHoverExpanded() {
+  return tasksHoverRestore != null;
+}
+
+/// 悬停扩窗依赖的原生窗体操作是否真的可用：真机 Tauri 返回 true；浏览器
+/// 预览与复现台（__TAURI_INTERNALS__ 桩）几何读数拿不到有限数值，返回
+/// false——钉边样式据此关闭。钉边只为补偿原生窗伸缩，没有伸缩的环境里
+/// apply 钉边=把条从居中位拽到窗缘（预览伪跳动，Leo 实测"还是跳"）。
+/// （不写内联 export：windowClient.test.js 按脚本文本在 vm 里跑本文件，
+/// 内联 export 会炸语法；统一走底部 export 块。）
+async function probeNativeWindowOps() {
+  if (!isWindowsPlatform()) return false;
+  const api = await windowApi();
+  if (!api) return false;
+  const position = await api
+    .getCurrentWindow()
+    .outerPosition()
+    .catch(() => null);
+  return position != null && Number.isFinite(position.x) && Number.isFinite(position.y);
+}
+
+/// restore 基准保鲜：首捕获无条件收（几何读失败也比没有强，否则扩窗直接
+/// 放弃、钉边悬空）；此后只在"当前窗就是胶囊态"时刷新——卡开着重复展开
+/// （当前=扩窗态，尺寸不符）绝不覆盖，否则透明承载区会被当成条身。
+function captureTasksHoverRestore(position, size, collapsedSize, scale) {
+  if (!tasksHoverRestore) {
+    tasksHoverRestore = { position, size };
+    return;
+  }
+  if (!collapsedSize) return;
+  const expectedWidth = Math.round(collapsedSize.width * scale);
+  const expectedHeight = Math.round(collapsedSize.height * scale);
+  const capsuleNow =
+    Math.abs(size.width - expectedWidth) <= 2 && Math.abs(size.height - expectedHeight) <= 2;
+  if (capsuleNow) tasksHoverRestore = { position, size };
+}
+
+async function expandTasksHover({ width, height, anchorY, cardHeight, collapsedSize }) {
   if (!isWindowsPlatform()) return null;
   const api = await windowApi();
   if (!api) return null;
@@ -1205,9 +1247,10 @@ async function expandTasksHover({ width, height, anchorY, cardHeight }) {
   ]);
   const workArea = monitor?.workArea;
   if (!size || !position || !workArea) return null;
-  if (!tasksHoverRestore) tasksHoverRestore = { position, size };
-  const base = tasksHoverRestore;
   const scale = Number.isFinite(factor) && factor > 0 ? factor : 1;
+  captureTasksHoverRestore(position, size, collapsedSize, scale);
+  if (!tasksHoverRestore) return null;
+  const base = tasksHoverRestore;
   const physical = await scaledPhysicalSize(api, appWindow, width, height, 1, scale);
   const layout = verticalStripHoverLayout({
     railPosition: base.position,
@@ -1222,14 +1265,18 @@ async function expandTasksHover({ width, height, anchorY, cardHeight }) {
     anchorY: anchorY * scale,
     cardHeight: cardHeight * scale,
     margin: 8 * scale,
+    // 静态锚定：窗口纵向不动（除非下缘出工作区），胶卷零纵向位移——
+    // 跨跳根治的纵向半边；railOffsetY 仅在被迫上收时非零，此时整组
+    // （胶卷+卡）随窗上移、尾部仍对格，不做二次补偿（补偿会让卡尾脱格）。
+    anchorMotion: "static",
   });
   if (!layout) return null;
-  await Promise.all([
-    appWindow.setSize(physical).catch(() => {}),
-    appWindow
-      .setPosition(new api.PhysicalPosition(Math.round(layout.x), Math.round(layout.y)))
-      .catch(() => {}),
-  ]);
+  // 顺序下发（不再 Promise.all）：两笔原生调用紧邻落地，中间帧在同一个
+  // vsync 内的概率被压到最低；并发下发则顺序不保，收/扩交错时终态不定。
+  await appWindow.setSize(physical).catch(() => {});
+  await appWindow
+    .setPosition(new api.PhysicalPosition(Math.round(layout.x), Math.round(layout.y)))
+    .catch(() => {});
   return {
     side: layout.side,
     cardCenterY: layout.cardCenter / scale,
@@ -1255,7 +1302,7 @@ async function collapseTasksHover() {
 /// tasksHoverRestore（同一窗同一时刻只有一张卡），数据变化重测卡高后重复
 /// 展开以 restore 为基准重算，不会滚雪球。返回卡片在新视口里的逻辑坐标
 /// （cardTop/cardLeft），预览（非 Windows）返回 null。
-async function expandTasksHoverHorizontal({ cardHeight, gap, anchorTop, anchorBottom }) {
+async function expandTasksHoverHorizontal({ cardHeight, gap, anchorTop, anchorBottom, collapsedSize }) {
   if (!isWindowsPlatform()) return null;
   const api = await windowApi();
   if (!api) return null;
@@ -1268,9 +1315,10 @@ async function expandTasksHoverHorizontal({ cardHeight, gap, anchorTop, anchorBo
   ]);
   const workArea = monitor?.workArea;
   if (!size || !position || !workArea) return null;
-  if (!tasksHoverRestore) tasksHoverRestore = { position, size };
-  const base = tasksHoverRestore;
   const scale = Number.isFinite(factor) && factor > 0 ? factor : 1;
+  captureTasksHoverRestore(position, size, collapsedSize, scale);
+  if (!tasksHoverRestore) return null;
+  const base = tasksHoverRestore;
   const growHeight = Math.round((cardHeight + gap) * scale);
   const layout = horizontalTasksHoverLayout({
     stripPosition: base.position,
@@ -1297,12 +1345,10 @@ async function expandTasksHoverHorizontal({ cardHeight, gap, anchorTop, anchorBo
     1,
     scale,
   );
-  await Promise.all([
-    appWindow.setSize(physical).catch(() => {}),
-    appWindow
-      .setPosition(new api.PhysicalPosition(Math.round(base.position.x), Math.round(layout.y)))
-      .catch(() => {}),
-  ]);
+  await appWindow.setSize(physical).catch(() => {});
+  await appWindow
+    .setPosition(new api.PhysicalPosition(Math.round(base.position.x), Math.round(layout.y)))
+    .catch(() => {});
   return {
     side: layout.side,
     cardTop: layout.cardTop / scale,
@@ -2346,6 +2392,8 @@ export {
   setTasksWidgetWindow,
   expandTasksHover,
   expandTasksHoverHorizontal,
+  isTasksHoverExpanded,
+  probeNativeWindowOps,
   collapseTasksHover,
   showMainExpanded,
   closeCurrentWindow,

@@ -48,6 +48,7 @@ import {
   closeWindow,
   collapseStripControlsExpand,
   collapseTasksHover,
+  probeNativeWindowOps,
   collapseVerticalStripHover,
   emitGlassTint,
   emitGlassAlpha,
@@ -833,6 +834,25 @@ function TasksWidgetWindow({
   // 发现 6：卡片打开瞬间顺带拉一拍最新数据——开口即最新。2.5s 内重复悬停
   // 不重复打（后端 snapshot 对同网关本就有 2.5s 节流，这里是前端省一层）。
   const lastHoverRefreshAtRef = useRef(0);
+  // 悬停世代号：每次 showHopCard 自增。收卡走"先收窗后撤卡"后，收窗途中若
+  // 指针重新进格（新世代），收窗完成回调不得把新卡抹掉；展开 effect 也靠它
+  // 在"收窗途中重新悬停"后重跑扩窗（收窗把原生窗还原了，卡还开着会被裁）。
+  const hoverEpochRef = useRef(0);
+  // 钉边样式的生效开关：真机 Tauri 会真的伸缩原生窗，钉边补偿它=条纹丝不动；
+  // 预览/复现台（stub 环境）没有窗体伸缩，钉边会把条从居中位拽到窗缘=伪跳动
+  // （Leo 实测"还是跳"的预览半边）。默认按真机算（探测返回前悬停不丢钉边），
+  // 探测拿不到有限几何再关。探测仅启动一次，小组件窗可见后必然可读。
+  const [nativeHoverExpand, setNativeHoverExpand] = useState(() => isTauriRuntime());
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+    let alive = true;
+    probeNativeWindowOps().then((ok) => {
+      if (alive) setNativeHoverExpand(Boolean(ok));
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   // 竖条卡片固定朝胶卷左侧弹（Leo 2026-10-03 拍板，替代"朝屏幕中心"）：
   // 左侧放得下整卡才朝左，贴屏幕左缘放不下时退回朝右兜底（卡片不被屏幕边裁掉）。
   // 定侧要在悬停瞬间同步给出——钉边类若等原生扩窗返回 layout 才上，类提交晚于
@@ -851,8 +871,25 @@ function TasksWidgetWindow({
     const availLeft = Number.isFinite(window.screen?.availLeft) ? window.screen.availLeft : 0;
     return railLeftScreen - need >= availLeft + 8 ? "right" : "left";
   };
+  // 横条定侧与竖条同一纪律：悬停瞬间同步给（window.screenY 是同步 API），
+  // 钉边样式先于原生扩窗落 DOM——等 layout 回来才钉=壳随窗上长跳一拍
+  // （Leo 装机实锤"横条上下跨跳"的第二半边）。阈值必须与
+  // horizontalTasksHoverLayout 的判定严格同界（growHeight=卡高+gap，
+  // 卡高含 +24 余量）——阈值不一致时临界悬停会钉边朝上、窗体朝下长=反向跳。
+  const horizontalHoverSide = () => {
+    const shell = miniShellRef.current?.getBoundingClientRect();
+    if (!shell) return "above";
+    const growHeight = (lastCardHRef.current ?? TASKS_HOPCARD_HEIGHT) + 24 + TASKS_HOPCARD_GAP;
+    if (!isTauriRuntime()) {
+      return shell.top - growHeight >= 0 ? "above" : "below";
+    }
+    const shellTopScreen = window.screenY + shell.top;
+    const availTop = Number.isFinite(window.screen?.availTop) ? window.screen.availTop : 0;
+    return shellTopScreen - growHeight >= availTop ? "above" : "below";
+  };
   const showHopCard = (hop, index, total, event) => {
     window.clearTimeout(hopCardLeaveTimerRef.current);
+    hoverEpochRef.current += 1;
     if (!hoverCardRef.current && Date.now() - lastHoverRefreshAtRef.current > 2500) {
       lastHoverRefreshAtRef.current = Date.now();
       feed.refresh?.();
@@ -888,6 +925,9 @@ function TasksWidgetWindow({
           bottom: shell ? shell.bottom : cell.bottom,
           centerX: cell.left + cell.width / 2,
         },
+        // 同步预钉边：marginTop:auto 必须与开卡同一帧提交，先于原生扩窗
+        // （原生窗上长后壳才不会带着条一起跳——真机"上下跨跳"根因）。
+        side: horizontalHoverSide(),
         layout: null,
       });
     }
@@ -904,8 +944,14 @@ function TasksWidgetWindow({
         hideHopCard();
         return;
       }
-      setHoverCard(null);
-      runWindowAction(() => collapseTasksHover());
+      // 先收窗后撤卡（runWindowAction 队列保证与重展有序）：钉边若先撤，
+      // 壳在还原中的窗里错位一拍=关闭方向同款跨跳；收窗后钉边 auto margin
+      // 归零条正位。收窗途中指针重新进格（世代号已变）就不抹卡，让重展接手。
+      const epoch = hoverEpochRef.current;
+      runWindowAction(async () => {
+        await collapseTasksHover();
+        if (hoverEpochRef.current === epoch) setHoverCard(null);
+      });
     }, TASKS_HOVER_LEAVE_DELAY);
   };
   // 卡片内容（进度原话行数 / 其他任务节）实测高度，喂给扩窗与定位——
@@ -922,6 +968,9 @@ function TasksWidgetWindow({
   // （跨悬停记忆，首悬停用基线），不再随实测重展——卡比窗高就裁一点，下次悬停自愈。
   const hoverHopKey = hoverCard ? `${hoverCard.hop.taskId}:${hoverCard.index}` : "";
   const hoverCardOpen = hoverCard != null;
+  // 世代号参与依赖：收卡先收窗后，"收窗途中重新悬停"的同一格需要重展
+  // （原生窗已被还原，卡还开着会被裁）——仅靠 hoverHopKey/hoverCardOpen 挡不住。
+  const hoverEpoch = hoverEpochRef.current;
   useLayoutEffect(() => {
     if (!hoverCard) return undefined;
     let cancelled = false;
@@ -929,19 +978,29 @@ function TasksWidgetWindow({
     lastExpandAtRef.current = Date.now();
     runWindowAction(async () => {
       let layout = null;
+      // 胶囊静置尺寸（含控制开合形态）：扩窗侧用它判"当前窗是不是胶囊态"，
+      // 只有胶囊态才刷新 restore 基准——条被拖走后旧基准会让窗跳回老位置。
+      const collapsedSize = miniOrientationRef.current === "vertical"
+        ? { width: 36, height: miniControlsOpen ? 376 : 224 }
+        : { width: miniControlsOpen ? 308 : 224, height: 36 };
       if (hoverCard.orientation === "horizontal") {
         layout = await expandTasksHoverHorizontal({
           cardHeight,
           gap: TASKS_HOPCARD_GAP,
           anchorTop: hoverCard.cellRect.top,
           anchorBottom: hoverCard.cellRect.bottom,
+          collapsedSize,
         });
       } else {
         layout = await expandTasksHover({
           width: 36 + TASKS_HOPCARD_WIDTH + TASKS_HOPCARD_GAP,
-          height: Math.max(miniControlsOpen ? 376 : 300, cardHeight),
+          // 高度按需长：静置高（224/376）与"卡高+上下余量"取大——典型卡
+          // ≤200px 时窗口纵向一毫米不动（static 锚定下 railOffsetY≡0，
+          // 竖条悬停只剩横向扩窗，钉边同步→零跨跳）；卡更高才纵向长。
+          height: Math.max(miniControlsOpen ? 376 : 224, cardHeight),
           anchorY: hoverCard.windowY,
           cardHeight,
+          collapsedSize,
         });
       }
       if (!cancelled && layout) {
@@ -952,7 +1011,7 @@ function TasksWidgetWindow({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hoverHopKey, hoverCardOpen]);
+  }, [hoverHopKey, hoverCardOpen, hoverEpoch]);
   // 胶囊形态切换/控制开合会重设原生窗几何：先收卡片再走它们的事务。
   useEffect(() => {
     if (!hoverCard) return undefined;
@@ -1154,9 +1213,14 @@ function TasksWidgetWindow({
           minHeight: 0,
           // 悬停详情卡扩窗：原生窗朝卡片对侧平移+扩宽，DOM 壳仍是折叠尺寸——
           // 不钉到扩窗对应缘上，整条胶囊随窗口平移（真机=悬停瞬间竖条跳到屏左、
-          // 横条向上蹿）。竖条侧弹朝左(=right)壳钉右缘，横条向上长(=above)壳钉底缘。
-          ...(miniVertical && hoverCard?.layout?.side === "right" ? { marginLeft: "auto" } : {}),
-          ...(!miniVertical && hoverCard?.layout?.side === "above" ? { marginTop: "auto" } : {}),
+          // 横条向上蹿）。竖条侧弹朝左(=right)壳钉右缘，横条向上长(=above)壳钉
+          // 底缘。定侧读 layout?.side ?? side：side 是悬停瞬间同步算好的预钉值，
+          // layout 是原生扩窗返回的权威值——等 layout 才钉=样式提交晚于窗口
+          // 扩宽，条先跳一拍再弹回（Leo 装机两轮实锤的跨跳根因）。
+          // nativeHoverExpand 关门：无原生伸缩的环境（预览/复现台）不钉边，
+          // 否则条被拽到窗缘（预览伪跳动已实锤：悬停 y 242→484）。
+          ...(miniVertical && nativeHoverExpand && (hoverCard?.layout?.side ?? hoverCard?.side) === "right" ? { marginLeft: "auto" } : {}),
+          ...(!miniVertical && nativeHoverExpand && (hoverCard?.layout?.side ?? hoverCard?.side) === "above" ? { marginTop: "auto" } : {}),
         }}
         onPointerEnter={() => {
           window.clearTimeout(miniLeaveTimerRef.current);
@@ -1167,9 +1231,10 @@ function TasksWidgetWindow({
         <div
           className={`tasks-mini${miniVertical ? " tasks-mini--vertical" : ""}`}
           style={
-            !miniVertical && hoverCard?.layout
+            !miniVertical && hoverCard
               ? // 横条窗口向上长高时内容顶锚会被整条抬走：卡在上方时锚到底边
-                { justifyContent: hoverCard.layout.side === "above" ? "flex-end" : undefined }
+                // （同壳钉边一个纪律：预钉 side 优先，layout 只做权威校正）
+                { justifyContent: nativeHoverExpand && (hoverCard.layout?.side ?? hoverCard.side) === "above" ? "flex-end" : undefined }
               : undefined
           }
           onPointerDown={(event) => {
@@ -1185,7 +1250,7 @@ function TasksWidgetWindow({
             roster.length > 0 ? (
               <div
                 ref={railWrapRef}
-                className={`tasks-mini-railwrap${(hoverCard?.layout?.side ?? hoverCard?.side) ? ` tasks-mini--hover-${hoverCard.layout?.side ?? hoverCard.side}` : ""}`}
+                className={`tasks-mini-railwrap${nativeHoverExpand && (hoverCard?.layout?.side ?? hoverCard?.side) ? ` tasks-mini--hover-${hoverCard.layout?.side ?? hoverCard.side}` : ""}`}
                 onPointerLeave={hideHopCard}
               >
                 <ChainFilmstrip
@@ -1231,7 +1296,10 @@ function TasksWidgetWindow({
                 index={cardIndex}
                 total={cardTotal}
                 records={rosterByHopTaskId.get(cardHop.taskId)?.records ?? null}
-                live={Boolean(rosterLive && rosterLive.hop.taskId === cardHop.taskId)}
+                // live=该星自己的运行态（花名册条目的 running），不是"全舰队的
+                // 第一个运行星"——多星同时跑时（真机：天玑+玉衡同跑），此前只有
+                // 星序靠前的拿到富卡，后面的运行星错拿收班卡=内容"不一致"。
+                live={Boolean(rosterByHopTaskId.get(cardHop.taskId)?.running)}
                 agentNameMap={agentNameMap}
                 currentTaskId={rosterCurrentTaskId}
                 translate={translateProgress}
@@ -2239,6 +2307,17 @@ function HopHoverCard({ hop, index, total, others, records, live, agentNameMap, 
       Number.isFinite(ms) && ms
         ? new Date(ms).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })
         : "—";
+    // 行文本：cron 回执的 summary 里混着纯空白字符（"\n"，truthy）——直接 ||
+    // 会被选中渲染成空白列（Leo 真机"内容列全空"），必须 trim 判空再回落。
+    const recordText = (r) => {
+      const found = [
+        r.terminalSummary,
+        r.status === "failed" && r.error ? sessionErrorText(r.error, translate) : "",
+        r.progressSummary,
+        r.title,
+      ].find((text) => typeof text === "string" && text.trim());
+      return (found ?? "—").trim().slice(0, 46);
+    };
     return (
       <div
         ref={rootRef}
@@ -2270,15 +2349,8 @@ function HopHoverCard({ hop, index, total, others, records, live, agentNameMap, 
               <div className="tasks-hopcard-kv" key={r.taskId}>
                 <b>{clockOf(r.startedAtMs)}</b>
                 <span>{formatCompactDuration(r.startedAtMs, r.endedAtMs) || "—"}</span>
-                <span
-                  className="tasks-hopcard-kv-txt"
-                  title={r.terminalSummary || r.title || ""}
-                >
-                  {(r.terminalSummary
-                    || (r.status === "failed" && r.error ? sessionErrorText(r.error, translate) : "")
-                    || r.progressSummary
-                    || r.title
-                    || "—").slice(0, 46)}
+                <span className="tasks-hopcard-kv-txt" title={recordText(r)}>
+                  {recordText(r)}
                 </span>
               </div>
             ))}
