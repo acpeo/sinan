@@ -692,7 +692,7 @@ type AuditActiveByAgent = HashMap<String, std::collections::HashSet<String>>;
 
 fn audit_active_by_agent(state: &AuditRunState) -> AuditActiveByAgent {
     let mut by_agent: AuditActiveByAgent = HashMap::new();
-    for ((agent, session), _) in &state.active {
+    for (agent, session) in state.active.keys() {
         by_agent
             .entry(agent.clone())
             .or_default()
@@ -707,9 +707,11 @@ fn audit_active_by_agent(state: &AuditRunState) -> AuditActiveByAgent {
 /// 旧集合在 AUDIT_STALE_MS 内继续沿用，超龄返回空（熄灯兜底）。
 fn pull_audit_active(client: &mut GatewayClient, label: &str) -> AuditActiveByAgent {
     let now_ms = chrono::Utc::now().timestamp_millis();
+    // 锁内只读写游标/快照，网络调用放锁外（持锁拉网会把并发快照串成一队）。
     let (after, last_ok_ms) = {
-        let Ok(mut guard) = AUDIT_RUN_STATE.lock() else {
-            return HashMap::new();
+        let mut guard = match AUDIT_RUN_STATE.lock() {
+            Ok(guard) => guard,
+            Err(_) => return AuditActiveByAgent::new(),
         };
         let state = guard.entry(label.to_owned()).or_default();
         if state.after == 0 {
@@ -720,17 +722,17 @@ fn pull_audit_active(client: &mut GatewayClient, label: &str) -> AuditActiveByAg
     let payload = match client.call("audit.list", json!({ "after": after, "limit": 500 })) {
         Ok(payload) => payload,
         Err(_) => {
-            // 失败窗口内沿用旧集合，超龄返回空（宁熄灯不冒充"在跑"）。
-            return if now_ms - last_ok_ms > AUDIT_STALE_MS {
-                HashMap::new()
-            } else {
-                let Ok(guard) = AUDIT_RUN_STATE.lock() else {
-                    return HashMap::new();
-                };
-                match guard.get(label) {
-                    Some(state) => audit_active_by_agent(state),
-                    None => HashMap::new(),
-                }
+            // 失败窗口内沿用旧集合，超龄返回空——宁可熄灯，不拿旧集合冒充"在跑"。
+            if now_ms - last_ok_ms > AUDIT_STALE_MS {
+                return AuditActiveByAgent::new();
+            }
+            let guard = match AUDIT_RUN_STATE.lock() {
+                Ok(guard) => guard,
+                Err(_) => return AuditActiveByAgent::new(),
+            };
+            return match guard.get(label) {
+                Some(state) => audit_active_by_agent(state),
+                None => AuditActiveByAgent::new(),
             };
         }
     };
@@ -739,8 +741,9 @@ fn pull_audit_active(client: &mut GatewayClient, label: &str) -> AuditActiveByAg
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let Ok(mut guard) = AUDIT_RUN_STATE.lock() else {
-        return HashMap::new();
+    let mut guard = match AUDIT_RUN_STATE.lock() {
+        Ok(guard) => guard,
+        Err(_) => return AuditActiveByAgent::new(),
     };
     let state = guard.entry(label.to_owned()).or_default();
     fold_audit_events(state, &events, now_ms);
