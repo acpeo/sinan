@@ -750,3 +750,38 @@ test("buildAgentRoster: 实时活跃融合与僵尸行判死（Leo 2026-10-07 �
   assert.equal(byId.get("tianshu").hop.taskId, "live:tianshu");
   assert.equal(byId.get("tianshu").hop.title, "");
 });
+
+test("buildAgentRoster: 快照覆盖到的星以快照为唯一真相——台账收行滞后 18 秒也不再亮（Leo 2026-10-07 二轮实锤）", () => {
+  const now = 1_700_000_000_000;
+  const dayStart = now - 8 * 3_600_000;
+  const roster = buildAgentRoster({
+    agents: ["tianshu"],
+    tasks: [],
+    runs: [
+      // 复刻 21:16 现场台账：running 行 25 秒前开始、last_seen 停在 14 秒前
+      // （回复已到、收行要等会话再次现身）——快照覆盖到天枢且全空闲。
+      { id: 7, agentId: "tianshu", status: "running", startedAtMs: now - 25_000, lastSeenMs: now - 14_000, title: "群派活" },
+    ],
+    dayStartMs: dayStart,
+    order: ["tianshu"],
+    nowMs: now,
+    staleMs: 120_000,
+    liveActiveAgentIds: new Set(),
+    snapshotAgentIds: new Set(["tianshu"]),
+  });
+  assert.equal(roster[0].running, null);
+  assert.equal(roster[0].tone, "done");
+  // 对照组：快照没覆盖的星（纯 cron 场景/快照整体失败）同款行保持 ●。
+  const roster2 = buildAgentRoster({
+    agents: ["tianquan"],
+    tasks: [],
+    runs: [{ id: 8, agentId: "tianquan", status: "running", startedAtMs: now - 30_000, lastSeenMs: now - 3_000 }],
+    dayStartMs: dayStart,
+    order: ["tianquan"],
+    nowMs: now,
+    staleMs: 120_000,
+    liveActiveAgentIds: new Set(),
+    snapshotAgentIds: new Set(),
+  });
+  assert.equal(roster2[0].tone, "current");
+});

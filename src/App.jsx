@@ -672,7 +672,9 @@ function useWidgetTasksFeed(gateways, enabled) {
     if (!enabled) return undefined;
     let alive = true;
     const tick = async () => {
-      if (!PREVIEW_EAGER && document.visibilityState === "hidden") return;
+      // 可见性闸只管浏览器（后台标签别空转）；Tauri 小组件窗绝不跳拍——
+      // 跳过的每一拍都是灯牌数据冻结的一拍（Leo 实锤"胶囊比主窗慢"）。
+      if (!isTauriRuntime() && !PREVIEW_EAGER && document.visibilityState === "hidden") return;
       const current = loadGatewayConfig();
       // 不因"没配网关"整体早退：浏览器演示数据与 Tauri 本地账本（首启搬迁的
       // 旧台账）都不需要网关在线就能读——主窗 tick 同款口径，早退闸曾让
@@ -1067,12 +1069,20 @@ function TasksWidgetWindow({
   // （rest 灯语，新增）。链路明细收进悬停星卡（按星聚合今夜全部跳）；
   // +N 角标退役（花名册本就全量上屏，不存在"其余工作"）。
   // 实时活跃融合（Leo 2026-10-07 实锤"胶囊比星位上下文慢"）：灯牌的 running
-  // 判定与主窗星位上下文同源——agents 快照里 hasActiveRun 的星立即亮 ●，
-  // 台账 run 行只兜 cron 路径与新鲜度；回复一到、卡片熄灯的同一拍胶囊也熄。
+  // 判定与主窗星位上下文同源——agents 快照里 hasActiveRun 的星立即亮 ●；
+  // 快照覆盖到的星一律听快照的（台账收行能晚 18 秒+，台账优先=熄灯延迟），
+  // 台账只兜快照没覆盖的星（纯 cron/快照失败）。
   const liveActiveAgentIds = useMemo(() => {
     const ids = new Set();
     for (const session of feed.agents?.sessions ?? []) {
       if (session?.hasActiveRun && session.agentId) ids.add(session.agentId);
+    }
+    return ids;
+  }, [feed.agents]);
+  const snapshotAgentIds = useMemo(() => {
+    const ids = new Set();
+    for (const session of feed.agents?.sessions ?? []) {
+      if (session?.agentId) ids.add(session.agentId);
     }
     return ids;
   }, [feed.agents]);
@@ -1089,6 +1099,7 @@ function TasksWidgetWindow({
     })(),
     order: ROSTER_STAR_ORDER,
     liveActiveAgentIds,
+    snapshotAgentIds,
     staleMs,
   });
   // 灯牌单元格 = 花名册条目；运行中星的 taskId 作当前跳（呼吸居中锚点）。
@@ -2434,7 +2445,11 @@ function HopHoverCard({ hop, index, total, others, records, live, nextRun, agent
   // 结论），空闲=一句"今夜无活动"。records 为 null 时走旧单跳卡（防御兜底）。──
   if (records != null) {
     const runningLive = live && (hop.status === "running" || hop.status === "queued");
-    const endedRecords = records.filter((r) => r.status !== "running" && r.status !== "queued");
+    // 收班跳列表按开始时间新→旧（Leo 2026-10-07 截图：按结束时间排会出现
+    // 20:16→20:17→20:17→20:15 的乱序观感）。
+    const endedRecords = records
+      .filter((r) => r.status !== "running" && r.status !== "queued")
+      .sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0));
     const clockOf = (ms) =>
       Number.isFinite(ms) && ms
         ? new Date(ms).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })

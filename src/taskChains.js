@@ -791,6 +791,7 @@ export function buildAgentRoster({
   nowMs = Date.now(),
   staleMs = 0,
   liveActiveAgentIds = new Set(),
+  snapshotAgentIds = new Set(),
 }) {
   // agent id 归一：agents.list 的全 id（VPS-北斗:tianshu）与账本的短 id（tianshu）
   // 是同一颗星——不归一花名册就同星双格（真机实锤），口径与 buildAgentNameMap
@@ -863,12 +864,15 @@ export function buildAgentRoster({
     const records = (recordsByAgent.get(agentId) ?? []).sort(
       (a, b) => (b.endedAtMs ?? b.startedAtMs ?? 0) - (a.endedAtMs ?? a.startedAtMs ?? 0),
     );
-    // running 判定（Leo 2026-10-07 实锤"胶囊比星位上下文慢"+ 疑似僵尸行常亮）：
-    // ①实时优先——agents 快照 hasActiveRun 的星（与主窗星位上下文同源同拍）
-    //   立即 ●；台账还没落行就把最近一跳提升为 running，没跳则合成"已接收"。
-    // ②台账行要新鲜——running/queued 行的 last_seen 超过 stale 阈值即视为
-    //   僵尸（tasks.list 时代的旧行永不更新，会永远闪），不参与亮灯。
-    //   cron 类会话若不在 sessions.list 里，靠这半边保持 ●。
+    // running 判定（Leo 2026-10-07 两轮实锤"回复到了卡片熄灯胶囊还闪"）：
+    // ①实时快照是唯一真相——agents 快照 hasActiveRun 的星立即 ●；快照覆盖到
+    //   的星（sessions.list 里有它的会话，哪怕全空闲）一律听快照的：台账
+    //   running 行的收行依赖会话再次现身，实测能晚 18 秒+，台账优先就会
+    //   "卡片熄了胶囊还亮"（3849a69 把台账放前面=方向反了，本轮翻转）。
+    // ②快照没覆盖的星（纯 cron 场景/快照整体失败）才回落台账行，且要新鲜
+    //   （last_seen 超 stale 阈值判死——tasks.list 时代僵尸行永不更新）。
+    // ③快照说在跑、台账还没落行（落行与快照同拍，缝隙兜底）：不把旧收班跳
+    //   硬提升成 running（已跑会从旧起点起算），合成"已接收"跳，起点=现在。
     const freshRunning = (record) => {
       if (!Number.isFinite(staleMs) || staleMs <= 0) return true;
       const seen = record.lastSeenMs ?? record.endedAtMs ?? record.startedAtMs ?? 0;
@@ -879,17 +883,14 @@ export function buildAgentRoster({
       records.find((r) => (r.status === "running" || r.status === "queued") && freshRunning(r)) ??
       null;
     const liveActive = liveActiveAgentIds.has(agentId);
-    const running =
-      ledgerRunning ??
-      (liveActive
-        ? records[0] &&
-          (records[0].status === "running" || records[0].status === "queued") &&
-          freshRunning(records[0])
+    const snapshotCovers = snapshotAgentIds.has(agentId);
+    const running = liveActive
+      ? ledgerRunning ??
+        (records[0] &&
+        (records[0].status === "running" || records[0].status === "queued") &&
+        freshRunning(records[0])
           ? records[0]
-          : // 快照说在跑、台账还没落行（落行与快照同拍，这是缝隙兜底）：
-            // 不把旧收班跳硬提升成 running（已跑会从旧起点起算），
-            // 合成"已接收"跳，标题沿用最近一跳原话，起点=现在。
-            {
+          : {
               taskId: `live:${agentId}`,
               agentId,
               status: "running",
@@ -901,17 +902,15 @@ export function buildAgentRoster({
               error: null,
               terminalSummary: null,
               sub: false,
-            }
-        : null);
-    // 呈现层兜底：僵尸 running 行（stale 判死又没被快照确认）按收班呈现、
-    // 绝不呼吸——hopToneOf 对 running 状态恒给 current 灯色，不降级就永远闪
-    // （Leo 实锤"回复都收到了胶囊还在闪"的病灶之一）。
+            })
+      : !snapshotCovers
+        ? ledgerRunning
+        : null;
+    // 呈现层兜底：没被选为 running 的 running/queued 行（僵尸判死的、或
+    // 快照覆盖到但已空闲的——台账收行滞后窗口）一律按收班呈现、绝不呼吸——
+    // hopToneOf 对 running 状态恒给 current 灯色，不降级就还闪。
     const presentable = (record) => {
-      if (
-        (record.status === "running" || record.status === "queued") &&
-        !freshRunning(record) &&
-        running?.taskId !== record.taskId
-      ) {
+      if ((record.status === "running" || record.status === "queued") && running?.taskId !== record.taskId) {
         return { ...record, status: "succeeded" };
       }
       return record;
