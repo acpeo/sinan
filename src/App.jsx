@@ -856,6 +856,8 @@ function TasksWidgetWindow({
   // 按下状态：内容拖拽滚动进行中——悬停卡停发（showHopCard 看
   // 它 + event.buttons），拖拽期弹卡会跟滚动拉扯。
   const pointerDownRef = useRef(false);
+  // 壳层挪窗手势：按下起点 + 是否落在星格/胶卷上（内容拖拽滚动优先）。
+  const shellDragRef = useRef(null);
   // 兜底：OS 拖拽的模态循环可能吞掉 pointerup，窗级捕获补一刀。
   useEffect(() => {
     const clear = () => {
@@ -1294,20 +1296,37 @@ function TasksWidgetWindow({
           className={`tasks-mini${miniVertical ? " tasks-mini--vertical" : ""}`}
           onPointerDown={(event) => {
             if (event.button !== 0 || event.target.closest("button")) return;
-            // 条上按下=内容拖拽滚动或点击展开面板的手势；悬停卡在按下时
-            // 即收（伴随窗由布局 effect 随 hopCardOpen 翻 false 隐藏）。
+            // 按下即收卡（伴随窗随 hopCardOpen 翻 false 隐藏）；拖拽期悬停卡停发。
             pointerDownRef.current = true;
             if (hoverCardRef.current) setHoverCard(null);
+            // 挪窗手势回归（Leo 2026-10-07 实锤"没有一个位置可以拖动"）：
+            // 壳上按下、移动超阈值才启动 OS 拖拽——b23d4b6 拆除的前提已消失
+            // （悬停卡搬进伴随窗，胶囊本体零程序化挪窗，跟手模态循环没有对手）。
+            // 星格/胶卷上按下优先内容拖拽滚动（4px 即认领并打 stripDragging
+            // 标记，先于壳层 8px 阈值），OS 拖拽不抢；点按不超阈值=点击展开。
+            shellDragRef.current = {
+              x: event.clientX,
+              y: event.clientY,
+              onStrip: Boolean(event.target.closest(".tasks-mini-strip")),
+            };
           }}
           onPointerMove={(event) => {
             // OS 拖拽的模态循环可能吞掉 pointerup——首个无按键的 move 视为已松开
             if (pointerDownRef.current && (event.buttons ?? 0) === 0) pointerDownRef.current = false;
+            const drag = shellDragRef.current;
+            if (!drag || (event.buttons ?? 0) !== 1) return;
+            if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
+            if (drag.onStrip && event.target.closest(".tasks-mini-strip")?.dataset.stripDragging) return;
+            shellDragRef.current = null;
+            startWindowDragging();
           }}
           onPointerUp={() => {
             pointerDownRef.current = false;
+            shellDragRef.current = null;
           }}
           onPointerCancel={() => {
             pointerDownRef.current = false;
+            shellDragRef.current = null;
           }}
         >
           {miniVertical ? (
@@ -2267,6 +2286,8 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
     const dy = event.clientY - drag.startY;
     if (!drag.moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
     drag.moved = true;
+    // 手势标记：壳层据此判"这条拖拽已被内容滚动认领"，不再启动 OS 挪窗。
+    event.currentTarget.dataset.stripDragging = "1";
     const target = event.currentTarget;
     if (vertical) target.scrollTop = drag.scrollTop - dy;
     else target.scrollLeft = drag.scrollLeft - dx;
@@ -2275,6 +2296,7 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
     const drag = dragRef.current;
     if (!drag || event.pointerId !== drag.pointerId) return;
     dragRef.current = null;
+    delete event.currentTarget.dataset.stripDragging;
     if (!drag.moved) return;
     const target = event.currentTarget;
     const swallow = (e) => {

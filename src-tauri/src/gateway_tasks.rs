@@ -29,7 +29,9 @@ use rusqlite::params_from_iter;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::Message;
@@ -598,12 +600,96 @@ pub struct SessionUsage {
     pub last_run_error: Option<String>,
 }
 
+/// 会话活跃的审计增量记忆（按网关 label 归档）：sessions.list 的
+/// hasActiveRun 对群聊 run 大部分时间为 false（实测 29 分钟的 run 只在最后
+/// 几秒翻 true），灯牌/星位上下文的"在跑"改吃网关审计事件
+/// （agent.run.started/finished，毫秒级、带 agentId）：每拍增量拉
+/// （after 游标，通常 0 行），按星折叠出"活跃集合"。
+static AUDIT_RUN_STATE: std::sync::LazyLock<Mutex<HashMap<String, AuditRunState>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Default)]
+struct AuditRunState {
+    /// 下次增量拉的起点（最近一条事件的 occurredAt）。
+    after: i64,
+    /// 活跃星：agentId -> 最近一次 started 事件的 occurredAt。
+    active: HashMap<String, i64>,
+}
+
+/// started 之后 2 小时仍无 finished 就不再视为活跃（finished 丢失/网关重启
+/// 的兜底；正常路径 finished 即刻移除）。
+const AUDIT_RUN_TTL_MS: i64 = 2 * 3_600_000;
+/// 首次拉取的回看窗宽（覆盖最长的 run；之后走增量游标）。
+const AUDIT_FIRST_WINDOW_MS: i64 = 2 * 3_600_000;
+
+fn fold_audit_events(state: &mut AuditRunState, events: &[Value], now_ms: i64) {
+    for event in events {
+        let Some(action) = event.get("action").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(agent_id) = event.get("agentId").and_then(Value::as_str) else {
+            continue;
+        };
+        if agent_id.is_empty() {
+            continue;
+        }
+        let occurred = event.get("occurredAt").and_then(Value::as_i64).unwrap_or(0);
+        if occurred > state.after {
+            state.after = occurred;
+        }
+        match action {
+            "agent.run.started" => {
+                state.active.insert(agent_id.to_owned(), occurred);
+            }
+            "agent.run.finished" => {
+                state.active.remove(agent_id);
+            }
+            _ => {}
+        }
+    }
+    state
+        .active
+        .retain(|_, started| now_ms - *started <= AUDIT_RUN_TTL_MS);
+}
+
+/// 增量拉审计事件并折叠出当前活跃星。audit.list 失败不拖垮快照——
+/// 沿用上一次的活跃集合（TTL 会兜底）。
+fn pull_audit_active(client: &mut GatewayClient, label: &str) -> std::collections::HashSet<String> {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let Ok(mut guard) = AUDIT_RUN_STATE.lock() else {
+        return std::collections::HashSet::new();
+    };
+    let state = guard.entry(label.to_owned()).or_default();
+    if state.after == 0 {
+        state.after = now_ms - AUDIT_FIRST_WINDOW_MS;
+    }
+    let Ok(payload) = client.call(
+        "audit.list",
+        json!({ "after": state.after, "limit": 500 }),
+    ) else {
+        return state.active.keys().cloned().collect();
+    };
+    let events = payload
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    fold_audit_events(state, &events, now_ms);
+    state.active.keys().cloned().collect()
+}
+
 /// 拉 Agent 活动快照。
 /// 主数据源 = sessions.list（实测返回每个会话的 key/status/hasActiveRun/
 /// updatedAt/tokens，key 形如 agent:<agentId>[:subagent:<uuid>]）；辅以
 /// agents.list 补全 Agent 显示名。会话按 agentId 前缀归集成各 Agent 活动卡。
 /// 传入 connection 时顺带把会话 run 增量记入本地台账（群聊派活的数据源）；
 /// connection 传 None 仅拉快照（测试/无账本场景）。
+///
+/// 活跃修正（Leo 2026-10-07 实锤"29 分钟的 run 快照只在最后几秒看到"）：
+/// sessions.list 的 hasActiveRun 对群聊 run 不可靠——run 的真实生命周期在
+/// 网关审计事件里（agent.run.started/finished，毫秒级、带 agentId）。这里
+/// 每拍增量拉（after 游标，通常 0 行）维护"活跃星表"，把 audit 说活跃的星
+/// OR 回 has_active_run——星位上下文与迷你胶囊同吃这份数据。
 pub fn fetch_agents_snapshot(
     target: &GatewayTarget,
     connection: Option<&Connection>,
@@ -615,6 +701,7 @@ pub fn fetch_agents_snapshot(
     };
     let identity = load_or_create_identity(&identity_dir)?;
     let mut client = GatewayClient::connect(target, &identity)?;
+    let audit_active = pull_audit_active(&mut client, &target.label);
 
     let sessions_payload = client.call("sessions.list", json!({}))?;
     let agents_payload = client.call("agents.list", json!({}))?;
@@ -673,7 +760,8 @@ pub fn fetch_agents_snapshot(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let status_running = session.get("status").and_then(Value::as_str) == Some("running");
-            if has_active_run || status_running {
+            let audit_active = audit_active.contains(agent_id);
+            if has_active_run || status_running || audit_active {
                 agent.running_tasks += 1;
                 agent.active = true;
             }
@@ -711,7 +799,7 @@ pub fn fetch_agents_snapshot(
                 should_compact: budget
                     .and_then(|b| b.get("shouldCompact"))
                     .and_then(Value::as_bool),
-                has_active_run: has_active_run || status_running,
+                has_active_run: has_active_run || status_running || audit_active,
                 status: session
                     .get("status")
                     .and_then(Value::as_str)
@@ -2498,6 +2586,32 @@ mod tests {
         assert_eq!(normalize_cron_run_status("running"), "running");
         // 未知口径原样透传，前端分诊兜底
         assert_eq!(normalize_cron_run_status("held"), "held");
+    }
+
+    #[test]
+    fn audit_events_fold_tracks_started_finished_and_ttl() {
+        let now = 1_700_000_000_000i64;
+        let mut state = AuditRunState::default();
+        fold_audit_events(
+            &mut state,
+            &[
+                json!({"action": "agent.run.started", "agentId": "tianshu", "occurredAt": now - 60_000}),
+                json!({"action": "agent.run.started", "agentId": "tianji", "occurredAt": now - 3 * 3_600_000}),
+                json!({"action": "agent.run.finished", "agentId": "tianshu", "occurredAt": now - 30_000}),
+            ],
+            now,
+        );
+        // finished 即刻移除；started 之后 2 小时无 finished 被 TTL 兜底清掉。
+        assert!(!state.active.contains_key("tianshu"));
+        assert!(!state.active.contains_key("tianji"));
+        assert_eq!(state.after, now - 30_000);
+        // 新鲜 started 保留为活跃（灯牌/卡片的 ● 数据源）。
+        fold_audit_events(
+            &mut state,
+            &[json!({"action": "agent.run.started", "agentId": "yuheng", "occurredAt": now - 5_000})],
+            now,
+        );
+        assert_eq!(state.active.get("yuheng"), Some(&(now - 5_000)));
     }
 
     #[test]
