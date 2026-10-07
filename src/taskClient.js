@@ -269,6 +269,7 @@ export async function loadCronJobs() {
         {
           id: "cron-demo-patrol",
           gateway: "vps",
+          agentId: "tianji",
           name: "北斗巡检-OpenAI安全黑洞任务",
           description: "每日巡检 OpenAI 安全动态并汇报北斗矩阵群",
           enabled: true,
@@ -280,6 +281,7 @@ export async function loadCronJobs() {
         {
           id: "cron-demo-heartbeat",
           gateway: "vps",
+          agentId: "tianshu",
           name: "heartbeat-tianshu",
           description: "天枢心跳保活",
           enabled: true,

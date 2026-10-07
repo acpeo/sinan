@@ -6,7 +6,7 @@ import {
   edgeDockHiddenPosition,
   floatingViewportSize,
   horizontalStripTargetWidth,
-  horizontalTasksHoverLayout,
+  hopCardWindowPlacement,
   isDockAnchorPosition,
   isDockGeometryCurrent,
   isStableFloatingMode,
@@ -357,56 +357,101 @@ test("desync heal retry cadence tolerates invalid attempt counters", () => {
   assert.equal(desyncHealRetryDelayMs(2.8), 600);
 });
 
-test("horizontal strip hover grows downward and keeps the card gap below the strip", () => {
-  // 条 224×36 @ (100,500)，长高 6+168=174：下方放得下 → 优先向下长（2026-10-07
-  // 改：窗口顶角不动=条零闪动；旧"向上长"要上挪 growHeight，WebView 重排滞后
-  // 一帧=条闪），x 不动，卡片与条同宽通栏（cardLeft=0）。卡顶贴条底（隔 gap）。
+test("hop card companion window pops right of the rail, centered on the hovered cell", () => {
+  // 竖条右缘 1608，右侧富余 → 卡窗贴条右缘 + gap，纵向对格中心（承载窗
+  // 460 高垂直居中内容盒）。胶囊窗本体零 resize——这只是"别人家的窗"。
   assert.deepEqual(
-    horizontalTasksHoverLayout({
-      stripPosition: { x: 100, y: 500 },
-      stripSize: { width: 224, height: 36 },
-      workArea: { x: 0, y: 0, width: 1920, height: 1040 },
-      growHeight: 174,
-      anchorTop: 500,
-      anchorBottom: 536,
+    hopCardWindowPlacement({
+      orientation: "vertical",
+      railLeft: 1572,
+      railRight: 1608,
+      cellCenterY: 300,
+      cardWidth: 224,
+      cardHeight: 460,
       gap: 6,
-      cardHeight: 168,
+      workArea: { x: 0, y: 0, width: 2048, height: 1104 },
     }),
-    { side: "below", y: 500, cardTop: 542, cardLeft: 0 },
+    { side: "left", x: 1614, y: 70 },
   );
 });
 
-test("horizontal strip hover prefers below (window top fixed) whenever it fits", () => {
-  // 条贴着工作区顶（y=0）：下方放得下 → 优先向下长（窗口顶角不动=零闪动），
-  // 卡贴格子下缘 + 间距
+test("hop card companion window falls back to the rail's left when the right edge is tight", () => {
+  // 条右缘距工作区右缘不足（2048-1600=448 < 224+6+8=238? 富余够——这里给
+  // 右缘 2000 只剩 48）：退朝左弹，x = 条左缘 - gap - 卡宽。
   assert.deepEqual(
-    horizontalTasksHoverLayout({
-      stripPosition: { x: 100, y: 0 },
-      stripSize: { width: 224, height: 36 },
-      workArea: { x: 0, y: 0, width: 1920, height: 1040 },
-      growHeight: 174,
-      anchorTop: 0,
-      anchorBottom: 36,
+    hopCardWindowPlacement({
+      orientation: "vertical",
+      railLeft: 1572,
+      railRight: 2000,
+      cellCenterY: 300,
+      cardWidth: 224,
+      cardHeight: 460,
       gap: 6,
-      cardHeight: 168,
+      workArea: { x: 0, y: 0, width: 2048, height: 1104 },
     }),
-    { side: "below", y: 0, cardTop: 42, cardLeft: 0 },
+    { side: "right", x: 1342, y: 70 },
   );
 });
 
-test("horizontal strip hover returns null when neither side fits", () => {
-  // 工作区高 120，条在 y=60：向上差 114、向下差 90 → 不扩窗不出卡
+test("hop card companion window clamps vertically inside the work area", () => {
+  // 格中心距顶 100 → 窗上缘钳到 workTop+8；距底同理钳下缘。
+  assert.deepEqual(
+    hopCardWindowPlacement({
+      orientation: "vertical",
+      railLeft: 100,
+      railRight: 136,
+      cellCenterY: 100,
+      cardWidth: 224,
+      cardHeight: 460,
+      gap: 6,
+      workArea: { x: 0, y: 0, width: 2048, height: 1104 },
+    }).y,
+    8,
+  );
   assert.equal(
-    horizontalTasksHoverLayout({
-      stripPosition: { x: 100, y: 60 },
-      stripSize: { width: 224, height: 36 },
-      workArea: { x: 0, y: 0, width: 1920, height: 120 },
-      growHeight: 174,
-      anchorTop: 60,
-      anchorBottom: 96,
+    hopCardWindowPlacement({
+      orientation: "vertical",
+      railLeft: 100,
+      railRight: 136,
+      cellCenterY: 1050,
+      cardWidth: 224,
+      cardHeight: 460,
       gap: 6,
-      cardHeight: 168,
-    }),
-    null,
+      workArea: { x: 0, y: 0, width: 2048, height: 1104 },
+    }).y,
+    1104 - 460 - 8,
   );
+});
+
+test("hop card companion window sits below the horizontal strip at exact gap", () => {
+  // 横条壳底 536 → 窗顶=壳底+6（盒顶对齐贴条缘，估计偏小由富余兜住）。
+  assert.deepEqual(
+    hopCardWindowPlacement({
+      orientation: "horizontal",
+      shellTop: 500,
+      shellBottom: 536,
+      cellCenterX: 600,
+      cardWidth: 224,
+      cardHeight: 240,
+      gap: 6,
+      workArea: { x: 0, y: 0, width: 2048, height: 1104 },
+    }),
+    { side: "below", x: 488, y: 542 },
+  );
+});
+
+test("hop card companion window flips above the horizontal strip when the bottom is tight", () => {
+  // 壳底距工作区底不足 → 朝上，窗底=壳顶-gap（盒底对齐贴条缘）。
+  const placement = hopCardWindowPlacement({
+    orientation: "horizontal",
+    shellTop: 1060,
+    shellBottom: 1096,
+    cellCenterX: 600,
+    cardWidth: 224,
+    cardHeight: 240,
+    gap: 6,
+    workArea: { x: 0, y: 0, width: 2048, height: 1104 },
+  });
+  assert.equal(placement.side, "above");
+  assert.equal(placement.y, 1060 - 6 - 240);
 });

@@ -18,7 +18,6 @@ import {
   isStableFloatingMode,
   monitorForWindowPosition,
   physicalWindowSize,
-  horizontalTasksHoverLayout,
   verticalStripHoverLocalLayout,
   verticalStripHoverLayout,
   viewportCorrectedPhysicalSize,
@@ -705,9 +704,6 @@ async function startPositionMemory(getMode) {
     window.clearTimeout(timer);
     timer = window.setTimeout(() => {
       if (!positionMemoAllowed(getMode(), Boolean(stripHoverRestore))) return;
-      // 任务小组件悬停扩窗在途时不记位：窗口左上角此刻是"透明承载区"的，
-      // 不是用户摆放的条——记了下次开机条就落在老位置（跨跳残留）。
-      if (mode === "tasks-widget" && isTasksHoverExpanded()) return;
       rememberWindowPosition(api, appWindow, mode).catch(() => {});
     }, 400);
   });
@@ -1190,187 +1186,61 @@ async function collapseVerticalStripHover() {
   rememberStripSize(restore.width, restore.height);
 }
 
-/// 任务小组件竖条悬停详情卡：临时扩宽原生窗（卡片浮在胶卷靠屏幕中心一侧），
-/// 移开还原。与胶囊条 expandVerticalStripHover 共用同一几何 helper，但不读
-/// 条身缩放（任务窗不参与 stripScale）、不写条身尺寸缓存——那是另一个窗的记忆。
-let tasksHoverRestore = null;
+/// 悬停星卡伴随窗事件：载荷领取信号 / 实测内容高回传。
+const HOP_CARD_POLL = "hopcard://poll";
+const HOP_CARD_HEIGHT_EVENT = "hopcard://height";
 
-/// 位置+尺寸一次原子落（后端单次 SetWindowPos，同帧生效）。setSize、setPosition
-/// 拆两笔 IPC 时，Windows 改尺寸锚死左上角——中间帧条停在旧位新尺寸，CSS 钉边
-/// 跟着错位再归位=弹窗瞬间整条抖动（Leo 实锤）。旧后端没有命令时回退两笔。
-async function setWindowBoundsAtomic(appWindow, api, x, y, size) {
-  try {
-    await invoke("set_window_bounds", {
-      x: Math.round(x),
-      y: Math.round(y),
-      width: size.width,
-      height: size.height,
-    });
-  } catch {
-    await appWindow.setSize(size).catch(() => {});
-    await appWindow
-      .setPosition(new api.PhysicalPosition(Math.round(x), Math.round(y)))
-      .catch(() => {});
-  }
-}
+let hopCardProbePromise = null;
 
-/// 悬停扩窗是否在途（restore 非空 = 已扩或正在收）。位置记忆用它拒记
-/// 扩窗态的左上角——那是承载卡的透明区，不是条的摆放位置。
-function isTasksHoverExpanded() {
-  return tasksHoverRestore != null;
-}
-
-/// 悬停扩窗依赖的原生窗体操作是否真的可用：真机 Tauri 返回 true；浏览器
-/// 预览与复现台（__TAURI_INTERNALS__ 桩）几何读数拿不到有限数值，返回
-/// false——钉边样式据此关闭。钉边只为补偿原生窗伸缩，没有伸缩的环境里
-/// apply 钉边=把条从居中位拽到窗缘（预览伪跳动，Leo 实测"还是跳"）。
+/// 卡窗命令面可用性：真机 Tauri=true；浏览器预览/复现台（invoke 桩没有
+/// 这些命令）回 false → 悬停卡走窗内 Portal 预览路径。结果记忆只探一次。
 /// （不写内联 export：windowClient.test.js 按脚本文本在 vm 里跑本文件，
 /// 内联 export 会炸语法；统一走底部 export 块。）
-async function probeNativeWindowOps() {
-  if (!isWindowsPlatform()) return false;
-  const api = await windowApi();
-  if (!api) return false;
-  const position = await api
-    .getCurrentWindow()
-    .outerPosition()
-    .catch(() => null);
-  return position != null && Number.isFinite(position.x) && Number.isFinite(position.y);
-}
-
-/// restore 基准保鲜：首捕获无条件收（几何读失败也比没有强，否则扩窗直接
-/// 放弃、钉边悬空）；此后只在"当前窗就是胶囊态"时刷新——卡开着重复展开
-/// （当前=扩窗态，尺寸不符）绝不覆盖，否则透明承载区会被当成条身。
-function captureTasksHoverRestore(position, size, collapsedSize, scale) {
-  if (!tasksHoverRestore) {
-    tasksHoverRestore = { position, size };
-    return;
+function probeHopCardWindow() {
+  if (!hopCardProbePromise) {
+    hopCardProbePromise = isDesktop()
+      ? invoke("hop_card_ping").then(() => true).catch(() => false)
+      : Promise.resolve(false);
   }
-  if (!collapsedSize) return;
-  const expectedWidth = Math.round(collapsedSize.width * scale);
-  const expectedHeight = Math.round(collapsedSize.height * scale);
-  const capsuleNow =
-    Math.abs(size.width - expectedWidth) <= 2 && Math.abs(size.height - expectedHeight) <= 2;
-  if (capsuleNow) tasksHoverRestore = { position, size };
+  return hopCardProbePromise;
 }
 
-async function expandTasksHover({ width, height, anchorY, cardHeight, collapsedSize }) {
-  if (!isWindowsPlatform()) return null;
-  const api = await windowApi();
-  if (!api) return null;
-  const appWindow = api.getCurrentWindow();
-  const [position, size, monitor, factor] = await Promise.all([
-    appWindow.outerPosition().catch(() => null),
-    appWindow.outerSize().catch(() => null),
-    api.currentMonitor().catch(() => null),
-    appWindow.scaleFactor().catch(() => 1),
-  ]);
-  const workArea = monitor?.workArea;
-  if (!size || !position || !workArea) return null;
-  const scale = Number.isFinite(factor) && factor > 0 ? factor : 1;
-  captureTasksHoverRestore(position, size, collapsedSize, scale);
-  if (!tasksHoverRestore) return null;
-  const base = tasksHoverRestore;
-  const physical = await scaledPhysicalSize(api, appWindow, width, height, 1, scale);
-  const layout = verticalStripHoverLayout({
-    railPosition: base.position,
-    railSize: base.size,
-    workArea: {
-      x: workArea.position.x,
-      y: workArea.position.y,
-      width: workArea.size.width,
-      height: workArea.size.height,
-    },
-    targetSize: physical,
-    anchorY: anchorY * scale,
-    cardHeight: cardHeight * scale,
-    margin: 8 * scale,
-    // 静态锚定：窗口纵向不动（除非下缘出工作区），胶卷零纵向位移——
-    // 跨跳根治的纵向半边；railOffsetY 仅在被迫上收时非零，此时整组
-    // （胶卷+卡）随窗上移、尾部仍对格，不做二次补偿（补偿会让卡尾脱格）。
-    anchorMotion: "static",
-  });
-  if (!layout) return null;
-  // 位置+尺寸一次原子落（两笔 IPC 的中间帧=弹窗瞬间抖动的根源）。
-  await setWindowBoundsAtomic(appWindow, api, layout.x, layout.y, physical);
-  return {
-    side: layout.side,
-    cardCenterY: layout.cardCenter / scale,
-    railOffsetY: layout.railOffsetY / scale,
-  };
+/// 开卡：定位+定尺寸+载荷一并交给 Rust——隐藏态改几何零伪影，卡窗画完
+/// 一帧回 hop_card_ready 才显形。x/y 为逻辑屏幕坐标（hopCardWindowPlacement
+/// 算好）；width=卡宽，height=承载窗高（竖条固定 460，横条=估计盒高+富余）。
+async function showHopCardWindow({ x, y, width, height, payload }) {
+  await invoke("show_hop_card", { x, y, width, height, payload });
 }
 
-async function collapseTasksHover() {
-  if (!isWindowsPlatform() || !tasksHoverRestore) return;
-  const restore = tasksHoverRestore;
-  tasksHoverRestore = null;
-  const api = await windowApi();
-  if (!api) return;
-  const appWindow = api.getCurrentWindow();
-  // 收窗同样原子落：扩窗的逆操作拆两笔=收起瞬间同款抖动。
-  await setWindowBoundsAtomic(
-    appWindow,
-    api,
-    restore.position?.x ?? 0,
-    restore.position?.y ?? 0,
-    restore.size,
-  );
+function hideHopCardWindow() {
+  return invoke("hide_hop_card").catch(() => {});
 }
 
-/// 任务小组件横条悬停详情卡：窗口向上长高放卡（上方放不下改向下），x 不动
-/// （卡片与条同宽通栏，横向挪窗会把贴屏边缘的条搬离光标）。与竖条共用
-/// tasksHoverRestore（同一窗同一时刻只有一张卡），数据变化重测卡高后重复
-/// 展开以 restore 为基准重算，不会滚雪球。返回卡片在新视口里的逻辑坐标
-/// （cardTop/cardLeft），预览（非 Windows）返回 null。
-async function expandTasksHoverHorizontal({ cardHeight, gap, anchorTop, anchorBottom, collapsedSize }) {
-  if (!isWindowsPlatform()) return null;
-  const api = await windowApi();
-  if (!api) return null;
-  const appWindow = api.getCurrentWindow();
-  const [position, size, monitor, factor] = await Promise.all([
-    appWindow.outerPosition().catch(() => null),
-    appWindow.outerSize().catch(() => null),
-    api.currentMonitor().catch(() => null),
-    appWindow.scaleFactor().catch(() => 1),
-  ]);
-  const workArea = monitor?.workArea;
-  if (!size || !position || !workArea) return null;
-  const scale = Number.isFinite(factor) && factor > 0 ? factor : 1;
-  captureTasksHoverRestore(position, size, collapsedSize, scale);
-  if (!tasksHoverRestore) return null;
-  const base = tasksHoverRestore;
-  const growHeight = Math.round((cardHeight + gap) * scale);
-  const layout = horizontalTasksHoverLayout({
-    stripPosition: base.position,
-    stripSize: base.size,
-    workArea: {
-      x: workArea.position.x,
-      y: workArea.position.y,
-      width: workArea.size.width,
-      height: workArea.size.height,
-    },
-    growHeight,
-    anchorTop: Math.round(anchorTop * scale),
-    anchorBottom: Math.round(anchorBottom * scale),
-    gap: Math.round(gap * scale),
-    // 卡高与锚点同单位（物理像素）——此前传逻辑像素，DPI>1 的屏上卡位偏差
-    cardHeight: Math.round(cardHeight * scale),
-  });
-  if (!layout) return null;
-  const physical = await scaledPhysicalSize(
-    api,
-    appWindow,
-    base.size.width / scale,
-    base.size.height / scale + cardHeight + gap,
-    1,
-    scale,
-  );
-  // 位置+尺寸一次原子落（同竖条：两笔 IPC 中间帧=横条上下抖动）。
-  await setWindowBoundsAtomic(appWindow, api, base.position.x, layout.y, physical);
-  return {
-    side: layout.side,
-    cardTop: layout.cardTop / scale,
-    cardLeft: layout.cardLeft / scale,
-  };
+/// 卡窗取待渲染载荷（take 即清空；失败回 null=无卡可画）。
+function takeHopCardPayload() {
+  return invoke("hop_card_take_payload").catch(() => null);
+}
+
+/// 卡窗画好一帧的回执：Rust 此刻才显形（已可见时是幂等 no-op）。
+function hopCardReady() {
+  return invoke("hop_card_ready").catch(() => {});
+}
+
+/// 卡窗实测内容高上报（Rust 转发 tasks-widget，横条放卡定窗高用）。
+function reportHopCardHeight(height) {
+  return invoke("hop_card_report_height", { height }).catch(() => {});
+}
+
+/// 卡窗监听：来新载荷了，赶紧 take（挂载时还会主动 take 一次兜底首建竞态）。
+async function onHopCardSignal(handler) {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen(HOP_CARD_POLL, () => handler());
+}
+
+/// 胶囊窗监听：卡窗实测内容高（横条上下放卡定窗高用）。
+async function onHopCardHeight(handler) {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen(HOP_CARD_HEIGHT_EVENT, (event) => handler(Number(event.payload)));
 }
 
 /// 控制按钮就地展开会经 fit 观察器把窗口临时加高/加宽；展开前记下原生
@@ -2407,11 +2277,14 @@ export {
   setStripScale,
   setWindowGlass,
   setTasksWidgetWindow,
-  expandTasksHover,
-  expandTasksHoverHorizontal,
-  isTasksHoverExpanded,
-  probeNativeWindowOps,
-  collapseTasksHover,
+  probeHopCardWindow,
+  showHopCardWindow,
+  hideHopCardWindow,
+  takeHopCardPayload,
+  hopCardReady,
+  reportHopCardHeight,
+  onHopCardSignal,
+  onHopCardHeight,
   showMainExpanded,
   closeCurrentWindow,
   emitAgentNames,

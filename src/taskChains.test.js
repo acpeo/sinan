@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   activeRelayEpisodes,
   agentDisplayName,
+  buildCronNextByAgent,
   detectRoundNotifications,
   isQuietNow,
   benignStateOf,
@@ -693,3 +694,22 @@ test("buildAgentRoster: 客星（openclaw 兜底）空闲不占格，今夜有�
   assert.equal(active[7].tone, "failed");
 });
 
+
+test("buildCronNextByAgent keeps the earliest enabled next run per star, skips unattributable or disabled jobs", () => {
+  const now = 1_700_000_000_000;
+  const map = buildCronNextByAgent([
+    { id: "patrol", enabled: true, agentId: "tianji", nextRunAtMs: now + 3_600_000, name: "巡检" },
+    { id: "heartbeat", enabled: true, agentId: "VPS-北斗:tianji", nextRunAtMs: now + 600_000, name: "心跳" },
+    { id: "keepalive", enabled: true, agentId: "tianshu", nextRunAtMs: now + 60_000, name: "保活" },
+    { id: "disabled", enabled: false, agentId: "tianshu", nextRunAtMs: now + 1_000, name: "停用" },
+    { id: "orphan", enabled: true, nextRunAtMs: now + 2_000, name: "无主" },
+    { id: "stale", enabled: true, agentId: "yuheng", nextRunAtMs: now - 500_000, scheduleEveryMs: 600_000, name: "过期滚动" },
+  ], now);
+  assert.equal(map.size, 3);
+  // 同星双任务取最早；全 id 归一（VPS-北斗: 前缀剥掉）后命中同星。
+  assert.equal(map.get("tianji").atMs, now + 600_000);
+  assert.equal(map.get("tianji").job.id, "heartbeat");
+  assert.equal(map.get("tianshu").atMs, now + 60_000);
+  // 过期时刻按 everyMs 滚动到未来（cronNextAtOf 语义）。
+  assert.ok(map.get("yuheng").atMs > now);
+});

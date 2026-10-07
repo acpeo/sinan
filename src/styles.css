@@ -7702,6 +7702,17 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
 .tasks-hopcard-kv + .tasks-hopcard-kv { border-top: 1px solid rgba(255, 255, 255, 0.05); }
 .tasks-hopcard-kv b { color: #dfe4ec; font-weight: 600; flex: none; width: 66px; }
 .tasks-hopcard-kv span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 收班结论列两行钳制（Leo 2026-10-07 过稿）：46 字结论挤单行在 224px 卡里
+   只剩 7 字，两行能读全半句；全文照旧悬停可看。其余 kv 行（已跑/今夜/下次）
+   维持单行。 */
+.tasks-hopcard-kv .tasks-hopcard-kv-txt {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .tasks-hopcard--light .tasks-hopcard-kv { color: #5c6472; border-top-color: rgba(31, 33, 36, 0.06); }
 .tasks-hopcard--light .tasks-hopcard-kv b { color: #202124; }
 
@@ -7934,19 +7945,21 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
   font-variant-numeric: tabular-nums;
 }
 
-/* done 0.70（Leo 2026-10-04 三档对比拍板 B 档）：比 failed 跳的 0.75 略暗一档
-   ——✕ 是要人处理的东西，应当比 ✓ 更抢眼；此前 0.6 是渐隐摘除前"双重变暗"时代的旧值 */
-.task-chain-hop--done { opacity: 0.7; }
+/* 灯语亮度下限（Leo 2026-10-07 实锤"除了活动的都看不到"）：旧档 done 0.70/
+   failed 0.75（10-04 三档对比 B 档）把名字一起压暗，深底上空闲星只剩 ~36% 白
+   ≈隐形。改=灯语只管颜色、名字给可读下限：done 0.85/failed 0.9/skipped 0.75/
+   pending 0.62——✕ 仍比 ✓ 抢眼，但每颗星滚到哪都认得出。 */
+.task-chain-hop--done { opacity: 0.85; }
 .task-chain-hop--done .task-chain-glyph { color: #6fc49a; }
 .task-chain-hop--current .task-chain-glyph {
   color: #6fc49a;
   animation: live-pulse 1.5s ease-in-out infinite;
 }
-.task-chain-hop--failed { opacity: 0.75; }
+.task-chain-hop--failed { opacity: 0.9; }
 .task-chain-hop--failed .task-chain-glyph { color: #ec7a63; }
-.task-chain-hop--skipped { opacity: 0.55; }
+.task-chain-hop--skipped { opacity: 0.75; }
 .task-chain-hop--skipped .task-chain-glyph { color: #8b93a1; }
-.task-chain-hop--pending { opacity: 0.45; }
+.task-chain-hop--pending { opacity: 0.62; }
 
 .task-chain-link {
   flex: none;
@@ -8643,9 +8656,10 @@ html:not([data-theme="dark"]) .console-root .dial-leader { stroke: rgba(146, 100
 .v5-chain-pop-kv b { color: #dfe4ec; font-weight: 600; flex: none; width: 66px; }
 .v5-chain-pop-kv .txt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #97a1b2; }
 
-/* 灯牌空闲星（rest 灯语）：○ 半隐，名字半透 */
-.task-chain-hop--rest { opacity: 0.45; }
-.task-chain-hop--rest .task-chain-glyph { color: #4a5568; }
+/* 灯牌空闲星（rest 灯语）：○ 仍最暗一档，但名字要能认（0.45 → 0.62，
+   Leo 2026-10-07 实锤空闲星隐形） */
+.task-chain-hop--rest { opacity: 0.62; }
+.task-chain-hop--rest .task-chain-glyph { color: #6b7684; }
 .widget-shell--glass-light .task-chain-hop--rest .task-chain-glyph { color: rgba(31, 33, 36, 0.35); }
 .v5-hops { margin-top: 8px; border-top: 1px dashed rgba(240,240,240,.1); padding-top: 8px; }
 .v5-foot { padding: 8px 16px 6px; font-size: 10.5px; color: #5d6069; text-align: center; }
@@ -8700,3 +8714,31 @@ html:not([data-theme="dark"]) .console-root .v7-sb.is-now { background: #6b6e78;
 html:has(.console-root),
 html:has(.console-root) body { overflow: hidden; height: 100%; }
 .console-root { height: 100dvh; overflow: hidden; }
+
+/* ---------------------------------------------------------------------------
+   星卡伴随窗（tasks-hopcard，?view=hopcard）：独立置顶穿透小窗的舞台。
+   胶囊窗悬停零 resize——卡在这里活，窗固定 224×460，内容盒按 side 对齐
+   （竖条居中 / 横条 above=底对齐 below=顶对齐，由内联 alignItems 给）。
+   --------------------------------------------------------------------------- */
+html:has(.hopcard-stage),
+html:has(.hopcard-stage) body,
+html:has(.hopcard-stage) #root {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.hopcard-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* 内容盒超出承载高的兜底（估计偏差/极端长结论）：卡内自滚，不裁字。 */
+.hopcard-stage .tasks-hopcard {
+  max-height: calc(100% - 8px);
+  overflow-y: auto;
+}

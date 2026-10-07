@@ -168,6 +168,16 @@ async fn set_tasks_widget_window(app: tauri::AppHandle, visible: bool) -> Result
             }
         }
     }
+    if visible {
+        // 星卡伴随窗跟小组件同生死：组件窗起来就备好（隐藏待命），首次悬停
+        // 才建会有 WebView 冷启动延迟，首卡弹不出来。
+        let _ = ensure_hop_card_window(&app);
+    } else {
+        // 组件收起时星卡必须跟着走，别让它孤悬屏上变成"幽灵卡"。
+        if let Some(hop_card) = app.get_webview_window(HOP_CARD_WINDOW) {
+            let _ = hop_card.hide();
+        }
+    }
     set_tasks_widget_menu_checked(visible);
     app.emit(TASK_WIDGET_VISIBILITY, visible).map_err(|error| error.to_string())?;
     Ok(())
@@ -180,6 +190,143 @@ fn focus_main_window(app: &tauri::AppHandle) {
         let _ = main.unminimize();
         let _ = main.set_focus();
     }
+}
+
+// ---------------------------------------------------------------------------
+// 悬停星卡伴随窗（tasks-hopcard）：独立置顶穿透小窗
+// ---------------------------------------------------------------------------
+
+const HOP_CARD_WINDOW: &str = "tasks-hopcard";
+const HOP_CARD_POLL: &str = "hopcard://poll";
+const HOP_CARD_HEIGHT_EVENT: &str = "hopcard://height";
+
+/// 待渲染卡载荷（JSON 串）。胶囊 invoke show_hop_card 存入 → 卡窗 take 走
+/// （take 即清空：poll 信号与挂载兜底两条路只送达一次，不重不漏）。
+static HOP_CARD_PAYLOAD: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 卡窗最近实测内容高（逻辑 px）：横条上下放卡按它定窗高，估计越准
+/// 卡与条的 6px 间隙越贴脸。经 hopcard://height 回传胶囊窗记忆。
+static HOP_CARD_LAST_HEIGHT: std::sync::Mutex<f64> = std::sync::Mutex::new(0.0);
+
+/// 建（或复用）悬停星卡窗：隐藏待命、鼠标穿透、置顶。悬停期间胶囊窗
+/// 零 resize——WebView2 重排滞后一帧的伪影失去物理载体（b23d4b6 方向
+/// 修正只能消位移消不掉 resize 本身，Leo 装机三轮实锤后的根治）。
+fn ensure_hop_card_window(
+    app: &tauri::AppHandle,
+) -> Result<tauri::WebviewWindow<tauri::Wry>, String> {
+    if let Some(window) = app.get_webview_window(HOP_CARD_WINDOW) {
+        return Ok(window);
+    }
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        HOP_CARD_WINDOW,
+        tauri::WebviewUrl::App("index.html?view=hopcard".into()),
+    )
+    .title("司南 · 星卡")
+    .inner_size(224.0, 460.0)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .resizable(false)
+    .skip_taskbar(true)
+    .focused(false)
+    .always_on_top(true)
+    // 创建后隐藏待命：悬停时先在隐藏态定位/定尺寸/喂载荷，画完一帧才显形。
+    .visible(false)
+    .build()
+    .map_err(|error| error.to_string())?;
+    let _ = window.set_ignore_cursor_events(true);
+    #[cfg(windows)]
+    make_hop_card_unactivatable(&window);
+    Ok(window)
+}
+
+/// WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW：show() 绝不抢焦点——Leo 正在打字/
+/// 操作别的窗时悬停弹卡不能把前台打掉。focused(false) 只管首建一瞬，
+/// show 仍会激活，必须补样式位。
+#[cfg(windows)]
+fn make_hop_card_unactivatable(window: &tauri::WebviewWindow<tauri::Wry>) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let handle = HWND(hwnd.0 as *mut _);
+            let ex = GetWindowLongPtrW(handle, GWL_EXSTYLE) as u32;
+            SetWindowLongPtrW(handle, GWL_EXSTYLE, (ex | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0) as isize);
+        }
+    }
+}
+
+/// 胶囊侧悬停开卡：定位+定尺寸（隐藏态下改，零伪影）→ 存载荷 → 通知卡窗
+/// 来取。不在此处 show——等卡窗画完一帧回 hop_card_ready 再显形，杜绝
+/// "闪一张上一颗星的旧卡"。
+#[tauri::command]
+async fn show_hop_card(
+    app: tauri::AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    payload: String,
+) -> Result<(), String> {
+    let window = ensure_hop_card_window(&app)?;
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    if let Ok(mut cell) = HOP_CARD_PAYLOAD.lock() {
+        *cell = Some(payload);
+    }
+    app.emit_to(HOP_CARD_WINDOW, HOP_CARD_POLL, ())
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// 卡窗取载荷：挂载与 poll 两条路都走这里，take 即清空，恰好一次送达。
+#[tauri::command]
+fn hop_card_take_payload() -> Option<String> {
+    let mut cell = HOP_CARD_PAYLOAD.lock().ok()?;
+    cell.take()
+}
+
+/// 卡窗画好一帧的回执：此刻才显形。对已可见的窗什么都不做——数据活刷新
+/// 会重复走 show→取载荷→ready，重断言置顶只会搅动 z 序。
+#[tauri::command]
+async fn hop_card_ready(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(HOP_CARD_WINDOW) {
+        let already_visible = window.is_visible().unwrap_or(false);
+        if !already_visible {
+            let _ = window.set_ignore_cursor_events(true);
+            let _ = window.show();
+            let _ = window.set_always_on_top(true);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn hide_hop_card(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(HOP_CARD_WINDOW) {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
+/// 卡窗实测内容高回传：横条上下放卡按它定窗高。
+#[tauri::command]
+fn hop_card_report_height(app: tauri::AppHandle, height: f64) -> Result<(), String> {
+    if let Ok(mut cell) = HOP_CARD_LAST_HEIGHT.lock() {
+        *cell = height;
+    }
+    app.emit_to("tasks-widget", HOP_CARD_HEIGHT_EVENT, height)
+        .map_err(|error| error.to_string())
+}
+
+/// 前端探测卡窗命令面是否可用：真机 Tauri=true；浏览器预览与复现台
+/// （invoke 桩没有这些命令）回 false → 悬停卡走窗内 Portal 预览路径。
+#[tauri::command]
+fn hop_card_ping() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +917,13 @@ pub fn run() {
             show_main_expanded,
             set_taskbar_button,
             set_native_theme,
-            set_window_bounds
+            set_window_bounds,
+            show_hop_card,
+            hop_card_take_payload,
+            hop_card_ready,
+            hide_hop_card,
+            hop_card_report_height,
+            hop_card_ping
         ])
         .run(tauri::generate_context!())
         .expect("error while running sinan");

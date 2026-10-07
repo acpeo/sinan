@@ -37,8 +37,8 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, refreshGatewayTasks, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
-import { desyncHealRetryDelayMs, horizontalStripTargetWidth } from "./windowGeometry";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
   applyWindowMode,
@@ -47,8 +47,6 @@ import {
   checkForUpdate,
   closeWindow,
   collapseStripControlsExpand,
-  collapseTasksHover,
-  probeNativeWindowOps,
   collapseVerticalStripHover,
   emitGlassTint,
   emitGlassAlpha,
@@ -56,10 +54,10 @@ import {
   onGlassAlphaChanged,
   onGlassInkChanged,
   expandRoundDetails,
-  expandTasksHover,
-  expandTasksHoverHorizontal,
   expandVerticalStripHover,
   getAutostart,
+  hideHopCardWindow,
+  hopCardReady,
   isDesktop,
   isLinuxPlatform,
   isMacPlatform,
@@ -67,15 +65,19 @@ import {
   minimizeWindow,
   onAgentNames,
   onGlassTintChanged,
+  onHopCardHeight,
   onNavTasks,
   onNotificationVisibility,
   onPanelExpand,
   onScaleFactorChanged,
+  onHopCardSignal,
+  reportHopCardHeight,
   onTasksWidgetVisibility,
   onTrayPinnedChange,
   onTrayShowExpanded,
   applyExpandedPanelSize,
   applyMiniCapsuleSize,
+  probeHopCardWindow,
   restoreWindowPosition,
   saveTasksPanelSize,
   setAutostart,
@@ -86,12 +88,14 @@ import {
   setWindowGlass,
   setWindowPinned,
   setWindowUiScale,
+  showHopCardWindow,
   showMainExpanded,
   startEdgeDock,
   startPositionMemory,
   startWindowDragging,
   startWindowResizing,
   syncLinuxTrayPinned,
+  takeHopCardPayload,
   toggleMaximizeWindow,
 } from "./windowClient";
 
@@ -271,6 +275,12 @@ const TASKS_HOPCARD_HEIGHT = 168;
 // 横竖同一值——Leo 2026-10-04 二轮反馈：锚面修正后 12px 偏大、6px 正好。
 const TASKS_HOPCARD_GAP = 6;
 const TASKS_HOVER_LEAVE_DELAY = 260;
+// 星卡伴随窗（tasks-hopcard）竖条承载高：固定值+内容盒垂直居中——窗口
+// 尺寸与内容解耦，悬停全程零 resize。内容超过承载高时卡内自滚动兜底。
+const HOP_CARD_WINDOW_HEIGHT = 460;
+// 横条承载高 = 估计盒高 + 富余：盒按 side 钳到窗的贴条缘，估计偏小由
+// 富余兜住，卡窗实测高回传（hopcard://height）下一拍校准。
+const HOP_CARD_HEIGHT_SLACK = 72;
 // 横条宽度的收缩迟滞。一格 54px，所以 6px 远低于「真的少了一个 Agent」，
 // 又高于 DPI/zoom 取整带来的亚像素噪声。
 const STRIP_WIDTH_SHRINK_SLACK = 6;
@@ -824,15 +834,16 @@ function TasksWidgetWindow({
   const miniOrientationRef = useRef("horizontal");
   miniOrientationRef.current = miniOrientation;
   // 悬停详情卡：hoverCard = { hop, index, total, orientation, center?, windowY?,
-  // wrapRight?, cellRect?, layout }。orientation 决定定位与扩窗方向：竖条卡在
-  // 胶卷侧方（横向扩窗），横条卡浮在条上方（向上长高，放不下改向下）。
-  // center/windowY/wrapRight/cellRect 都是悬停瞬间（扩窗前）的视口坐标。
-  // layout = expandTasksHover(Horizontal) 的返回（浏览器预览为 null，卡片照常渲染）。
+  // cellRect?, *Screen }。orientation 决定锚点集：竖条锚胶卷缘+格中心，
+  // 横条锚壳缘+格中心。视口坐标（center/windowY/cellRect）= 预览路径定位；
+  // 屏幕逻辑坐标（railLeftScreen/railRightScreen/cellCenterYScreen/
+  // shellTopScreen/shellBottomScreen/cellCenterXScreen）= 伴随窗定位，
+  // 均在悬停瞬间同步定格。
   const [hoverCard, setHoverCard] = useState(null);
   const railWrapRef = useRef(null);
   const hopCardLeaveTimerRef = useRef(null);
-  // 扩窗时刻与最近一次卡片实测高：收卡宽限期与"单次悬停只扩一次窗"用。
-  const lastExpandAtRef = useRef(0);
+  // 最近一次卡片实测高：横条承载窗高估计与预览钳位用（预览走
+  // handleCardHeight，真机走 hopcard://height 回传，同一 ref 汇合）。
   const lastCardHRef = useRef(null);
   // 延时关闭回调里读的是注册时刻的闭包，卡片有无要经 ref 取最新值。
   const hoverCardRef = useRef(null);
@@ -840,12 +851,8 @@ function TasksWidgetWindow({
   // 发现 6：卡片打开瞬间顺带拉一拍最新数据——开口即最新。2.5s 内重复悬停
   // 不重复打（后端 snapshot 对同网关本就有 2.5s 节流，这里是前端省一层）。
   const lastHoverRefreshAtRef = useRef(0);
-  // 悬停世代号：每次 showHopCard 自增。收卡走"先收窗后撤卡"后，收窗途中若
-  // 指针重新进格（新世代），收窗完成回调不得把新卡抹掉；展开 effect 也靠它
-  // 在"收窗途中重新悬停"后重跑扩窗（收窗把原生窗还原了，卡还开着会被裁）。
-  const hoverEpochRef = useRef(0);
-  // 按下状态：OS 窗口拖拽/内容拖拽滚动进行中——悬停卡停发（showHopCard 看
-  // 它 + event.buttons），拖拽期任何程序化挪窗都会跟手拉扯成来回滑动。
+  // 按下状态：内容拖拽滚动进行中——悬停卡停发（showHopCard 看
+  // 它 + event.buttons），拖拽期弹卡会跟滚动拉扯。
   const pointerDownRef = useRef(false);
   // 兜底：OS 拖拽的模态循环可能吞掉 pointerup，窗级捕获补一刀。
   useEffect(() => {
@@ -865,64 +872,60 @@ function TasksWidgetWindow({
   // 预览/复现台（stub 环境）没有窗体伸缩，钉边会把条从居中位拽到窗缘=伪跳动
   // （Leo 实测"还是跳"的预览半边）。默认按真机算（探测返回前悬停不丢钉边），
   // 探测拿不到有限几何再关。探测仅启动一次，小组件窗可见后必然可读。
-  const [nativeHoverExpand, setNativeHoverExpand] = useState(() => isTauriRuntime());
+  // 星卡伴随窗命令面探测：真机=true（悬停走独立置顶穿透小窗，胶囊窗全程
+  // 零 resize）；浏览器预览/复现台（invoke 桩）=false → 窗内 Portal 预览。
+  // 首拍乐观按真机算（探测毫秒级返回，命令本就同包内建）。
+  const [nativeHopCard, setNativeHopCard] = useState(() => isTauriRuntime());
   useEffect(() => {
-    if (!isTauriRuntime()) return undefined;
     let alive = true;
-    probeNativeWindowOps().then((ok) => {
-      if (alive) setNativeHoverExpand(Boolean(ok));
+    probeHopCardWindow().then((ok) => {
+      if (alive) setNativeHopCard(Boolean(ok));
     });
     return () => {
       alive = false;
     };
   }, []);
-  // 竖条卡片优先朝胶卷右侧弹（side=left，2026-10-07 改）：窗口左上角完全不动、
-  // 只向右长宽——原生帧与 WebView 重排帧里条的位置一致，悬停/移开零闪动
-  // （旧"朝左弹"要朝左挪窗 230px，WebView 重排滞后一帧=整条闪，原子
-  // SetWindowPos 也救不了内容那一帧）。右侧放不下才退朝左兜底。
-  // 定侧要在悬停瞬间同步给出——钉边类若等原生扩窗返回 layout 才上，类提交晚于
-  // 窗口扩宽，条会先漂再弹回（0.20.10 真机拉锯循环）。预览以视口右缘为界，
-  // 真机以工作区右缘为界。
-  const verticalHoverSide = () => {
-    const rail = railWrapRef.current;
-    if (!rail) return "left";
-    const rect = rail.getBoundingClientRect();
-    const need = TASKS_HOPCARD_WIDTH + TASKS_HOPCARD_GAP;
-    if (!isTauriRuntime()) {
-      return rect.right + need <= window.innerWidth - 8 ? "left" : "right";
-    }
-    const railRightScreen = window.screenX + rect.right;
-    const availRight = (Number.isFinite(window.screen?.availLeft) ? window.screen.availLeft : 0)
-      + (Number.isFinite(window.screen?.availWidth) ? window.screen.availWidth : window.innerWidth);
-    return railRightScreen + need <= availRight - 8 ? "left" : "right";
-  };
-  // 横条定侧同一纪律：卡优先朝条下方（side=below）——窗口顶角不动、只向下长高
-  // =零闪动；下方放不下退朝上兜底。阈值与 horizontalTasksHoverLayout 严格同界
-  // （growHeight=卡高+gap，卡高含 +24 余量）——不一致时临界悬停会钉边与窗体
-  // 反向=跳。定侧同步给，先于原生扩窗落 DOM。
-  const horizontalHoverSide = () => {
-    const shell = miniShellRef.current?.getBoundingClientRect();
-    if (!shell) return "below";
-    const growHeight = (lastCardHRef.current ?? TASKS_HOPCARD_HEIGHT) + 24 + TASKS_HOPCARD_GAP;
-    if (!isTauriRuntime()) {
-      return shell.bottom + growHeight <= window.innerHeight ? "below" : "above";
-    }
-    const shellBottomScreen = window.screenY + shell.bottom;
-    const availBottom = (Number.isFinite(window.screen?.availTop) ? window.screen.availTop : 0)
-      + (Number.isFinite(window.screen?.availHeight) ? window.screen.availHeight : window.innerHeight);
-    return shellBottomScreen + growHeight <= availBottom ? "below" : "above";
-  };
+  // 卡窗实测高回传（hopcard://height）：横条上下放卡定窗高的估计值来源。
+  // 预览路径（无伴随窗）走 handleCardHeight 同一 ref。
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+    const stopPromise = onHopCardHeight((height) => {
+      if (Number.isFinite(height) && height > 0) lastCardHRef.current = height;
+    });
+    return () => {
+      stopPromise.then((stop) => stop?.());
+    };
+  }, []);
+  // 空闲星卡「下次」行数据：cron 镜像独立 30s 轮询（下次触发是分钟级变化，
+  // 30s 足够；不占任务快照对网关的 2.5s 节流额度）。浏览器 demo 也走这路。
+  const [cronJobs, setCronJobs] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    const pull = () => {
+      loadCronJobs()
+        .then((result) => {
+          if (alive) setCronJobs(result.jobs ?? []);
+        })
+        .catch(() => {});
+    };
+    pull();
+    const timer = setInterval(pull, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
   const showHopCard = (hop, index, total, event) => {
-    // 拖拽期不出卡不挪窗：OS 窗口拖拽跟手、内容拖拽滚动改条内滚动——
-    // 期间任何程序化挪窗都会被拉扯成"来回滑动"（Leo 装机实锤）。
+    // 拖拽期不出卡：内容拖拽滚动进行中，弹卡没有意义（Leo 装机实锤手势拉扯）。
     if (pointerDownRef.current || (event.buttons ?? 0) !== 0) return;
     window.clearTimeout(hopCardLeaveTimerRef.current);
-    hoverEpochRef.current += 1;
     if (!hoverCardRef.current && Date.now() - lastHoverRefreshAtRef.current > 2500) {
       lastHoverRefreshAtRef.current = Date.now();
       feed.refresh?.();
     }
     const cell = event.currentTarget.getBoundingClientRect();
+    // 锚点在悬停瞬间同步定格（window.screen* 是同步 API）：卡窗几何全部
+    // 由这些锚点在渲染期现算，胶囊本体零 resize。
     if (miniOrientationRef.current === "vertical") {
       const wrap = railWrapRef.current?.getBoundingClientRect();
       const center = wrap ? cell.top + cell.height / 2 - wrap.top : cell.top + cell.height / 2;
@@ -931,17 +934,17 @@ function TasksWidgetWindow({
         index,
         total,
         orientation: "vertical",
+        // 预览路径（窗内 Portal）用视口锚点：
         center,
         windowY: wrap ? wrap.top + center : cell.top,
-        // 预览态（扩窗 no-op）卡片用 fixed 定位逃出壳的 overflow 裁剪，记下胶卷右缘
-        wrapRight: wrap ? wrap.right : cell.right,
-        side: verticalHoverSide(),
-        layout: null,
+        // 伴随窗用屏幕逻辑锚点：
+        railLeftScreen: window.screenX + (wrap ? wrap.left : cell.left),
+        railRightScreen: window.screenX + (wrap ? wrap.right : cell.right),
+        cellCenterYScreen: window.screenY + cell.top + cell.height / 2,
       });
     } else {
       // 锚条面、不锚跳格：跳格深居 36px 壳内 ~12px，按格算的日照间隙到条的
-      // 可视表面就剩 ~0——真机看就是"卡贴着条"（Leo 2026-10-04 截图）。改为
-      // 从壳缘起算，堆叠间距才名副其实；centerX 仍取跳格（预览横向钳位用）。
+      // 可视表面就剩 ~0——真机看就是"卡贴着条"（Leo 2026-10-04 截图）。
       const shell = miniShellRef.current?.getBoundingClientRect();
       setHoverCard({
         hop,
@@ -953,10 +956,9 @@ function TasksWidgetWindow({
           bottom: shell ? shell.bottom : cell.bottom,
           centerX: cell.left + cell.width / 2,
         },
-        // 同步预钉边：marginTop:auto 必须与开卡同一帧提交，先于原生扩窗
-        // （原生窗上长后壳才不会带着条一起跳——真机"上下跨跳"根因）。
-        side: horizontalHoverSide(),
-        layout: null,
+        shellTopScreen: window.screenY + (shell ? shell.top : cell.top),
+        shellBottomScreen: window.screenY + (shell ? shell.bottom : cell.bottom),
+        cellCenterXScreen: window.screenX + cell.left + cell.width / 2,
       });
     }
   };
@@ -964,22 +966,10 @@ function TasksWidgetWindow({
     window.clearTimeout(hopCardLeaveTimerRef.current);
     hopCardLeaveTimerRef.current = window.setTimeout(() => {
       hopCardLeaveTimerRef.current = null;
-      // 指针可能只是移到卡片上（卡片在壳界内）：还悬着就不收
+      // 指针可能只是越过 6px 间隙去邻格/控制簇：还悬着就不收。
       if (miniShellRef.current?.matches(":hover")) return;
-      // 扩窗会瞬移窗口（含胶囊补偿），指针可能被甩出胶卷一瞬——刚扩完 500ms
-      // 内不收卡，宽限期后重新排队检查，杜绝"收窗→重进→再扩"的循环
-      if (Date.now() - lastExpandAtRef.current < 500) {
-        hideHopCard();
-        return;
-      }
-      // 先收窗后撤卡（runWindowAction 队列保证与重展有序）：钉边若先撤，
-      // 壳在还原中的窗里错位一拍=关闭方向同款跨跳；收窗后钉边 auto margin
-      // 归零条正位。收窗途中指针重新进格（世代号已变）就不抹卡，让重展接手。
-      const epoch = hoverEpochRef.current;
-      runWindowAction(async () => {
-        await collapseTasksHover();
-        if (hoverEpochRef.current === epoch) setHoverCard(null);
-      });
+      setHoverCard(null);
+      // 伴随窗由下方布局 effect 随 hopCardOpen 翻 false 统一隐藏。
     }, TASKS_HOVER_LEAVE_DELAY);
   };
   // 卡片内容（进度原话行数 / 其他任务节）实测高度，喂给扩窗与定位——
@@ -991,65 +981,17 @@ function TasksWidgetWindow({
       current && current.measuredH !== height ? { ...current, measuredH: height } : current,
     );
   };
-  // 悬停展开：每次悬停只扩一次窗（0.20.11 真机教训：卡高实测到达后重展 =
-  // 窗口带着胶囊再动一次，肉眼可见的上下/左右跳）。卡高用上一次实测值预估
-  // （跨悬停记忆，首悬停用基线），不再随实测重展——卡比窗高就裁一点，下次悬停自愈。
-  const hoverHopKey = hoverCard ? `${hoverCard.hop.taskId}:${hoverCard.index}` : "";
-  const hoverCardOpen = hoverCard != null;
-  // 世代号参与依赖：收卡先收窗后，"收窗途中重新悬停"的同一格需要重展
-  // （原生窗已被还原，卡还开着会被裁）——仅靠 hoverHopKey/hoverCardOpen 挡不住。
-  const hoverEpoch = hoverEpochRef.current;
-  useLayoutEffect(() => {
-    if (!hoverCard) return undefined;
-    let cancelled = false;
-    const cardHeight = Math.max(TASKS_HOPCARD_HEIGHT, lastCardHRef.current ?? 0) + 24;
-    lastExpandAtRef.current = Date.now();
-    runWindowAction(async () => {
-      let layout = null;
-      // 胶囊静置尺寸（含控制开合形态）：扩窗侧用它判"当前窗是不是胶囊态"，
-      // 只有胶囊态才刷新 restore 基准——条被拖走后旧基准会让窗跳回老位置。
-      const collapsedSize = miniOrientationRef.current === "vertical"
-        ? { width: 36, height: miniControlsOpen ? 376 : 224 }
-        : { width: miniControlsOpen ? 308 : 224, height: 36 };
-      if (hoverCard.orientation === "horizontal") {
-        layout = await expandTasksHoverHorizontal({
-          cardHeight,
-          gap: TASKS_HOPCARD_GAP,
-          anchorTop: hoverCard.cellRect.top,
-          anchorBottom: hoverCard.cellRect.bottom,
-          collapsedSize,
-        });
-      } else {
-        layout = await expandTasksHover({
-          width: 36 + TASKS_HOPCARD_WIDTH + TASKS_HOPCARD_GAP,
-          // 高度按需长：静置高（224/376）与"卡高+上下余量"取大——典型卡
-          // ≤200px 时窗口纵向一毫米不动（static 锚定下 railOffsetY≡0，
-          // 竖条悬停只剩横向扩窗，钉边同步→零跨跳）；卡更高才纵向长。
-          height: Math.max(miniControlsOpen ? 376 : 224, cardHeight),
-          anchorY: hoverCard.windowY,
-          cardHeight,
-          collapsedSize,
-        });
-      }
-      if (!cancelled && layout) {
-        setHoverCard((current) => (current ? { ...current, layout } : current));
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hoverHopKey, hoverCardOpen, hoverEpoch]);
   // 胶囊形态切换/控制开合会重设原生窗几何：先收卡片再走它们的事务。
   useEffect(() => {
     if (!hoverCard) return undefined;
     setHoverCard(null);
-    runWindowAction(() => collapseTasksHover());
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collapsed, miniControlsOpen, miniOrientation]);
+  // 组件卸载（小组件被关掉）兜底藏卡窗，别让星卡孤悬屏上。
   useEffect(() => () => {
     window.clearTimeout(hopCardLeaveTimerRef.current);
+    hideHopCardWindow();
   }, []);
   const tasks = feed.tasks?.tasks || [];
   const active = tasks.filter(isActiveTask);
@@ -1166,22 +1108,13 @@ function TasksWidgetWindow({
     if (collapsed) return;
     runWindowAction(() => applyExpandedPanelSize());
   }, [collapsed]);
-  // 详情卡定位（唯一路径，Portal+fixed）。竖条：卡在胶卷靠屏幕中心一侧，
-  // 纵向锚在悬停跳中心、钳在视口内，卡高用实测值钳半高。横条：真机由
-  // horizontal helper 给出条上方/下方坐标，预览贴悬停格上缘（放不下改下方）、
-  // 水平钳在视口内。间距 6px：浮层与锚点"分开但不疏远"，12px 在窄条旁显得
-  // 松散。坐标取容器的实时视口矩形，扩窗移动窗口后 React 重渲染时拿到的是
-  // 新几何，无需手算偏移。
+  // 预览路径定位（窗内 Portal+fixed；真机星卡由伴随窗承载，不走这里）。
+  // 竖条：卡在胶卷富余一侧，纵向锚悬停格中心、钳在视口内。横条：贴壳缘
+  // 上/下（放不下改下方）、水平钳在视口内。间距 6px："分开但不疏远"。
   const hopCardStyle = (() => {
     if (!hoverCard) return null;
     const cardH = hoverCard.measuredH ?? TASKS_HOPCARD_HEIGHT;
     if (hoverCard.orientation === "horizontal") {
-      if (hoverCard.layout) {
-        return {
-          top: Math.round(hoverCard.layout.cardTop),
-          left: Math.round(hoverCard.layout.cardLeft),
-        };
-      }
       const cell = hoverCard.cellRect;
       const left = Math.min(
         Math.max(cell.centerX - TASKS_HOPCARD_WIDTH / 2, 8),
@@ -1192,17 +1125,121 @@ function TasksWidgetWindow({
       return { top: Math.round(top), left: Math.round(left) };
     }
     const railRect = railWrapRef.current?.getBoundingClientRect();
-    const side = hoverCard.layout?.side ?? hoverCard.side ?? "right";
-    const left = railRect
-      ? side === "left"
-        ? railRect.right + TASKS_HOPCARD_GAP
-        : railRect.left - TASKS_HOPCARD_WIDTH - TASKS_HOPCARD_GAP
-      : hoverCard.wrapRight + TASKS_HOPCARD_GAP;
+    // ref 偶发未挂时用屏幕锚点反算视口坐标（悬停瞬间定格的同一几何）。
+    const railRightView = railRect ? railRect.right : hoverCard.railRightScreen - window.screenX;
+    const railLeftView = railRect ? railRect.left : hoverCard.railLeftScreen - window.screenX;
+    const need = TASKS_HOPCARD_WIDTH + TASKS_HOPCARD_GAP;
+    const side = railRightView + need <= window.innerWidth - 8 ? "left" : "right";
+    const left = side === "left"
+      ? railRightView + TASKS_HOPCARD_GAP
+      : railLeftView - TASKS_HOPCARD_WIDTH - TASKS_HOPCARD_GAP;
     const half = cardH / 2 + 4;
-    const rawTop = hoverCard.layout ? hoverCard.layout.cardCenterY : hoverCard.windowY;
-    const top = Math.min(Math.max(rawTop, half), Math.max(window.innerHeight - half, half));
+    const top = Math.min(
+      Math.max(hoverCard.windowY, half),
+      Math.max(window.innerHeight - half, half),
+    );
     return { top: Math.round(top), left: Math.round(left), transform: "translateY(-50%)" };
   })();
+  // 悬停卡实时化（发现 6）：拉新数据落地后按 taskId 在最新灯牌里找回该跳，
+  // 卡片跟着刷新，不再定格在打开瞬间的快照；跳刚好消失则退回快照兜底。
+  // （顶层计算：伴随窗载荷与胶囊内预览渲染共用同一份实时卡数据。）
+  let cardHop = hoverCard?.hop ?? null;
+  let cardIndex = hoverCard?.index ?? 0;
+  let cardTotal = hoverCard?.total ?? 0;
+  if (hoverCard && cardHop) {
+    const live = rosterHops.find(
+      (hop) => `${hop.gateway ?? ""}:${hop.taskId}` === `${cardHop.gateway ?? ""}:${cardHop.taskId}`,
+    );
+    if (live) {
+      cardHop = live;
+      cardIndex = rosterHops.indexOf(live);
+      cardTotal = rosterHops.length;
+    }
+  }
+  // 星卡伴随窗定位（悬停锚点定格，渲染期现算；纯函数在 windowGeometry）。
+  // 竖条=固定 460 承载高、内容盒垂直居中；横条=估计盒高+富余、盒按 side
+  // 钳贴条缘。胶囊本体零 resize——卡窗位置纯粹是"别人家的窗"。
+  const hopCardRect = (() => {
+    if (!hoverCard) return null;
+    const workArea = {
+      x: Number.isFinite(window.screen?.availLeft) ? window.screen.availLeft : 0,
+      y: Number.isFinite(window.screen?.availTop) ? window.screen.availTop : 0,
+      width: Number.isFinite(window.screen?.availWidth) ? window.screen.availWidth : window.innerWidth,
+      height: Number.isFinite(window.screen?.availHeight) ? window.screen.availHeight : window.innerHeight,
+    };
+    if (hoverCard.orientation === "horizontal") {
+      return hopCardWindowPlacement({
+        orientation: "horizontal",
+        shellTop: hoverCard.shellTopScreen,
+        shellBottom: hoverCard.shellBottomScreen,
+        cellCenterX: hoverCard.cellCenterXScreen,
+        cardWidth: TASKS_HOPCARD_WIDTH,
+        cardHeight: Math.max(TASKS_HOPCARD_HEIGHT, lastCardHRef.current ?? 0) + HOP_CARD_HEIGHT_SLACK,
+        gap: TASKS_HOPCARD_GAP,
+        workArea,
+      });
+    }
+    return hopCardWindowPlacement({
+      orientation: "vertical",
+      railLeft: hoverCard.railLeftScreen,
+      railRight: hoverCard.railRightScreen,
+      cellCenterY: hoverCard.cellCenterYScreen,
+      cardWidth: TASKS_HOPCARD_WIDTH,
+      cardHeight: HOP_CARD_WINDOW_HEIGHT,
+      gap: TASKS_HOPCARD_GAP,
+      workArea,
+    });
+  })();
+  // 空闲星卡「下次」：该星名下最早触发的启用定时任务（网关权威 nextRunAtMs）。
+  const cardNextRunView = (() => {
+    if (!cardHop) return null;
+    const entry = buildCronNextByAgent(cronJobs, now).get(cardHop.agentId ?? "");
+    if (!entry) return null;
+    return { atMs: entry.atMs, jobName: jobDisplayName(entry.job.name || entry.job.id) };
+  })();
+  // 伴随窗载荷（JSON 串）：与预览 Portal 同一套数据口径；deps 按值比较，
+  // 数据没变的重渲染不会重发。
+  const hopCardPayload = hoverCard && cardHop
+    ? JSON.stringify({
+        orientation: hoverCard.orientation,
+        side: hopCardRect?.side ?? null,
+        hop: cardHop,
+        index: cardIndex,
+        total: cardTotal,
+        records: rosterByHopTaskId.get(cardHop.taskId)?.records ?? null,
+        live: Boolean(rosterByHopTaskId.get(cardHop.taskId)?.running),
+        nextRun: cardNextRunView,
+        agentNames: Object.fromEntries(agentNameMap),
+        currentTaskId: rosterCurrentTaskId,
+        translate: translateProgress,
+        light: glassTint === "light" || (glassTint === "clear" && glassInk === "dark"),
+      })
+    : null;
+  // 星卡伴随窗布局 effect：开/换卡=定位+载荷交给 Rust（隐藏态改几何零伪影，
+  // 卡窗画完一帧回 ready 才显形）；收卡=藏窗。胶囊窗本体零 resize——WebView2
+  // 重排滞后一帧的伪影失去物理载体（b23d4b6 方向修正只能消位移消不掉 resize
+  // 本身，Leo 装机三轮实锤的"弹卡瞬间轻微左右抖"，此为根治）。
+  // deps 按值比较：载荷串与坐标没变的重渲染不重发；数据活刷新（轮询落地）
+  // 会带新载荷重发，卡窗原地换内容（对已可见的窗 show 是幂等 no-op）。
+  const hopCardOpen = hoverCard != null;
+  useLayoutEffect(() => {
+    if (!nativeHopCard) return;
+    if (!hopCardOpen || !hopCardPayload || !hopCardRect) {
+      runWindowAction(() => hideHopCardWindow());
+      return;
+    }
+    const height = hoverCard.orientation === "vertical"
+      ? HOP_CARD_WINDOW_HEIGHT
+      : Math.max(TASKS_HOPCARD_HEIGHT, lastCardHRef.current ?? 0) + HOP_CARD_HEIGHT_SLACK;
+    runWindowAction(() => showHopCardWindow({
+      x: hopCardRect.x,
+      y: hopCardRect.y,
+      width: TASKS_HOPCARD_WIDTH,
+      height,
+      payload: hopCardPayload,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nativeHopCard, hopCardOpen, hopCardPayload, hopCardRect?.x, hopCardRect?.y, hoverCard?.orientation]);
   if (collapsed) {
     const miniVertical = miniOrientation === "vertical";
     const MiniOrientationIcon = miniVertical ? ArrowsLeftRight : ArrowsDownUp;
@@ -1211,22 +1248,6 @@ function TasksWidgetWindow({
       setMiniControlsOpen(false);
       runWindowAction(() => applyExpandedPanelSize());
     };
-    // 悬停卡实时化（发现 6）：拉新数据落地后按 taskId 在最新灯牌里找回该跳，
-    // 卡片跟着刷新，不再定格在打开瞬间的快照；跳刚好消失则退回快照兜底。
-    const hoverHops = rosterHops;
-    let cardHop = hoverCard?.hop ?? null;
-    let cardIndex = hoverCard?.index ?? 0;
-    let cardTotal = hoverCard?.total ?? 0;
-    if (hoverCard && cardHop) {
-      const live = hoverHops.find(
-        (hop) => `${hop.gateway ?? ""}:${hop.taskId}` === `${cardHop.gateway ?? ""}:${cardHop.taskId}`,
-      );
-      if (live) {
-        cardHop = live;
-        cardIndex = hoverHops.indexOf(live);
-        cardTotal = hoverHops.length;
-      }
-    }
     const miniDimensions = miniSize(miniVertical, miniControlsOpen);
     return (
       <main
@@ -1239,16 +1260,6 @@ function TasksWidgetWindow({
           // 折叠壳不受 .widget-shell 的 320×260 下限约束（那是完整卡片的下限）
           minWidth: 0,
           minHeight: 0,
-          // 悬停详情卡扩窗：原生窗朝卡片对侧平移+扩宽，DOM 壳仍是折叠尺寸——
-          // 不钉到扩窗对应缘上，整条胶囊随窗口平移（真机=悬停瞬间竖条跳到屏左、
-          // 横条向上蹿）。竖条侧弹朝左(=right)壳钉右缘，横条向上长(=above)壳钉
-          // 底缘。定侧读 layout?.side ?? side：side 是悬停瞬间同步算好的预钉值，
-          // layout 是原生扩窗返回的权威值——等 layout 才钉=样式提交晚于窗口
-          // 扩宽，条先跳一拍再弹回（Leo 装机两轮实锤的跨跳根因）。
-          // nativeHoverExpand 关门：无原生伸缩的环境（预览/复现台）不钉边，
-          // 否则条被拽到窗缘（预览伪跳动已实锤：悬停 y 242→484）。
-          ...(miniVertical && nativeHoverExpand && (hoverCard?.layout?.side ?? hoverCard?.side) === "right" ? { marginLeft: "auto" } : {}),
-          ...(!miniVertical && nativeHoverExpand && (hoverCard?.layout?.side ?? hoverCard?.side) === "above" ? { marginTop: "auto" } : {}),
         }}
         onPointerEnter={() => {
           window.clearTimeout(miniLeaveTimerRef.current);
@@ -1258,27 +1269,12 @@ function TasksWidgetWindow({
       >
         <div
           className={`tasks-mini${miniVertical ? " tasks-mini--vertical" : ""}`}
-          style={
-            !miniVertical && hoverCard
-              ? // 横条窗口向上长高时内容顶锚会被整条抬走：卡在上方时锚到底边
-                // （同壳钉边一个纪律：预钉 side 优先，layout 只做权威校正）
-                { justifyContent: nativeHoverExpand && (hoverCard.layout?.side ?? hoverCard.side) === "above" ? "flex-end" : undefined }
-              : undefined
-          }
           onPointerDown={(event) => {
             if (event.button !== 0 || event.target.closest("button")) return;
-            // 胶囊不再 OS 拖拽（挪窗走展开面板标题栏）：此前按下即 startDragging，
-            // 跟手模态循环与内容拖拽滚动、悬停扩窗互相拉扯——吸附/来回滑动/抖动
-            // 的总根源。条上按下=内容拖拽滚动或点击展开面板的手势。
+            // 条上按下=内容拖拽滚动或点击展开面板的手势；悬停卡在按下时
+            // 即收（伴随窗由布局 effect 随 hopCardOpen 翻 false 隐藏）。
             pointerDownRef.current = true;
-            if (hoverCardRef.current) {
-              hoverEpochRef.current += 1;
-              const epoch = hoverEpochRef.current;
-              runWindowAction(async () => {
-                await collapseTasksHover();
-                if (hoverEpochRef.current === epoch) setHoverCard(null);
-              });
-            }
+            if (hoverCardRef.current) setHoverCard(null);
           }}
           onPointerMove={(event) => {
             // OS 拖拽的模态循环可能吞掉 pointerup——首个无按键的 move 视为已松开
@@ -1294,12 +1290,12 @@ function TasksWidgetWindow({
           {miniVertical ? (
             // 竖条 = 七星灯牌竖放（Leo 2026-10-06 拍板）：一星一格绝不重复，
             // ●绿呼吸=正在执行、✓/✕=今夜收班、○=空闲（rest 灯语）；滚轮/按住
-            // 拖动翻看、悬停星格出该星明细卡，点击唤主窗。+N 角标退役——
-            // 花名册本就全量上屏，不存在"其余工作"。
+            // 拖动翻看、悬停星格出该星明细卡，点击展开小组件面板。+N 角标
+            // 退役——花名册本就全量上屏，不存在"其余工作"。
             roster.length > 0 ? (
               <div
                 ref={railWrapRef}
-                className={`tasks-mini-railwrap${nativeHoverExpand && (hoverCard?.layout?.side ?? hoverCard?.side) ? ` tasks-mini--hover-${hoverCard.layout?.side ?? hoverCard.side}` : ""}`}
+                className="tasks-mini-railwrap"
                 onPointerLeave={hideHopCard}
               >
                 <ChainFilmstrip
@@ -1335,10 +1331,10 @@ function TasksWidgetWindow({
               <span className="tasks-mini-empty">{feed.live ? "暂无运行中任务" : "未同步"}</span>
             )
           )}
-          {hoverCard && cardHop &&
-            // 唯一路径：卡片恒 Portal 到 body 用 fixed 定位，竖条/横条共用同一张
-            // 卡（发现 1B/7：组件、样式、数据口径一处生效）。真机扩窗后视口=
-            // 扩窗，坐标一致；预览扩窗 no-op 也同样可见（不被壳的裁剪吞掉）。
+          {hoverCard && cardHop && !nativeHopCard &&
+            // 预览路径（无伴随窗命令面）：卡片 Portal 到 body 用 fixed 定位，
+            // 竖条/横条共用同一张卡（发现 1B/7：组件、样式、数据口径一处生效）。
+            // 真机走 tasks-hopcard 伴随窗，胶囊内不重复渲染。
             createPortal(
               <HopHoverCard
                 hop={cardHop}
@@ -1349,6 +1345,7 @@ function TasksWidgetWindow({
                 // 第一个运行星"——多星同时跑时（真机：天玑+玉衡同跑），此前只有
                 // 星序靠前的拿到富卡，后面的运行星错拿收班卡=内容"不一致"。
                 live={Boolean(rosterByHopTaskId.get(cardHop.taskId)?.running)}
+                nextRun={cardNextRunView}
                 agentNameMap={agentNameMap}
                 currentTaskId={rosterCurrentTaskId}
                 translate={translateProgress}
@@ -2331,13 +2328,87 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
   );
 }
 
+/// 星卡伴随窗（?view=hopcard）：载荷驱动渲染悬停星卡本体。收到载荷 →
+/// 渲染 → 双 rAF（保证画完一帧）→ 回 ready，Rust 才显形——窗在隐藏态下
+/// 完成定位与首绘，显形即成品，无中间帧。载荷 take 即清空；挂载兜底取
+/// 一次（首建竞态时 poll 信号可能早于监听建立）。窗固定 224×460、内容盒
+/// 垂直居中（竖条）；横条按 side 钳到贴条缘（above=底对齐/below=顶对齐）。
+function HopCardWindow() {
+  const [cardProps, setCardProps] = useState(null);
+  const lastPayloadRef = useRef("");
+  const lastHeightRef = useRef(0);
+  useEffect(() => {
+    let alive = true;
+    let unlisten = null;
+    const apply = (raw) => {
+      if (!alive || typeof raw !== "string" || !raw) return;
+      if (raw !== lastPayloadRef.current) {
+        lastPayloadRef.current = raw;
+        try {
+          const data = JSON.parse(raw);
+          setCardProps(
+            data
+              ? { ...data, agentNameMap: new Map(Object.entries(data.agentNames ?? {})) }
+              : null,
+          );
+        } catch {
+          setCardProps(null);
+        }
+      }
+      // 内容同帧也回执：宿主可能正等 ready 显形（同载荷重开悬停）。
+      requestAnimationFrame(() => requestAnimationFrame(() => hopCardReady()));
+    };
+    onHopCardSignal(() => {
+      takeHopCardPayload().then(apply);
+    }).then((stop) => {
+      if (!alive) stop?.();
+      else unlisten = stop;
+    });
+    takeHopCardPayload().then(apply);
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+  // 实测高回传：横条上下放卡按它定窗高（值不变不回传，省 IPC）。
+  const handleHeight = (height) => {
+    if (!Number.isFinite(height) || height <= 0 || lastHeightRef.current === height) return;
+    lastHeightRef.current = height;
+    reportHopCardHeight(height);
+  };
+  const stageAlign = !cardProps?.orientation || cardProps.orientation === "vertical"
+    ? "center"
+    : cardProps.side === "above"
+      ? "flex-end"
+      : "flex-start";
+  return (
+    <div className="hopcard-stage" style={{ alignItems: stageAlign }}>
+      {cardProps && (
+        <HopHoverCard
+          hop={cardProps.hop}
+          index={cardProps.index}
+          total={cardProps.total}
+          records={cardProps.records ?? null}
+          live={Boolean(cardProps.live)}
+          nextRun={cardProps.nextRun ?? null}
+          agentNameMap={cardProps.agentNameMap}
+          currentTaskId={cardProps.currentTaskId}
+          translate={cardProps.translate}
+          light={Boolean(cardProps.light)}
+          onHeight={handleHeight}
+        />
+      )}
+    </div>
+  );
+}
+
 /// 任务小组件悬停详情卡：跳名 + 状态徽标 + 进度摘要原话 + 星名/链路位置/耗时，
 /// 底部可带"其他任务"节（首行链路之外的任务，竖条角标同一份数据）。
-/// 竖条/横条两个迷你形态共用（onHopHover opt-in），原生窗口临时扩窗由
-/// windowClient 的 expandTasksHover(Horizontal) 承担；pointer-events:none 纯
-/// 展示，不截断胶卷的指针进出。light = 跟随胶囊浅色外观（卡片 Portal 在
-/// body 下，壳的 glass-light 类够不到，得显式传）。
-function HopHoverCard({ hop, index, total, others, records, live, agentNameMap, currentTaskId, light, translate = true, onHeight, style }) {
+/// 竖条/横条两个迷你形态共用（onHopHover opt-in）。真机由独立星卡伴随窗
+/// （tasks-hopcard）承载同一组件；浏览器预览走窗内 Portal（fixed 定位）。
+/// pointer-events:none 纯展示，不截断胶卷的指针进出。light = 跟随胶囊浅色
+/// 外观（卡片 Portal 在 body 下，壳的 glass-light 类够不到，得显式传）。
+function HopHoverCard({ hop, index, total, others, records, live, nextRun, agentNameMap, currentTaskId, light, translate = true, onHeight, style }) {
   const { tone, state } = hopToneOf(hop, currentTaskId);
   const name = agentDisplayName(agentNameMap, hop.agentId) || hop.agentId || "?";
   const duration = formatCompactDuration(hop.startedAtMs, hop.endedAtMs);
@@ -2408,7 +2479,26 @@ function HopHoverCard({ hop, index, total, others, records, live, agentNameMap, 
             ) : null}
           </div>
         ) : (
-          <p className="tasks-hopcard-skipped">今夜无活动</p>
+          nextRun && Number.isFinite(nextRun.atMs) ? (
+            // 空闲但有定时任务：回答"这颗星是闲着还是死了"（网关权威下次触发）。
+            // 没有定时任务的星整行不渲染——没话说的卡不硬凑。
+            <>
+              <p className="tasks-hopcard-skipped">今夜无活动</p>
+              <div className="tasks-hopcard-kv">
+                <b>下次</b>
+                <span title={`定时「${nextRun.jobName}」`}>
+                  {new Date(nextRun.atMs).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}
+                  {" · "}
+                  {formatCronNext(nextRun.atMs)}
+                  {" · 定时「"}
+                  {nextRun.jobName}
+                  {"」"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="tasks-hopcard-skipped">今夜无活动</p>
+          )
         )}
       </div>
     );
@@ -3951,6 +4041,7 @@ function initialWindowMode() {
   const urlView = new URLSearchParams(window.location.search).get("view");
   if (urlView === "tasks") return "tasks-widget";
   if (urlView === "notifications") return "notifications";
+  if (urlView === "hopcard") return "hopcard";
   return "main";
 }
 
@@ -3987,8 +4078,9 @@ export function App() {
     setTasksWidgetWindow(!tasksWidgetEnabled);
   }, [tasksWidgetEnabled]);
   // 独立常驻：设置开着且已配网关 → 启动时把任务小窗带起来（set 幂等，绝不重建）。
+  // 星卡伴随窗自己不做这个引导（它是小组件的附属窗，不反哺生死）。
   useEffect(() => {
-    if (viewMode === "tasks-widget") return undefined;
+    if (viewMode === "tasks-widget" || viewMode === "hopcard") return undefined;
     if (localStorage.getItem("metrik:tasksWidget") === "off") return undefined;
         setTasksWidgetWindow(true);
     return undefined;
@@ -3996,7 +4088,7 @@ export function App() {
   }, []);
   // 自绘提醒角标窗：总开关开着且已配网关 → 启动同样带起（创建后隐藏待命，有卡才自弹）。
   useEffect(() => {
-    if (viewMode === "notifications") return undefined;
+    if (viewMode === "notifications" || viewMode === "hopcard") return undefined;
     if (!loadMonitorConfig().notifyEnabled) return undefined;
         setNotificationWindow(true);
     return undefined;
@@ -4144,6 +4236,12 @@ export function App() {
   const handleCycleAppearance = useCallback(() => {
     handleGlassTint(nextGlassTint(glassTintRef.current));
   }, [handleGlassTint]);
+
+  // 星卡伴随窗：独立置顶穿透小窗，只渲染悬停星卡本体（载荷由胶囊窗经
+  // Rust static 下发，take 即清空；画完一帧回 ready 才显形）。
+  if (viewMode === "hopcard") {
+    return <HopCardWindow />;
+  }
 
   if (viewMode === "notifications") {
     return (

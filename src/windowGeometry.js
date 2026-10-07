@@ -237,50 +237,56 @@ function verticalStripHoverLayout({ railPosition, railSize, workArea, targetSize
   };
 }
 
-/// 横条悬停详情卡几何：窗口向上长高放卡（上方放不下改向下），x 一律不动——
-/// 卡片与条同宽通栏，横向挪窗会把贴屏幕边缘的条搬离光标（条不动、卡出现）。
-/// 输入输出均为物理像素。返回 null = 上下都放不下（调用方不扩窗不出卡）。
-/// cardTop 的 above 分支恒等于 anchorTop：窗口上移 growHeight 后，内容在新
-/// 视口里整体下移 growHeight，格子新 y 恰好回到原值。
-function horizontalTasksHoverLayout({
-  stripPosition,
-  stripSize,
-  workArea,
-  growHeight,
-  anchorTop,
-  anchorBottom,
-  gap,
+/// 悬停星卡伴随窗几何（纯函数，JS 算位、Rust 只执行）：胶囊窗悬停期间
+/// 零 resize，星卡活在独立置顶穿透小窗里——卡朝哪弹、怎么钳都只是挪
+/// "别人家的窗"，胶囊本体纹丝不动，抖动失去物理载体。
+/// 输入为逻辑像素屏幕坐标（window.screen* 口径，悬停瞬间定格在 hoverCard
+/// 锚点上）；输出窗左上角 x/y 与定侧。side 缺省时按工作区富余现定：
+/// 竖条优先卡在条右（窗口概念里的 left 侧），横条优先卡在条下。
+function hopCardWindowPlacement({
+  orientation,
+  side,
+  railLeft,
+  railRight,
+  shellTop,
+  shellBottom,
+  cellCenterX,
+  cellCenterY,
+  cardWidth,
   cardHeight,
+  gap = 6,
+  workArea,
 }) {
-  const values = [
-    stripPosition?.x,
-    stripPosition?.y,
-    stripSize?.width,
-    stripSize?.height,
-    workArea?.x,
-    workArea?.y,
-    workArea?.width,
-    workArea?.height,
-    growHeight,
-    anchorTop,
-    anchorBottom,
-    gap,
-    cardHeight,
-  ];
-  if (values.some((value) => !Number.isFinite(value))) return null;
-
-  const workBottom = workArea.y + workArea.height;
-  // 卡片优先朝条下方弹（side=below，2026-10-07 改）：窗口 y 完全不动、只向下
-  // 长高，条钉窗口左上角——原生帧与 WebView 重排帧里条的位置完全一致，
-  // 悬停/移开零闪动（旧"朝上弹"要上挪 growHeight，WebView 滞后一帧=条闪）。
-  // 下方放不下才退朝上兜底；上下都放不下返回 null。
-  const belowFits = stripPosition.y + stripSize.height + growHeight <= workBottom;
-  const cardAbove = !belowFits && stripPosition.y - growHeight >= workArea.y;
-  if (!cardAbove && !belowFits) return null;
-  const y = cardAbove ? stripPosition.y - growHeight : stripPosition.y;
-  // 卡底贴条顶（隔 gap）：条不被卡盖住，卡紧贴条上方/下方。
-  const cardTop = cardAbove ? anchorTop - gap - cardHeight : anchorBottom + gap;
-  return { side: cardAbove ? "above" : "below", y, cardTop, cardLeft: 0 };
+  const common = [cardWidth, cardHeight, gap];
+  if (common.some((value) => !Number.isFinite(value)) || !workArea) return null;
+  const area = {
+    x: Number.isFinite(workArea.x) ? workArea.x : 0,
+    y: Number.isFinite(workArea.y) ? workArea.y : 0,
+    width: Number.isFinite(workArea.width) ? workArea.width : 0,
+    height: Number.isFinite(workArea.height) ? workArea.height : 0,
+  };
+  const workRight = area.x + area.width;
+  const workBottom = area.y + area.height;
+  if (orientation === "horizontal") {
+    if ([shellTop, shellBottom, cellCenterX].some((value) => !Number.isFinite(value))) return null;
+    const resolved = side ?? (shellBottom + gap + cardHeight <= workBottom ? "below" : "above");
+    const x = Math.min(
+      Math.max(cellCenterX - cardWidth / 2, area.x + 8),
+      Math.max(workRight - cardWidth - 8, area.x + 8),
+    );
+    const y = resolved === "below" ? shellBottom + gap : shellTop - gap - cardHeight;
+    return { side: resolved, x, y };
+  }
+  if ([railLeft, railRight, cellCenterY].some((value) => !Number.isFinite(value))) return null;
+  const resolved = side ?? (railRight + gap + cardWidth <= workRight - 8 ? "left" : "right");
+  const x = resolved === "left" ? railRight + gap : railLeft - gap - cardWidth;
+  // 窗高等于固定承载高（内容盒在其中垂直居中），纵向钳进工作区即可。
+  const half = cardHeight / 2;
+  const y = Math.min(
+    Math.max(cellCenterY - half, area.y + 8),
+    Math.max(workBottom - cardHeight - 8, area.y + 8),
+  );
+  return { side: resolved, x, y };
 }
 
 /// 记忆坐标是物理像素；用每台显示器自己的 DPI 推导候选窗口大小，再选与工作区
@@ -330,7 +336,7 @@ export {
   edgeDockHiddenPosition,
   floatingViewportSize,
   horizontalStripTargetWidth,
-  horizontalTasksHoverLayout,
+  hopCardWindowPlacement,
   isDockAnchorPosition,
   isDockGeometryCurrent,
   isStableFloatingMode,

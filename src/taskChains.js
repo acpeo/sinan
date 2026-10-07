@@ -452,6 +452,29 @@ export function cronNextAtOf(job, now = Date.now()) {
   return cronNextRunMs(job?.scheduleExpr, now);
 }
 
+/// 空闲星卡「下次」数据源（Leo 2026-10-07 过稿）：启用中的定时任务按网关
+/// 权威 nextRunAtMs（cronNextAtOf）取下次触发，按执星归档、每星取最早。
+/// 没 agentId 的任务不参与（北斗口径里它不归哪颗星）、停用/推不出下次的
+/// 也不参与——没话说的星整行不渲染，不硬凑。
+export function buildCronNextByAgent(jobs, now = Date.now()) {
+  const byAgent = new Map();
+  (Array.isArray(jobs) ? jobs : []).forEach((job) => {
+    if (!job || !job.enabled || !job.agentId) return;
+    const at = cronNextAtOf(job, now);
+    if (!Number.isFinite(at)) return;
+    // 星 id 归一与 buildAgentRoster 同口径：全 id（VPS-北斗:tianshu）取
+    // 最后冒号段对齐账本短 id，否则同星两边对不上。
+    const raw = typeof job.agentId === "string" ? job.agentId : "";
+    const agentId = raw.includes(":") ? raw.slice(raw.lastIndexOf(":") + 1) : raw;
+    if (!agentId) return;
+    const current = byAgent.get(agentId);
+    if (!current || at < current.atMs) {
+      byAgent.set(agentId, { atMs: at, job });
+    }
+  });
+  return byAgent;
+}
+
 /// 排程人话：cron 表达式族照旧；every 周期族（skill 周检/心跳没有表达式）
 /// 从 everyMs 换算——"每 7 天 / 每 8 小时 / 每 30 分钟"。
 export function cronScheduleTextOf(job) {

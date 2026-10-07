@@ -334,3 +334,33 @@ test("collapseStripControlsExpand without a pending restore is a no-op", async (
   await context.collapseStripControlsExpand();
   assert.equal(resized, 0);
 });
+
+test("hop card companion show/hide go straight to invoke and never touch the capsule window", async () => {
+  const context = controller();
+  context.window.__TAURI_INTERNALS__ = {};
+  const calls = [];
+  context.invoke = async (command, args) => {
+    calls.push([command, args ?? null]);
+    return command === "hop_card_ping" ? true : null;
+  };
+  assert.equal(await context.probeHopCardWindow(), true);
+  await context.showHopCardWindow({
+    x: 1614, y: 70, width: 224, height: 460, payload: '{"hop":1}',
+  });
+  await context.hideHopCardWindow();
+  assert.deepEqual(
+    calls.map(([command]) => command),
+    ["hop_card_ping", "show_hop_card", "hide_hop_card"],
+  );
+  assert.equal(calls[1][1].payload, '{"hop":1}');
+  assert.equal(calls[1][1].width, 224);
+});
+
+test("hop card probe falls back to the in-window preview path when commands are missing", async () => {
+  const context = controller();
+  context.invoke = async (command) => {
+    if (command === "hop_card_ping") throw new Error("command hop_card_ping not found");
+    return null;
+  };
+  assert.equal(await context.probeHopCardWindow(), false);
+});

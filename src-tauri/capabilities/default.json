@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "司南桌面能力",
-  "windows": ["main", "tasks-widget", "notifications"],
+  "windows": ["main", "tasks-widget", "notifications", "tasks-hopcard"],
   "permissions": [
     "core:default",
     "core:window:allow-center",
