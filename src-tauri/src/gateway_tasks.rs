@@ -603,8 +603,8 @@ pub struct SessionUsage {
 /// 会话活跃的审计增量记忆（按网关 label 归档）：sessions.list 的
 /// hasActiveRun 对群聊 run 大部分时间为 false（实测 29 分钟的 run 只在最后
 /// 几秒翻 true），灯牌/星位上下文的"在跑"改吃网关审计事件
-/// （agent.run.started/finished，毫秒级、带 agentId）：每拍增量拉
-/// （after 游标，通常 0 行），按星折叠出"活跃集合"。
+/// （agent.run.started/finished，毫秒级、带 agentId+sessionKey）：每拍增量拉
+/// （after 游标，通常 0 行），按 (星, 会话) 折叠出"活跃集合"。
 static AUDIT_RUN_STATE: std::sync::LazyLock<Mutex<HashMap<String, AuditRunState>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -612,15 +612,25 @@ static AUDIT_RUN_STATE: std::sync::LazyLock<Mutex<HashMap<String, AuditRunState>
 struct AuditRunState {
     /// 下次增量拉的起点（最近一条事件的 occurredAt）。
     after: i64,
-    /// 活跃星：agentId -> 最近一次 started 事件的 occurredAt。
-    active: HashMap<String, i64>,
+    /// 活跃 (星, 会话) -> 最近一次 started 事件的 occurredAt。
+    /// 粒度必须是会话：只按星折叠会把活跃涂抹到该星的全部会话上——
+    /// cron/主会话被误点亮后台账跟着开幻影行（Leo 2026-10-08 实锤
+    /// "Memory Dreaming 一次没跑却显示 4 跳 + 收班 35 分钟前"）。
+    active: HashMap<(String, String), i64>,
+    /// 最近一次 audit.list 成功的时刻。失败沿用旧集合有时限——超过
+    /// AUDIT_STALE_MS 没成功拉到过审计就返回空集合：宁可熄灯，不拿
+    /// 旧集合冒充"在跑"（当晚小组件活跃灯冻结在亮的根因之一）。
+    last_ok_ms: i64,
 }
 
-/// started 之后 2 小时仍无 finished 就不再视为活跃（finished 丢失/网关重启
-/// 的兜底；正常路径 finished 即刻移除）。
-const AUDIT_RUN_TTL_MS: i64 = 2 * 3_600_000;
+/// started 之后 30 分钟无任何审计活动（run 事件或工具事件）就不再视为
+/// 活跃（finished 丢失/网关重启的兜底；正常路径 finished 即刻移除）。
+/// 工具事件会给条目续命——长 run 只要还在干活就不会被误杀。
+const AUDIT_RUN_TTL_MS: i64 = 30 * 60_000;
 /// 首次拉取的回看窗宽（覆盖最长的 run；之后走增量游标）。
 const AUDIT_FIRST_WINDOW_MS: i64 = 2 * 3_600_000;
+/// audit.list 连续失败时旧活跃集合的最大可用年龄。
+const AUDIT_STALE_MS: i64 = 60_000;
 
 fn fold_audit_events(state: &mut AuditRunState, events: &[Value], now_ms: i64) {
     for event in events {
@@ -637,12 +647,39 @@ fn fold_audit_events(state: &mut AuditRunState, events: &[Value], now_ms: i64) {
         if occurred > state.after {
             state.after = occurred;
         }
+        let session_key = event
+            .get("sessionKey")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         match action {
             "agent.run.started" => {
-                state.active.insert(agent_id.to_owned(), occurred);
+                state
+                    .active
+                    .insert((agent_id.to_owned(), session_key.to_owned()), occurred);
             }
             "agent.run.finished" => {
-                state.active.remove(agent_id);
+                if session_key.is_empty() {
+                    // 事件缺 sessionKey（防御）：清该星全部活跃，宁可误熄不误亮。
+                    state.active.retain(|(agent, _), _| agent.as_str() != agent_id);
+                } else {
+                    state
+                        .active
+                        .remove(&(agent_id.to_owned(), session_key.to_owned()));
+                }
+            }
+            // 工具事件 = 该 (星, 会话) 还在干活的活证据：给活跃条目续命，
+            // 让 TTL 的语义从"started 后 30 分钟"变成"最后活动后 30 分钟"
+            // （长 run 不会被误杀；finished 丢失也会在活动停止后尽快熄灯）。
+            // 乱序旧事件不回退时间戳。
+            "tool.action.started" | "tool.action.finished" => {
+                if let Some(started) = state
+                    .active
+                    .get_mut(&(agent_id.to_owned(), session_key.to_owned()))
+                {
+                    if occurred > *started {
+                        *started = occurred;
+                    }
+                }
             }
             _ => {}
         }
@@ -652,30 +689,63 @@ fn fold_audit_events(state: &mut AuditRunState, events: &[Value], now_ms: i64) {
         .retain(|_, started| now_ms - *started <= AUDIT_RUN_TTL_MS);
 }
 
-/// 增量拉审计事件并折叠出当前活跃星。audit.list 失败不拖垮快照——
-/// 沿用上一次的活跃集合（TTL 会兜底）。
-fn pull_audit_active(client: &mut GatewayClient, label: &str) -> std::collections::HashSet<String> {
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let Ok(mut guard) = AUDIT_RUN_STATE.lock() else {
-        return std::collections::HashSet::new();
-    };
-    let state = guard.entry(label.to_owned()).or_default();
-    if state.after == 0 {
-        state.after = now_ms - AUDIT_FIRST_WINDOW_MS;
+/// 活跃集合按星归并：星 -> 活跃会话 key 集合（会话级匹配用）。
+type AuditActiveByAgent = HashMap<String, std::collections::HashSet<String>>;
+
+fn audit_active_by_agent(state: &AuditRunState) -> AuditActiveByAgent {
+    let mut by_agent: AuditActiveByAgent = HashMap::new();
+    for ((agent, session), _) in &state.active {
+        by_agent
+            .entry(agent.clone())
+            .or_default()
+            .insert(session.clone());
     }
+    by_agent
+}
+
+/// 增量拉审计事件并折叠出当前活跃 (星, 会话) 集合。
+/// 锁内只做读写快照、网络调用放锁外——持锁拉网会把并发快照串成一队
+/// （audit 8 秒超时 × 排队 = 快照拍速崩到分钟级）。失败不拖垮快照：
+/// 旧集合在 AUDIT_STALE_MS 内继续沿用，超龄返回空（熄灯兜底）。
+fn pull_audit_active(client: &mut GatewayClient, label: &str) -> AuditActiveByAgent {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let (after, last_ok_ms) = {
+        let Ok(mut guard) = AUDIT_RUN_STATE.lock() else {
+            return HashMap::new();
+        };
+        let state = guard.entry(label.to_owned()).or_default();
+        if state.after == 0 {
+            state.after = now_ms - AUDIT_FIRST_WINDOW_MS;
+        }
+        (state.after, state.last_ok_ms)
+    };
     let Ok(payload) = client.call(
         "audit.list",
-        json!({ "after": state.after, "limit": 500 }),
+        json!({ "after": after, "limit": 500 }),
     ) else {
-        return state.active.keys().cloned().collect();
+        if now_ms - last_ok_ms > AUDIT_STALE_MS {
+            return HashMap::new();
+        }
+        let Ok(guard) = AUDIT_RUN_STATE.lock() else {
+            return HashMap::new();
+        };
+        let Some(state) = guard.get(label) else {
+            return HashMap::new();
+        };
+        return audit_active_by_agent(state);
     };
     let events = payload
         .get("events")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let Ok(mut guard) = AUDIT_RUN_STATE.lock() else {
+        return HashMap::new();
+    };
+    let state = guard.entry(label.to_owned()).or_default();
     fold_audit_events(state, &events, now_ms);
-    state.active.keys().cloned().collect()
+    state.last_ok_ms = now_ms;
+    audit_active_by_agent(state)
 }
 
 /// 拉 Agent 活动快照。
@@ -687,9 +757,10 @@ fn pull_audit_active(client: &mut GatewayClient, label: &str) -> std::collection
 ///
 /// 活跃修正（Leo 2026-10-07 实锤"29 分钟的 run 快照只在最后几秒看到"）：
 /// sessions.list 的 hasActiveRun 对群聊 run 不可靠——run 的真实生命周期在
-/// 网关审计事件里（agent.run.started/finished，毫秒级、带 agentId）。这里
-/// 每拍增量拉（after 游标，通常 0 行）维护"活跃星表"，把 audit 说活跃的星
-/// OR 回 has_active_run——星位上下文与迷你胶囊同吃这份数据。
+/// 网关审计事件里（agent.run.started/finished，毫秒级、带 agentId+sessionKey）。
+/// 这里每拍增量拉（after 游标，通常 0 行）维护"活跃 (星, 会话) 表"：
+/// 星级聚合（灯牌/运行任务数）按星 OR，会话行（星位上下文/台账记账）按
+/// sessionKey 精确 OR——audit 涂到别的会话上=台账开幻影行（2026-10-08 实锤）。
 pub fn fetch_agents_snapshot(
     target: &GatewayTarget,
     connection: Option<&Connection>,
@@ -760,8 +831,16 @@ pub fn fetch_agents_snapshot(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let status_running = session.get("status").and_then(Value::as_str) == Some("running");
-            let audit_active = audit_active.contains(agent_id);
-            if has_active_run || status_running || audit_active {
+            // 星级：audit 说该星有任何活跃会话 → 星在跑。
+            let audit_agent_active = audit_active
+                .get(agent_id)
+                .is_some_and(|set| !set.is_empty());
+            // 会话级：只有 audit 点名的那条会话才算活跃（2026-10-08 铁律：
+            // 涂抹到兄弟会话 = 台账幻影行 + Automation 假卡）。
+            let audit_session_active = audit_active
+                .get(agent_id)
+                .is_some_and(|set| set.contains(key));
+            if has_active_run || status_running || audit_agent_active {
                 agent.running_tasks += 1;
                 agent.active = true;
             }
@@ -799,7 +878,7 @@ pub fn fetch_agents_snapshot(
                 should_compact: budget
                     .and_then(|b| b.get("shouldCompact"))
                     .and_then(Value::as_bool),
-                has_active_run: has_active_run || status_running || audit_active,
+                has_active_run: has_active_run || status_running || audit_session_active,
                 status: session
                     .get("status")
                     .and_then(Value::as_str)
@@ -1589,6 +1668,14 @@ fn session_run_is_phantom(session: &SessionUsage) -> bool {
 ///
 /// chat.history 取标题/进度失败时静默降级——台账行仍在，只是标题空。
 /// 返回本次写入（含新增与关闭）的行数。
+/// 运行中行的 chat.history 拉取节流（台账行 id -> 上次拉取时刻）：运行中的
+/// 会话每个快照拍都会路过这里，无节流时一次群聊 run 每拍都拉 50 条管理员
+/// 消息——2026-10-08 实锤两窗 3 秒拍 × 多会话并发，自己把网关压慢、快照
+/// 排队雪崩（小组件整拍冻死、活跃灯冻结在亮）。
+static CHAT_PULL_THROTTLE: std::sync::LazyLock<Mutex<HashMap<i64, i64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+const CHAT_PULL_MIN_INTERVAL_MS: i64 = 15_000;
+
 fn record_session_runs(
     connection: &Connection,
     target_label: &str,
@@ -1646,21 +1733,42 @@ fn record_session_runs(
             };
             // 标题/进度：chat.history（admin 会话）。降级路径：FORBIDDEN/超时/断流
             // 都静默跳过——台账行保留，标题由回落链（subject/displayName）兜底。
-            if let Some(client) = client.as_deref_mut() {
-                if let Ok(payload) = client.call(
-                    "chat.history",
-                    // 窗口太短会被人/agent 热闹的长对话淹没 user 消息（2026-10-03
-                    // 实测 12 条全只剩 assistant/toolResult），放宽到 50。
-                    json!({"sessionKey": session.key, "limit": 50}),
-                ) {
-                    let title = extract_dispatch_title(&payload);
-                    let progress = extract_last_tool_progress(&payload);
-                    let _ = connection.execute(
-                        "UPDATE session_run SET title = COALESCE(title, ?2), \
-                         progress_summary = COALESCE(?3, progress_summary), \
-                         fallback_title = COALESCE(fallback_title, ?4) WHERE id = ?1",
-                        rusqlite::params![run_row, title, progress, fallback_title],
-                    );
+            // 15 秒节流：进度条不需要 3 秒级的消息重拉（见 CHAT_PULL_THROTTLE）。
+            let pull_due = {
+                match CHAT_PULL_THROTTLE.lock() {
+                    Ok(mut guard) => {
+                        let due = match guard.get(&run_row) {
+                            Some(&last) => now - last >= CHAT_PULL_MIN_INTERVAL_MS,
+                            None => true,
+                        };
+                        if due {
+                            guard.insert(run_row, now);
+                            if guard.len() > 512 {
+                                guard.retain(|_, at| now - *at < 3_600_000);
+                            }
+                        }
+                        due
+                    }
+                    Err(_) => false,
+                }
+            };
+            if pull_due {
+                if let Some(client) = client.as_deref_mut() {
+                    if let Ok(payload) = client.call(
+                        "chat.history",
+                        // 窗口太短会被人/agent 热闹的长对话淹没 user 消息（2026-10-03
+                        // 实测 12 条全只剩 assistant/toolResult），放宽到 50。
+                        json!({"sessionKey": session.key, "limit": 50}),
+                    ) {
+                        let title = extract_dispatch_title(&payload);
+                        let progress = extract_last_tool_progress(&payload);
+                        let _ = connection.execute(
+                            "UPDATE session_run SET title = COALESCE(title, ?2), \
+                             progress_summary = COALESCE(?3, progress_summary), \
+                             fallback_title = COALESCE(fallback_title, ?4) WHERE id = ?1",
+                            rusqlite::params![run_row, title, progress, fallback_title],
+                        );
+                    }
                 }
             }
             let _ = connection.execute(
@@ -1683,6 +1791,10 @@ fn record_session_runs(
                 rusqlite::params![id, status, error, session.ended_at, now, fallback_title],
             )?;
             written += 1;
+            // 收行顺手清掉节流表条目（行 id 已终态，不再需要）。
+            if let Ok(mut guard) = CHAT_PULL_THROTTLE.lock() {
+                guard.remove(&id);
+            }
             // 成果速览（2026-10-04 六案①）：收行时补拉一次 chat.history，
             // 最后一跳 assistant 原话 = 该轮的中文结论（北斗巡检/汇报）。失败
             // 静默——行照收，只是没有摘要。
@@ -2595,23 +2707,83 @@ mod tests {
         fold_audit_events(
             &mut state,
             &[
-                json!({"action": "agent.run.started", "agentId": "tianshu", "occurredAt": now - 60_000}),
-                json!({"action": "agent.run.started", "agentId": "tianji", "occurredAt": now - 3 * 3_600_000}),
-                json!({"action": "agent.run.finished", "agentId": "tianshu", "occurredAt": now - 30_000}),
+                json!({"action": "agent.run.started", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 60_000}),
+                json!({"action": "agent.run.started", "agentId": "tianji", "sessionKey": "agent:tianji:cron:j1", "occurredAt": now - 40 * 60_000}),
+                json!({"action": "agent.run.finished", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 30_000}),
             ],
             now,
         );
-        // finished 即刻移除；started 之后 2 小时无 finished 被 TTL 兜底清掉。
-        assert!(!state.active.contains_key("tianshu"));
-        assert!(!state.active.contains_key("tianji"));
+        // finished 即刻移除；started 之后 30 分钟无 finished 被 TTL 兜底清掉。
+        assert!(!state.active.contains_key(&("tianshu".to_owned(), "agent:tianshu:feishu:group:g1".to_owned())));
+        assert!(!state.active.contains_key(&("tianji".to_owned(), "agent:tianji:cron:j1".to_owned())));
         assert_eq!(state.after, now - 30_000);
         // 新鲜 started 保留为活跃（灯牌/卡片的 ● 数据源）。
         fold_audit_events(
             &mut state,
-            &[json!({"action": "agent.run.started", "agentId": "yuheng", "occurredAt": now - 5_000})],
+            &[json!({"action": "agent.run.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 5_000})],
             now,
         );
-        assert_eq!(state.active.get("yuheng"), Some(&(now - 5_000)));
+        assert_eq!(
+            state.active.get(&("yuheng".to_owned(), "agent:yuheng:feishu:group:g2".to_owned())),
+            Some(&(now - 5_000))
+        );
+        // 工具事件续命：run 中途的工具活动把时间戳顶到最新（乱序旧事件不回退），
+        // TTL 按"最后活动"起算——长 run 不误杀；停止活动 30 分钟后熄灯。
+        fold_audit_events(
+            &mut state,
+            &[json!({"action": "tool.action.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 2_000})],
+            now,
+        );
+        fold_audit_events(
+            &mut state,
+            &[json!({"action": "tool.action.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 4_000})],
+            now,
+        );
+        assert_eq!(
+            state.active.get(&("yuheng".to_owned(), "agent:yuheng:feishu:group:g2".to_owned())),
+            Some(&(now - 2_000))
+        );
+        fold_audit_events(&mut state, &[], now + AUDIT_RUN_TTL_MS + 1_000);
+        assert!(!state.active.contains_key(&("yuheng".to_owned(), "agent:yuheng:feishu:group:g2".to_owned())));
+    }
+
+    #[test]
+    fn audit_fold_is_session_precise_not_smeared() {
+        // 2026-10-08 幻影行回归：同星多会话时，run 只点亮它的 sessionKey，
+        // 兄弟会话（cron/主会话）不被涂抹——否则台账给兄弟会话开幻影行，
+        // 动态流长出"一次没跑却 4 跳"的 Automation 假卡。
+        let now = 1_700_000_000_000i64;
+        let mut state = AuditRunState::default();
+        fold_audit_events(
+            &mut state,
+            &[json!({"action": "agent.run.started", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 1_000})],
+            now,
+        );
+        let by_agent = audit_active_by_agent(&state);
+        let sessions = by_agent.get("tianshu").unwrap();
+        assert!(sessions.contains("agent:tianshu:feishu:group:g1"));
+        assert!(!sessions.contains("agent:tianshu:main"));
+        assert!(!sessions.contains("agent:tianshu:cron:j1"));
+        // finished 精确收掉那一条会话；finished 缺 sessionKey 时宁滥杀不残留。
+        fold_audit_events(
+            &mut state,
+            &[json!({"action": "agent.run.finished", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now})],
+            now,
+        );
+        let after_finish = audit_active_by_agent(&state);
+        assert!(after_finish.get("tianshu").map_or(true, |s| !s.contains("agent:tianshu:feishu:group:g1")));
+        let mut state2 = AuditRunState::default();
+        fold_audit_events(
+            &mut state2,
+            &[json!({"action": "agent.run.started", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 1_000})],
+            now,
+        );
+        fold_audit_events(
+            &mut state2,
+            &[json!({"action": "agent.run.finished", "agentId": "tianshu", "occurredAt": now})],
+            now,
+        );
+        assert!(state2.active.is_empty());
     }
 
     #[test]

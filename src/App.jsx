@@ -37,7 +37,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, refreshGatewayTasks, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -649,6 +649,29 @@ function glassPointerProps(enabled) {
       }
     : {};
 }
+// invoke 看门狗：Tauri invoke 没有客户端超时，Rust 侧 scan_gate 排队/网络
+// 慢时 Promise 可能长期不归——2026-10-08 实锤：小组件 tick 第一 await 挂起，
+// 后面三个本地读一个都不发，页脚 lastSync 冻在几分钟前而 live 还挂着上一拍
+// 的 true（撒谎"已连接"）。超时按失败处理，下一拍重试：宁可短暂"未同步"，
+// 不许静默冻结。
+const RPC_WATCHDOG_MS = 20_000;
+function withInvokeTimeout(promise, ms = RPC_WATCHDOG_MS) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("rpc watchdog timeout")), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+
 function useWidgetTasksFeed(gateways, enabled) {
   const [tasks, setTasks] = useState(null);
   const [agents, setAgents] = useState(null);
@@ -679,16 +702,9 @@ function useWidgetTasksFeed(gateways, enabled) {
       // 不因"没配网关"整体早退：浏览器演示数据与 Tauri 本地账本（首启搬迁的
       // 旧台账）都不需要网关在线就能读——主窗 tick 同款口径，早退闸曾让
       // 未配网关的 Widget 永远空转（与小组件自启拆闸同一类病）。
-      if (current.length) {
-        try {
-          const result = await refreshGatewayTasks(current);
-          setLive(result.results.every((entry) => entry.ok));
-        } catch {
-          setLive(false);
-        }
-      } else {
-        setLive(false);
-      }
+      // 本地读（毫秒级）全部先行，不排在网关 RPC 后面：2026-10-08 实锤 RPC
+      // 排队雪崩时 lastSync/卡片数据整拍冻死；网关 RPC 各自带看门狗，
+      // 单拍挂起只损失它自己，下一拍照常。
       loadGatewayTasks(null)
         .then((data) => {
           if (!alive) return;
@@ -696,14 +712,25 @@ function useWidgetTasksFeed(gateways, enabled) {
           setLastSync(Date.now());
         })
         .catch(() => {});
-      loadAgentsSnapshot(current)
-        .then((snap) => {
-          if (alive) setAgents(snap);
-        })
-        .catch(() => {});
       loadSessionRuns()
         .then((data) => {
           if (alive) setSessionRuns(data.runs ?? []);
+        })
+        .catch(() => {});
+      if (current.length) {
+        withInvokeTimeout(refreshGatewayTasks(current))
+          .then((result) => {
+            if (alive) setLive(Boolean(result?.results?.length) && result.results.every((entry) => entry.ok));
+          })
+          .catch(() => {
+            if (alive) setLive(false);
+          });
+      } else {
+        setLive(false);
+      }
+      withInvokeTimeout(loadAgentsSnapshot(current))
+        .then((snap) => {
+          if (alive) setAgents(snap);
         })
         .catch(() => {});
     };
@@ -1003,6 +1030,8 @@ function TasksWidgetWindow({
   // 链路索引 + agent 显示名（北斗星名）。轮询每拍重建，任务量 ≤300 很便宜。
   const chainIndex = useMemo(() => buildTaskChains(tasks), [feed.tasks]);
   const agentNameMap = useMemo(() => buildAgentNameMap(feed.agents?.agents), [feed.agents]);
+  // 快照新鲜度闸：过龄快照的活跃灯一律熄灭（灯不撒谎），用量数字照显。
+  const effectiveAgents = defuseStaleSnapshotActivity(feed.agents, now);
   // 失败/完成的口径 = failedWindowH 小时内结束的任务（设置"失败记录保留"，
   // 默认 1 小时；不设窗口的话数字只涨不清，就成了历史累计而不是"当前这批
   // 工作"的状态——失败的工作尤其不该占着面板一整天）。
@@ -1014,13 +1043,13 @@ function TasksWidgetWindow({
   );
   // 星位上下文（B 链路）：sessions.list 的会话级用量（选择逻辑在 taskChains.js）。
   const usageSessions = useMemo(
-    () => selectUsageSessions(feed.agents?.sessions),
-    [feed.agents],
+    () => selectUsageSessions(effectiveAgents?.sessions),
+    [effectiveAgents],
   );
   // 空闲会话清单：没上卡的（无水位且未运行），供卡头计数与"看全部"展开。
   const idleSessions = useMemo(
-    () => listIdleSessions(feed.agents?.sessions, usageSessions),
-    [feed.agents, usageSessions],
+    () => listIdleSessions(effectiveAgents?.sessions, usageSessions),
+    [effectiveAgents, usageSessions],
   );
   // 会话工作台账（session_run 表）：群聊派活等会话 run。活跃 + 近 N 小时失败
   // （失败记录保留设置），与任务行同一口径；排序键 = 最近活动。
@@ -1076,18 +1105,18 @@ function TasksWidgetWindow({
   // 台账只兜快照没覆盖的星（纯 cron/快照失败）。
   const liveActiveAgentIds = useMemo(() => {
     const ids = new Set();
-    for (const session of feed.agents?.sessions ?? []) {
+    for (const session of effectiveAgents?.sessions ?? []) {
       if (session?.hasActiveRun && session.agentId) ids.add(session.agentId);
     }
     return ids;
-  }, [feed.agents]);
+  }, [effectiveAgents]);
   const snapshotAgentIds = useMemo(() => {
     const ids = new Set();
-    for (const session of feed.agents?.sessions ?? []) {
+    for (const session of effectiveAgents?.sessions ?? []) {
       if (session?.agentId) ids.add(session.agentId);
     }
     return ids;
-  }, [feed.agents]);
+  }, [effectiveAgents]);
   const roster = buildAgentRoster({
     agents: [...agentNameMap.keys()],
     tasks,
@@ -3807,13 +3836,16 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
   const agentNameMap = useMemo(() => buildAgentNameMap(agentsSnap?.agents), [agentsSnap]);
   // 星位上下文（B 链路）：主窗任务台与小组件同一份口径（agents snapshot 会话级用量）。
   // 必须挂早退返回之前——hooks 数量在 loading/loaded 两次渲染要一致（React #310）。
+  // 快照新鲜度闸：过龄快照的活跃灯按熄灭渲染（灯不撒谎），用量数字照显。
+  // 渲染期直算（不 memo）——闸门语义随时间走，tick 每拍 setState 必触发重渲染。
+  const boardAgentsFresh = defuseStaleSnapshotActivity(agentsSnap, Date.now());
   const boardUsageSessions = useMemo(
-    () => selectUsageSessions(agentsSnap?.sessions),
-    [agentsSnap],
+    () => selectUsageSessions(boardAgentsFresh?.sessions),
+    [boardAgentsFresh],
   );
   const boardIdleSessions = useMemo(
-    () => listIdleSessions(agentsSnap?.sessions, boardUsageSessions),
-    [agentsSnap, boardUsageSessions],
+    () => listIdleSessions(boardAgentsFresh?.sessions, boardUsageSessions),
+    [boardAgentsFresh, boardUsageSessions],
   );
   const historyEpisodes = useMemo(() => {
     const windowMs = (monitor.historyWindowMin ?? 0) * 60_000;

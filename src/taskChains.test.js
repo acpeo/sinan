@@ -15,6 +15,8 @@ import {
   cleanSessionTitle,
   cronNextRunMs,
   cronScheduleText,
+  defuseStaleSnapshotActivity,
+  SNAPSHOT_FRESH_MS,
   failureClassOf,
   groupSessionEpisodes,
   isSubagentTask,
@@ -784,4 +786,30 @@ test("buildAgentRoster: 快照覆盖到的星以快照为唯一真相——台�
     snapshotAgentIds: new Set(),
   });
   assert.equal(roster2[0].tone, "current");
+});
+
+test("stale snapshot defuses active lights instead of lying (Leo 2026-10-08)", () => {
+  const now = 1_700_000_000_000;
+  const snap = {
+    retrievedAt: now,
+    agents: [{ agentId: "tianshu", active: true, runningTasks: 1 }],
+    sessions: [
+      { key: "agent:tianshu:feishu:group:g1", agentId: "tianshu", hasActiveRun: true, contextTokens: 138_000 },
+      { key: "agent:tianshu:main", agentId: "tianshu", hasActiveRun: false, contextTokens: 26_000 },
+    ],
+  };
+  // 新鲜快照原样透传（活跃灯该亮就亮）。
+  assert.equal(defuseStaleSnapshotActivity(snap, now), snap);
+  assert.equal(defuseStaleSnapshotActivity(snap, now + SNAPSHOT_FRESH_MS), snap);
+  // 过龄快照：活跃灯一律熄灭，数字与会话一个不丢。
+  const defused = defuseStaleSnapshotActivity(snap, now + SNAPSHOT_FRESH_MS + 1);
+  assert.notEqual(defused, snap);
+  assert.equal(defused.sessions.length, 2);
+  assert.equal(defused.sessions[0].hasActiveRun, false);
+  assert.equal(defused.sessions[0].contextTokens, 138_000);
+  assert.equal(defused.sessions[0].key, "agent:tianshu:feishu:group:g1");
+  // 没 retrievedAt 的（浏览器演示/未知形态）不掺和；本来就没活跃灯的不重建对象。
+  assert.equal(defuseStaleSnapshotActivity({ sessions: [] }, now + 10 ** 9).sessions.length, 0);
+  const idleOnly = { retrievedAt: now - 10 ** 9, sessions: [{ hasActiveRun: false }] };
+  assert.equal(defuseStaleSnapshotActivity(idleOnly, now).sessions[0].hasActiveRun, false);
 });

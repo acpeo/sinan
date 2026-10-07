@@ -102,6 +102,24 @@ export function chainHopsFor(task, { childOf, parentOf, groups }) {
 /// 快满了"，不回答"谁刚说话"——只有真实水位（estimatedPromptTokens > 0）的
 /// 会话才按水位降序上卡。群会话不再无条件常驻（旧口径下任何产生过对话的
 /// 群/主会话都占一行，多数渲染成"预 525k"占位）；没水位的收进卡头空闲汇总，
+/// 快照新鲜度闸（Leo 2026-10-08"灯不撒谎"铁律）：agents 快照超过 freshMs
+/// 没换血（RPC 挂起/排队/前端整拍冻结）时，所有 hasActiveRun 一律按熄灭渲染。
+/// 冻结的 ● 就是撒谎——Leo 实锤"飞书都回完了胶囊还在闪"：那一刻活跃灯读的
+/// 是几分钟前的陈旧数据。用量数字照显（陈旧但大致正确），只有"活跃"不许陈旧。
+export const SNAPSHOT_FRESH_MS = 90_000;
+
+export function defuseStaleSnapshotActivity(snap, nowMs = Date.now()) {
+  if (!snap || Array.isArray(snap)) return snap;
+  const at = Number(snap.retrievedAt);
+  if (!Number.isFinite(at) || at <= 0 || nowMs - at <= SNAPSHOT_FRESH_MS) return snap;
+  const sessions = snap.sessions;
+  if (!Array.isArray(sessions) || !sessions.some((s) => s?.hasActiveRun)) return snap;
+  return {
+    ...snap,
+    sessions: sessions.map((s) => (s?.hasActiveRun ? { ...s, hasActiveRun: false } : s)),
+  };
+}
+
 /// 全网关都没水位时整卡收掉（渲染层按 usageSessions.length 判定）。
 /// 例外（Leo 2026-10-04 补的场景）：刚接活、思考中还没产出上下文的星位——
 /// hasActiveRun 的会话无条件上卡并置顶，显示"启动中"，水位一产出当场接管，

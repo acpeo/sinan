@@ -343,6 +343,7 @@ export async function loadAgentsSnapshot(gateways) {
     ];
     return {
       demo: true,
+      retrievedAt: Date.now(),
       agents: stars.map((star, index) => ({
         agentId: `VPS-北斗:${star.id}`,
         name: star.name,
@@ -396,7 +397,9 @@ export async function loadAgentsSnapshot(gateways) {
         missedWindowHours: monitor.missedWindowHours,
       },
     });
-    return { demo: false, agents: payload?.agents ?? [], sessions: payload?.sessions ?? [] };
+    // retrievedAt = 新鲜度闸的锚（App.jsx defuseStaleSnapshotActivity）：
+    // 快照过龄（RPC 挂起/排队）时活跃灯按熄灭渲染，冻结的 ● 就是撒谎。
+    return { demo: false, agents: payload?.agents ?? [], sessions: payload?.sessions ?? [], retrievedAt: Date.now() };
   } catch (error) {
     return { demo: false, agents: [], sessions: [], loadError: String(error) };
   }
