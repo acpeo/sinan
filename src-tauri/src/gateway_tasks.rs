@@ -676,9 +676,7 @@ fn fold_audit_events(state: &mut AuditRunState, events: &[Value], now_ms: i64) {
                     .active
                     .get_mut(&(agent_id.to_owned(), session_key.to_owned()))
                 {
-                    if occurred > *started {
-                        *started = occurred;
-                    }
+                    *started = occurred.max(*started);
                 }
             }
             _ => {}
@@ -719,20 +717,22 @@ fn pull_audit_active(client: &mut GatewayClient, label: &str) -> AuditActiveByAg
         }
         (state.after, state.last_ok_ms)
     };
-    let Ok(payload) = client.call(
-        "audit.list",
-        json!({ "after": after, "limit": 500 }),
-    ) else {
-        if now_ms - last_ok_ms > AUDIT_STALE_MS {
-            return HashMap::new();
+    let payload = match client.call("audit.list", json!({ "after": after, "limit": 500 })) {
+        Ok(payload) => payload,
+        Err(_) => {
+            // 失败窗口内沿用旧集合，超龄返回空（宁熄灯不冒充"在跑"）。
+            return if now_ms - last_ok_ms > AUDIT_STALE_MS {
+                HashMap::new()
+            } else {
+                let Ok(guard) = AUDIT_RUN_STATE.lock() else {
+                    return HashMap::new();
+                };
+                match guard.get(label) {
+                    Some(state) => audit_active_by_agent(state),
+                    None => HashMap::new(),
+                }
+            };
         }
-        let Ok(guard) = AUDIT_RUN_STATE.lock() else {
-            return HashMap::new();
-        };
-        let Some(state) = guard.get(label) else {
-            return HashMap::new();
-        };
-        return audit_active_by_agent(state);
     };
     let events = payload
         .get("events")
@@ -1672,9 +1672,32 @@ fn session_run_is_phantom(session: &SessionUsage) -> bool {
 /// 会话每个快照拍都会路过这里，无节流时一次群聊 run 每拍都拉 50 条管理员
 /// 消息——2026-10-08 实锤两窗 3 秒拍 × 多会话并发，自己把网关压慢、快照
 /// 排队雪崩（小组件整拍冻死、活跃灯冻结在亮）。
+/// 运行中行的 chat.history 拉取节流（台账行 id -> 上次拉取时刻）：运行中的
+/// 会话每个快照拍都会路过这里，无节流时一次群聊 run 每拍都拉 50 条管理员
+/// 消息——2026-10-08 实锤两窗 3 秒拍 × 多会话并发，自己把网关压慢、快照
+/// 排队雪崩（小组件整拍冻死、活跃灯冻结在亮）。
 static CHAT_PULL_THROTTLE: std::sync::LazyLock<Mutex<HashMap<i64, i64>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 const CHAT_PULL_MIN_INTERVAL_MS: i64 = 15_000;
+
+/// 判定该台账行这一拍是否该拉 chat.history，并把"该拉"的这一拍登记进节流表。
+/// 锁中毒时按"不拉"处理（宁可少一次进度刷新，不赌并发）。
+fn chat_pull_due(row_id: i64, now_ms: i64) -> bool {
+    let Ok(mut guard) = CHAT_PULL_THROTTLE.lock() else {
+        return false;
+    };
+    let due = match guard.get(&row_id) {
+        Some(&last) => now_ms - last >= CHAT_PULL_MIN_INTERVAL_MS,
+        None => true,
+    };
+    if due {
+        guard.insert(row_id, now_ms);
+        if guard.len() > 512 {
+            guard.retain(|_, at| now_ms - *at < 3_600_000);
+        }
+    }
+    due
+}
 
 fn record_session_runs(
     connection: &Connection,
@@ -1734,24 +1757,7 @@ fn record_session_runs(
             // 标题/进度：chat.history（admin 会话）。降级路径：FORBIDDEN/超时/断流
             // 都静默跳过——台账行保留，标题由回落链（subject/displayName）兜底。
             // 15 秒节流：进度条不需要 3 秒级的消息重拉（见 CHAT_PULL_THROTTLE）。
-            let pull_due = {
-                match CHAT_PULL_THROTTLE.lock() {
-                    Ok(mut guard) => {
-                        let due = match guard.get(&run_row) {
-                            Some(&last) => now - last >= CHAT_PULL_MIN_INTERVAL_MS,
-                            None => true,
-                        };
-                        if due {
-                            guard.insert(run_row, now);
-                            if guard.len() > 512 {
-                                guard.retain(|_, at| now - *at < 3_600_000);
-                            }
-                        }
-                        due
-                    }
-                    Err(_) => false,
-                }
-            };
+            let pull_due = chat_pull_due(run_row, now);
             if pull_due {
                 if let Some(client) = client.as_deref_mut() {
                     if let Ok(payload) = client.call(
