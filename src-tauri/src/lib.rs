@@ -649,6 +649,49 @@ fn disable_system_corner_rounding(hwnd: isize) {
     }
 }
 
+/// 悬停扩窗/收窗的位置+尺寸一次原子落：JS 侧 setSize、setPosition 是两笔 IPC，
+/// Windows 改尺寸默认锚死左上角——第一帧窗口停在旧位新尺寸（CSS 钉边跟着错位），
+/// 第二帧才归位，整条"抖一下"（Leo 实锤）。单次 SetWindowPos 四值同帧生效。
+#[cfg(windows)]
+#[tauri::command]
+async fn set_window_bounds(
+    window: tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    unsafe {
+        SetWindowPos(
+            HWND(hwnd.0 as *mut _),
+            HWND(std::ptr::null_mut()),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// 非 Windows 平台占位：调用方在 JS 侧已按平台分流，这里只为编译通过。
+#[cfg(not(windows))]
+#[tauri::command]
+async fn set_window_bounds(
+    _window: tauri::WebviewWindow,
+    _x: i32,
+    _y: i32,
+    _width: i32,
+    _height: i32,
+) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -726,7 +769,8 @@ pub fn run() {
             expand_round_details,
             show_main_expanded,
             set_taskbar_button,
-            set_native_theme
+            set_native_theme,
+            set_window_bounds
         ])
         .run(tauri::generate_context!())
         .expect("error while running sinan");

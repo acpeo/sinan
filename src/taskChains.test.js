@@ -608,9 +608,10 @@ test("buildAgentRoster: 一星一格去重，灯色取今夜最新一跳，无�
     dayStartMs: dayStart,
     order: ["tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang", "main"],
   });
-  assert.equal(roster.length, 8); // 花名册全量：无记录的星也占一格（rest 暗格）
+  assert.equal(roster.length, 7); // 花名册：北斗七星全量；客星（main）编制豁免空闲不占格
   assert.equal(roster[0].agentId, "tianshu");
   assert.equal(roster[0].tone, "rest"); // 今夜无活动
+  assert.equal(roster.some((e) => e.agentId === "main"), false); // 客星空闲不出格
   const tianxuan = roster.find((e) => e.agentId === "tianxuan");
   assert.equal(tianxuan.tone, "current"); // 最新一跳 running → ● 绿呼吸
   assert.equal(tianxuan.records.length, 2); // 悬停星卡按星聚合今夜全部跳
@@ -659,8 +660,36 @@ test("buildAgentRoster: agents.list 全 id（VPS-北斗:x）与账本短 id 同�
   });
   const ids = roster.map((entry) => entry.agentId);
   assert.equal(new Set(ids).size, ids.length, "同星只能占一格");
-  assert.equal(roster.length, 8);
+  assert.equal(roster.length, 7);
   assert.equal(ids.filter((id) => id === "tianshu").length, 1);
   assert.equal(roster.find((entry) => entry.agentId === "tianshu").tone, "done");
+});
+
+test("buildAgentRoster: 客星（openclaw 兜底）空闲不占格，今夜有活动进末位", () => {
+  const dayStart = 1_000_000_000_000;
+  const order = ["tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang", "main"];
+  const agents = [
+    "tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang",
+    "VPS-北斗:tianshu", "main",
+  ];
+  // 空闲：客星不占格，七星各一
+  const idle = buildAgentRoster({ agents, tasks: [], runs: [], now: dayStart + 999, dayStartMs: dayStart, order });
+  assert.equal(idle.some((entry) => entry.agentId === "main"), false, "客星空闲不出格");
+  assert.equal(idle.length, 7);
+  assert.deepEqual(idle.map((entry) => entry.agentId), order.slice(0, 7), "北斗星序");
+  // 有活动：客星追加末位（兜底星动了才值得看）
+  const active = buildAgentRoster({
+    agents,
+    tasks: [],
+    runs: [
+      { id: "m1", agentId: "main", status: "failed", startedAtMs: dayStart + 100, endedAtMs: dayStart + 300, error: "boom" },
+    ],
+    now: dayStart + 999_999,
+    dayStartMs: dayStart,
+    order,
+  });
+  assert.equal(active.length, 8);
+  assert.equal(active[7].agentId, "main", "客星有活动进末位");
+  assert.equal(active[7].tone, "failed");
 });
 

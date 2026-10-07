@@ -1195,6 +1195,25 @@ async function collapseVerticalStripHover() {
 /// 条身缩放（任务窗不参与 stripScale）、不写条身尺寸缓存——那是另一个窗的记忆。
 let tasksHoverRestore = null;
 
+/// 位置+尺寸一次原子落（后端单次 SetWindowPos，同帧生效）。setSize、setPosition
+/// 拆两笔 IPC 时，Windows 改尺寸锚死左上角——中间帧条停在旧位新尺寸，CSS 钉边
+/// 跟着错位再归位=弹窗瞬间整条抖动（Leo 实锤）。旧后端没有命令时回退两笔。
+async function setWindowBoundsAtomic(appWindow, api, x, y, size) {
+  try {
+    await invoke("set_window_bounds", {
+      x: Math.round(x),
+      y: Math.round(y),
+      width: size.width,
+      height: size.height,
+    });
+  } catch {
+    await appWindow.setSize(size).catch(() => {});
+    await appWindow
+      .setPosition(new api.PhysicalPosition(Math.round(x), Math.round(y)))
+      .catch(() => {});
+  }
+}
+
 /// 悬停扩窗是否在途（restore 非空 = 已扩或正在收）。位置记忆用它拒记
 /// 扩窗态的左上角——那是承载卡的透明区，不是条的摆放位置。
 function isTasksHoverExpanded() {
@@ -1271,12 +1290,8 @@ async function expandTasksHover({ width, height, anchorY, cardHeight, collapsedS
     anchorMotion: "static",
   });
   if (!layout) return null;
-  // 顺序下发（不再 Promise.all）：两笔原生调用紧邻落地，中间帧在同一个
-  // vsync 内的概率被压到最低；并发下发则顺序不保，收/扩交错时终态不定。
-  await appWindow.setSize(physical).catch(() => {});
-  await appWindow
-    .setPosition(new api.PhysicalPosition(Math.round(layout.x), Math.round(layout.y)))
-    .catch(() => {});
+  // 位置+尺寸一次原子落（两笔 IPC 的中间帧=弹窗瞬间抖动的根源）。
+  await setWindowBoundsAtomic(appWindow, api, layout.x, layout.y, physical);
   return {
     side: layout.side,
     cardCenterY: layout.cardCenter / scale,
@@ -1291,10 +1306,14 @@ async function collapseTasksHover() {
   const api = await windowApi();
   if (!api) return;
   const appWindow = api.getCurrentWindow();
-  await Promise.all([
-    appWindow.setSize(restore.size).catch(() => {}),
-    restore.position ? appWindow.setPosition(restore.position).catch(() => {}) : Promise.resolve(),
-  ]);
+  // 收窗同样原子落：扩窗的逆操作拆两笔=收起瞬间同款抖动。
+  await setWindowBoundsAtomic(
+    appWindow,
+    api,
+    restore.position?.x ?? 0,
+    restore.position?.y ?? 0,
+    restore.size,
+  );
 }
 
 /// 任务小组件横条悬停详情卡：窗口向上长高放卡（上方放不下改向下），x 不动
@@ -1345,10 +1364,8 @@ async function expandTasksHoverHorizontal({ cardHeight, gap, anchorTop, anchorBo
     1,
     scale,
   );
-  await appWindow.setSize(physical).catch(() => {});
-  await appWindow
-    .setPosition(new api.PhysicalPosition(Math.round(base.position.x), Math.round(layout.y)))
-    .catch(() => {});
+  // 位置+尺寸一次原子落（同竖条：两笔 IPC 中间帧=横条上下抖动）。
+  await setWindowBoundsAtomic(appWindow, api, base.position.x, layout.y, physical);
   return {
     side: layout.side,
     cardTop: layout.cardTop / scale,

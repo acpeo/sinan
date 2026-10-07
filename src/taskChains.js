@@ -13,8 +13,7 @@ const STAR_DISPLAY_FALLBACK = {
   tianquan: "天权", yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光",
 };
 
-export function buildAgentNameMap(agents) {
-  const map = new Map(Object.entries(STAR_DISPLAY_FALLBACK));
+export function buildAgentNameMap(agents) {  const map = new Map(Object.entries(STAR_DISPLAY_FALLBACK));
   for (const agent of agents ?? []) {
     if (!agent?.agentId) continue;
     if (agent.name && !map.has(agent.agentId)) map.set(agent.agentId, agent.name);
@@ -753,6 +752,11 @@ export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
 /// done→✓、failed→✕、queued→○ 排队、无记录→rest ○ 空闲（新灯语）。
 /// order = 北斗星序（App 层传 AGENT_ORDER），花名册之外的 agent 追加尾部；
 /// agents 缺失的星不占格（灯牌只显示真实存在的 agent）。
+/// 客星编制豁免（Leo 2026-10-07 澄清）：客星=openclaw 安装自带的默认 agent，
+/// 不在北斗编制——留作北斗失效时与 openclaw 对话的兜底。灯牌里空闲不占格，
+/// 今夜有活动才进末位（兜底星动了才值得看）。
+const IDLE_EXEMPT_AGENTS = new Set(["main"]);
+
 export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }) {
   // agent id 归一：agents.list 的全 id（VPS-北斗:tianshu）与账本的短 id（tianshu）
   // 是同一颗星——不归一花名册就同星双格（真机实锤），口径与 buildAgentNameMap
@@ -794,6 +798,7 @@ export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }
   // 星序去重：order（北斗星序）在前，今夜有活动的其余 agent 次之，agents.list
   // 里剩余的星（暗格）垫底——全 id/短 id 归一后按 canonicalAgentId 去重；
   // order 星既不在 agents.list 也没今夜活动的不占格（灯牌只显示真实存在的星）。
+  // 客星（main）编制豁免：空闲不占格，今夜有活动才进末位。
   const agentIdSet = new Set(
     (agents ?? [])
       .map((agent) => canonicalAgentId(typeof agent === "string" ? agent : agent?.agentId))
@@ -807,13 +812,17 @@ export function buildAgentRoster({ agents, tasks, runs, dayStartMs, order = [] }
     seen.add(id);
     rosterAgents.push(id);
   };
+  const mayOccupy = (id) => !IDLE_EXEMPT_AGENTS.has(id) || recordsByAgent.has(id);
   for (const raw of order) {
     const id = canonicalAgentId(raw);
-    if (agentIdSet.has(id) || recordsByAgent.has(id)) pushAgent(id);
+    if (agentIdSet.has(id) || recordsByAgent.has(id)) {
+      if (mayOccupy(id)) pushAgent(id);
+    }
   }
   for (const agentId of recordsByAgent.keys()) pushAgent(agentId);
   for (const raw of agents ?? []) {
-    pushAgent(typeof raw === "string" ? raw : raw?.agentId);
+    const id = canonicalAgentId(typeof raw === "string" ? raw : raw?.agentId);
+    if (mayOccupy(id)) pushAgent(id);
   }
   return rosterAgents.map((agentId) => {
     const records = (recordsByAgent.get(agentId) ?? []).sort(

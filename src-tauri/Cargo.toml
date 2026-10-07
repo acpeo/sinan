@@ -38,10 +38,13 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
-# 关掉系统给无边框窗口画的圆角（玻璃外壳自绘圆角，双层圆角会破皮）。
+# 关掉系统给无边框窗口画的圆角（玻璃外壳自绘圆角，双层圆角会破皮）；
+# Win32_UI_WindowsAndMessaging = SetWindowPos：悬停扩窗的位置+尺寸一次原子落，
+# 拆两笔 IPC 会有中间帧（条先弹错位再归位=抖动）。
 windows = { version = "0.61.3", features = [
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 
 [profile.release]

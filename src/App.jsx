@@ -218,6 +218,12 @@ const AGENT_META = {
 
 const AGENT_ORDER = Object.keys(AGENT_META);
 
+// 七星灯牌星序：北斗七星（枢璇玑权衡阳光，与星盘折线同序）；客星（openclaw
+// 自带兜底，非北斗编制）排末位且空闲不占格（taskChains IDLE_EXEMPT_AGENTS）。
+const ROSTER_STAR_ORDER = [
+  "tianshu", "tianxuan", "tianji", "tianquan", "yuheng", "kaiyang", "yaoguang", "main",
+];
+
 // 平台旗标：Windows 是主战场，零件里的平台分支共用这三条。
 const IS_MAC = isMacPlatform();
 const IS_WINDOWS = isWindowsPlatform();
@@ -1127,7 +1133,7 @@ function TasksWidgetWindow({
       d.setHours(0, 0, 0, 0);
       return d.getTime();
     })(),
-    order: AGENT_ORDER,
+    order: ROSTER_STAR_ORDER,
   });
   // 灯牌单元格 = 花名册条目；运行中星的 taskId 作当前跳（呼吸居中锚点）。
   const rosterHops = roster.map((entry) => entry.hop);
