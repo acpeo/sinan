@@ -838,6 +838,23 @@ function TasksWidgetWindow({
   // 指针重新进格（新世代），收窗完成回调不得把新卡抹掉；展开 effect 也靠它
   // 在"收窗途中重新悬停"后重跑扩窗（收窗把原生窗还原了，卡还开着会被裁）。
   const hoverEpochRef = useRef(0);
+  // 按下状态：OS 窗口拖拽/内容拖拽滚动进行中——悬停卡停发（showHopCard 看
+  // 它 + event.buttons），拖拽期任何程序化挪窗都会跟手拉扯成来回滑动。
+  const pointerDownRef = useRef(false);
+  // 兜底：OS 拖拽的模态循环可能吞掉 pointerup，窗级捕获补一刀。
+  useEffect(() => {
+    const clear = () => {
+      pointerDownRef.current = false;
+    };
+    window.addEventListener("pointerup", clear, true);
+    window.addEventListener("pointercancel", clear, true);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("pointerup", clear, true);
+      window.removeEventListener("pointercancel", clear, true);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
   // 钉边样式的生效开关：真机 Tauri 会真的伸缩原生窗，钉边补偿它=条纹丝不动；
   // 预览/复现台（stub 环境）没有窗体伸缩，钉边会把条从居中位拽到窗缘=伪跳动
   // （Leo 实测"还是跳"的预览半边）。默认按真机算（探测返回前悬停不丢钉边），
@@ -888,6 +905,9 @@ function TasksWidgetWindow({
     return shellTopScreen - growHeight >= availTop ? "above" : "below";
   };
   const showHopCard = (hop, index, total, event) => {
+    // 拖拽期不出卡不挪窗：OS 窗口拖拽跟手、内容拖拽滚动改条内滚动——
+    // 期间任何程序化挪窗都会被拉扯成"来回滑动"（Leo 装机实锤）。
+    if (pointerDownRef.current || (event.buttons ?? 0) !== 0) return;
     window.clearTimeout(hopCardLeaveTimerRef.current);
     hoverEpochRef.current += 1;
     if (!hoverCardRef.current && Date.now() - lastHoverRefreshAtRef.current > 2500) {
@@ -1239,7 +1259,32 @@ function TasksWidgetWindow({
           }
           onPointerDown={(event) => {
             if (event.button !== 0 || event.target.closest("button")) return;
+            // 按下即收卡+撤扩窗（异步队列落地）：OS 窗口拖拽是跟手的模态循环，
+            // 任何程序化挪窗都会和它互相拉扯成"点一下吸附住、鼠标动来回滑动"
+            // （Leo 装机实锤）；拖拽期间悬停卡停发（showHopCard 看 pointerDownRef）。
+            pointerDownRef.current = true;
+            if (hoverCardRef.current) {
+              hoverEpochRef.current += 1;
+              const epoch = hoverEpochRef.current;
+              runWindowAction(async () => {
+                await collapseTasksHover();
+                if (hoverEpochRef.current === epoch) setHoverCard(null);
+              });
+            }
+            // 星格/胶卷上按下 = 内容拖拽滚动 + 点击唤主窗的手势，不抢成挪窗；
+            // 挪窗手势保留在条边缘衬垫与控制簇（非 button 的其余区域）。
+            if (event.target.closest(".tasks-mini-strip")) return;
             startWindowDragging();
+          }}
+          onPointerMove={(event) => {
+            // OS 拖拽的模态循环可能吞掉 pointerup——首个无按键的 move 视为已松开
+            if (pointerDownRef.current && (event.buttons ?? 0) === 0) pointerDownRef.current = false;
+          }}
+          onPointerUp={() => {
+            pointerDownRef.current = false;
+          }}
+          onPointerCancel={() => {
+            pointerDownRef.current = false;
           }}
         >
           {miniVertical ? (
