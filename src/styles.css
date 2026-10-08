@@ -68,6 +68,9 @@ button:focus-visible {
 .window-actions {
   display: flex;
   align-items: center;
+  /* 门面按钮排：只能点，不许鼠标拖选（新版 WebView2 默认连按钮上的字
+     都能选中——Leo 2026-10-08 实锤"点页签手一划就选中"）。 */
+  user-select: none;
 }
 
 .window-actions--compact { gap: 1px; }
@@ -173,6 +176,8 @@ button:focus-visible {
   left: 0;
   height: 34px;
   cursor: move;
+  /* 拖拽区是门面，按住拖窗不该把底下文字划成蓝块。 */
+  user-select: none;
 }
 
 .widget-shell {
@@ -303,6 +308,8 @@ button:focus-visible {
   justify-content: space-between;
   padding: 3px 5px 3px 14px;
   cursor: move;
+  /* 标题栏（含"任务追踪"四字与状态点）是门面：禁选。 */
+  user-select: none;
   box-shadow: 0 1px rgba(31, 33, 36, 0.075);
 }
 
@@ -8410,6 +8417,9 @@ html[data-theme="dark"] .console-root {
 .console-tabs button { appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent; color: inherit; opacity: 0.6; font: inherit; font-size: 13px; padding: 6px 12px 8px; cursor: pointer; }
 .console-tabs button.is-selected { opacity: 1; border-bottom-color: #d9a860; }
 .console-tabs button:hover { opacity: 1; }
+/* 页签行与页签文字同属门面：禁选（正文内容不受影响，可正常复制）。 */
+.console-tabs { user-select: none; }
+.console-tabs button { user-select: none; }
 .console-root .console-scroll { top: 88px; }
 .tasks-section--flush { margin: 0; padding: 0; }
 .tasks-standby { color: var(--fg-faint, #6a6b73); font-size: 13px; text-align: center; padding: 28px 12px; }

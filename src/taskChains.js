@@ -108,6 +108,25 @@ export function chainHopsFor(task, { childOf, parentOf, groups }) {
 /// 是几分钟前的陈旧数据。用量数字照显（陈旧但大致正确），只有"活跃"不许陈旧。
 export const SNAPSHOT_FRESH_MS = 90_000;
 
+/// 连接灯的真话来源：星位快照的分网关成败。
+/// 2026-10-08 前 live 绑在 gateway_task_snapshot 上——那条命令 2026.9.8
+/// 后就是空壳（不运数据却仍排全局锁），加上看门狗把"排队"误判断网，
+/// 于是任务卡写着"6 秒前"、底栏却亮"未同步"+重试（Leo 实锤的假警报）。
+/// 判定规则：必须至少有一个网关上报且全部成功；空名单/任一失败=未连接。
+export function gatewayResultsAllOk(results) {
+  if (!Array.isArray(results) || results.length === 0) return false;
+  return results.every((entry) => Boolean(entry?.ok));
+}
+
+/// 失败网关的中文串（底栏提示条用）。
+export function gatewayFailureText(results) {
+  if (!Array.isArray(results)) return "";
+  return results
+    .filter((entry) => entry && !entry.ok)
+    .map((entry) => `${entry.gateway ?? "?"}：${entry.error ?? "未知错误"}`)
+    .join("；");
+}
+
 export function defuseStaleSnapshotActivity(snap, nowMs = Date.now()) {
   if (!snap || Array.isArray(snap)) return snap;
   const at = Number(snap.retrievedAt);

@@ -36,8 +36,8 @@ import qwenAppIcon from "./assets/qwen-app-icon.png";
 import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
-import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, refreshGatewayTasks, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -688,6 +688,8 @@ function useWidgetTasksFeed(gateways, enabled) {
   }, []);
 
   const gatewayKey = gateways.map((gateway) => gateway.label).join("|");
+  // 手动「重试」要立即真拉：下一拍带 force 绕过 Rust 的两窗合并缓存。
+  const forceNextRef = useRef(false);
   useEffect(() => {
     // 只看 enabled，不看 gateways：任务小窗是独立 webview，主窗保存的 Gateway
     // 配置不会跨窗推事件（升级重建存储后"主窗重配、小窗先起于空配置"正是
@@ -699,12 +701,11 @@ function useWidgetTasksFeed(gateways, enabled) {
       // 跳过的每一拍都是灯牌数据冻结的一拍（Leo 实锤"胶囊比主窗慢"）。
       if (!isTauriRuntime() && !PREVIEW_EAGER && document.visibilityState === "hidden") return;
       const current = loadGatewayConfig();
-      // 不因"没配网关"整体早退：浏览器演示数据与 Tauri 本地账本（首启搬迁的
-      // 旧台账）都不需要网关在线就能读——主窗 tick 同款口径，早退闸曾让
-      // 未配网关的 Widget 永远空转（与小组件自启拆闸同一类病）。
-      // 本地读（毫秒级）全部先行，不排在网关 RPC 后面：2026-10-08 实锤 RPC
-      // 排队雪崩时 lastSync/卡片数据整拍冻死；网关 RPC 各自带看门狗，
-      // 单拍挂起只损失它自己，下一拍照常。
+      const force = forceNextRef.current;
+      forceNextRef.current = false;
+      // 本地读（毫秒级）全部先行，不排在网关 RPC 后面：RPC 排队/网络慢时
+      // lastSync/卡片数据整拍冻死；网关 RPC 各自带看门狗，单拍挂起只损失
+      // 它自己，下一拍照常。
       loadGatewayTasks(null)
         .then((data) => {
           if (!alive) return;
@@ -717,10 +718,15 @@ function useWidgetTasksFeed(gateways, enabled) {
           if (alive) setSessionRuns(data.runs ?? []);
         })
         .catch(() => {});
+      // 连接灯只认星位快照的分网关成败——它是真正连网关、写账本的那条链路。
+      // 空壳的 gateway_task_snapshot 已摘：它 2026.9.8 后不运数据却要排
+      // 全局锁，排队超看门狗就被误判断线（胶囊假"未同步"的真凶）。
       if (current.length) {
-        withInvokeTimeout(refreshGatewayTasks(current))
-          .then((result) => {
-            if (alive) setLive(Boolean(result?.results?.length) && result.results.every((entry) => entry.ok));
+        withInvokeTimeout(loadAgentsSnapshot(current, { force }))
+          .then((snap) => {
+            if (!alive) return;
+            setAgents(snap);
+            setLive(gatewayResultsAllOk(snap?.results));
           })
           .catch(() => {
             if (alive) setLive(false);
@@ -728,11 +734,6 @@ function useWidgetTasksFeed(gateways, enabled) {
       } else {
         setLive(false);
       }
-      withInvokeTimeout(loadAgentsSnapshot(current))
-        .then((snap) => {
-          if (alive) setAgents(snap);
-        })
-        .catch(() => {});
     };
     tick();
     const timer = setInterval(tick, Math.max(1, intervalSec) * 1000);
@@ -749,8 +750,11 @@ function useWidgetTasksFeed(gateways, enabled) {
     sessionRuns,
     live,
     lastSync,
-    // 底栏强制刷新按钮：立即补一拍（并重启节流计时器，与改刷新间隔同一语义）。
-    refresh: () => setRefreshTick((tick) => tick + 1),
+    // 底栏强制刷新/重试按钮：立即补一拍并带 force 真连网关（不嚼缓存）。
+    refresh: () => {
+      forceNextRef.current = true;
+      setRefreshTick((tick) => tick + 1);
+    },
   };
 }
 
@@ -1670,15 +1674,8 @@ function TasksWidgetWindow({
           >
             <PushPinSimple size={17} weight={pinned ? "fill" : "light"} aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            className="window-action"
-            onClick={() => runWindowAction(minimizeWindow)}
-            aria-label="最小化"
-            title="最小化"
-          >
-            <Minus size={17} weight="light" aria-hidden="true" />
-          </button>
+          {/* 最小化按钮已删（Leo 2026-10-08 拍板）：常驻小窗不占任务栏，
+              "最小化"没有意义——收小有折叠胶囊、离开有关闭/隐藏。 */}
           <button
             type="button"
             className="window-action window-action--close"
@@ -3891,34 +3888,34 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
     return () => window.removeEventListener("metrik-monitor-changed", handler);
   }, []);
 
-  // 实时监控循环：默认 3 秒一拍（间隔可在设置 → 任务追踪里调整）。Tauri 下每拍先触发后端快照（拉网关写账本），
-  // 再读账本刷新视图；浏览器演示模式只读演示数据。页面隐藏时暂停。
+  // 实时监控循环：默认 3 秒一拍（间隔可在设置 → 任务追踪里调整）。Tauri 下
+  // 每拍拉星位快照（真正连网关、写账本的链路），再读账本刷新视图；浏览器
+  // 演示模式只读演示数据。页面隐藏时暂停。
   useEffect(() => {
     let alive = true;
     load(stateRef.current.filter);
     const tick = async () => {
       if (!alive || (!PREVIEW_EAGER && document.visibilityState === "hidden")) return;
       const filter = stateRef.current.filter;
-      if (isTauriRuntime() && gateways.length) {
-        try {
-          const result = await refreshGatewayTasks(gateways);
-          const failures = result.results.filter((entry) => !entry.ok);
-          setLive(failures.length === 0);
-          setFeedback(
-            failures.length
-              ? { tone: "error", message: failures.map((entry) => `${entry.gateway}：${entry.error}`).join("；") }
-              : null,
-          );
-        } catch {
-          setLive(false);
-        }
-      } else if (!gateways.length) {
-        setLive(false);
-      }
+      // 连接灯与胶囊同源：星位快照的分网关成败（空壳任务快照已摘）。
       if (gateways.length) {
         loadAgentsSnapshot(gateways)
-          .then((snap) => alive && setAgentsSnap(snap))
-          .catch(() => {});
+          .then((snap) => {
+            if (!alive) return;
+            setAgentsSnap(snap);
+            const failures = (snap?.results ?? []).filter((entry) => !entry.ok);
+            setLive(gatewayResultsAllOk(snap?.results));
+            setFeedback(
+              failures.length
+                ? { tone: "error", message: gatewayFailureText(snap?.results) }
+                : null,
+            );
+          })
+          .catch(() => {
+            if (alive) setLive(false);
+          });
+      } else {
+        setLive(false);
       }
       load(filter);
       // 历史轮次同拍刷新：台账只读（不触发网关轮询），与任务列表同一节奏。
@@ -3954,18 +3951,35 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
     setBusy(true);
     setFeedback(null);
     try {
-      const result = await refreshGatewayTasks(gateways);
-      const failures = result.results.filter((entry) => !entry.ok);
+      // 手动同步 = 真动作：星位快照（force 绕过两窗合并缓存）+ 定时镜像
+      // 各真连一次，然后读回本地账本——不再说"已拉取任务台账"空话。
+      const [agentsSnap, cronResult] = await Promise.all([
+        withInvokeTimeout(loadAgentsSnapshot(gateways, { force: true })),
+        withInvokeTimeout(refreshCronJobs(gateways, { force: true })),
+      ]);
+      setAgentsSnap(agentsSnap);
+      const failures = [
+        ...(agentsSnap?.results ?? []),
+        ...(cronResult?.results ?? []),
+      ].filter((entry) => !entry.ok);
       if (failures.length) {
         setFeedback({
           tone: "error",
-          message: failures.map((entry) => `${entry.gateway}：${entry.error}`).join("；"),
+          message: gatewayFailureText([
+            ...(agentsSnap?.results ?? []),
+            ...(cronResult?.results ?? []),
+          ]),
         });
       } else {
-        setFeedback({ tone: "success", message: `已从 ${result.results.length} 个 Gateway 拉取任务台账。` });
+        setFeedback({ tone: "success", message: `已从 ${gateways.length} 个 Gateway 拉取星位快照与定时任务。` });
       }
       load(state.filter);
+      loadCronJobs()
+        .then((data) => setCronJobs(data.jobs ?? []))
+        .catch(() => {});
       onGatewaysChanged?.();
+    } catch {
+      setFeedback({ tone: "error", message: "网关响应超时，稍后自动重试。" });
     } finally {
       setBusy(false);
     }

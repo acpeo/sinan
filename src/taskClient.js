@@ -101,13 +101,14 @@ export async function loadGatewayTasks(status) {
   }
 }
 
-/// 触发一次拉取（gateway_task_snapshot）。gateways 配置来自设置。
-export async function refreshGatewayTasks(gateways) {
+/// 触发一次拉取（gateway_cron_snapshot）。gateways 配置来自设置。
+/// force=true 绕过 Rust 侧 60 秒全局节流（手动同步/新配网关验证用）。
+export async function refreshCronJobs(gateways, { force = false } = {}) {
   if (!isTauriRuntime()) {
     return { demo: true, results: gateways.map((gateway) => ({ gateway: gateway.label, ok: true, taskCount: 0, error: null })) };
   }
   try {
-    const results = await invoke("gateway_task_snapshot", { gateways });
+    const results = await invoke("gateway_cron_snapshot", { gateways, force });
     return { demo: false, results };
   } catch (error) {
     return { demo: false, results: [], loadError: String(error) };
@@ -313,23 +314,14 @@ export async function loadCronJobs() {
   }
 }
 
-export async function refreshCronJobs(gateways) {
-  if (!isTauriRuntime()) {
-    return { demo: true, results: gateways.map((gateway) => ({ gateway: gateway.label, ok: true, taskCount: 0, error: null })) };
-  }
-  try {
-    const results = await invoke("gateway_cron_snapshot", { gateways });
-    return { demo: false, results };
-  } catch (error) {
-    return { demo: false, results: [], loadError: String(error) };
-  }
-}
 
 /// 设置存取：被追踪的 Gateway 列表（含 token）。token 只存本机 localStorage
 /// （与 Control UI 同级的安全边界；不上传、不进账本）。
 /// 读 Agent 会话活动快照（北斗等星位实时状态）：后端拉 sessions.list +
 /// agents.list 并按 agent 归集。Tauri 下走真实命令；浏览器走演示数据。
-export async function loadAgentsSnapshot(gateways) {
+/// results = 分网关成败（连接灯的真话来源）；force=true 绕过 Rust 侧
+/// 2.5 秒两窗合并缓存（手动同步/重试按钮用）。
+export async function loadAgentsSnapshot(gateways, { force = false } = {}) {
   if (!isTauriRuntime()) {
     const now = Date.now();
     const stars = [
@@ -344,6 +336,8 @@ export async function loadAgentsSnapshot(gateways) {
     return {
       demo: true,
       retrievedAt: Date.now(),
+      // 演示数据同带 results：浏览器预览的连接灯与真机同一口径（恒 ok）。
+      results: gateways.map((gateway) => ({ gateway: gateway.label, ok: true, taskCount: 0, error: null })),
       agents: stars.map((star, index) => ({
         agentId: `VPS-北斗:${star.id}`,
         name: star.name,
@@ -392,6 +386,7 @@ export async function loadAgentsSnapshot(gateways) {
     const monitor = loadMonitorConfig();
     const payload = await invoke("gateway_agents_snapshot", {
       gateways,
+      force,
       ledger: {
         retentionDays: monitor.ledgerRetentionDays,
         missedWindowHours: monitor.missedWindowHours,
@@ -399,9 +394,15 @@ export async function loadAgentsSnapshot(gateways) {
     });
     // retrievedAt = 新鲜度闸的锚（App.jsx defuseStaleSnapshotActivity）：
     // 快照过龄（RPC 挂起/排队）时活跃灯按熄灭渲染，冻结的 ● 就是撒谎。
-    return { demo: false, agents: payload?.agents ?? [], sessions: payload?.sessions ?? [], retrievedAt: Date.now() };
+    return {
+      demo: false,
+      agents: payload?.agents ?? [],
+      sessions: payload?.sessions ?? [],
+      results: payload?.results ?? [],
+      retrievedAt: Date.now(),
+    };
   } catch (error) {
-    return { demo: false, agents: [], sessions: [], loadError: String(error) };
+    return { demo: false, agents: [], sessions: [], results: [], loadError: String(error) };
   }
 }
 

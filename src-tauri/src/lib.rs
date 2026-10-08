@@ -428,8 +428,9 @@ pub struct GatewayTargetConfig {
     pub identity_dir: Option<PathBuf>,
 }
 
-/// 单个 Gateway 的拉取结果视图（成功/失败 + 原因）。
-#[derive(Debug, serde::Serialize)]
+/// 单个 Gateway 的拉取结果视图（成功/失败 + 原因）。cron 快照与星位快照
+/// 共用：前端的连接灯只认这些 results，不再绑任务快照空壳。
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayTaskView {
     pub gateway: String,
@@ -438,13 +439,32 @@ pub struct GatewayTaskView {
     pub error: Option<String>,
 }
 
-/// gateway_agents_snapshot 的返回：Agent 活动卡 + 会话级用量明细。
-#[derive(Debug, serde::Serialize)]
+/// gateway_agents_snapshot 的返回：Agent 活动卡 + 会话级用量明细 +
+/// 分网关成败（连接灯的真话来源——2026-10-08 前 live 绑在
+/// gateway_task_snapshot 空壳上，主窗与胶囊各说各话）。
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayAgentsPayload {
     pub agents: Vec<gateway_tasks::AgentActivity>,
     pub sessions: Vec<gateway_tasks::SessionUsage>,
+    pub results: Vec<GatewayTaskView>,
 }
+
+/// 星位快照的全局合并缓存：主窗与小组件两路 3 秒轮询共享——2.5 秒内
+/// 第二个到达的调用直接回放上一份载荷，不再真连网关。此前两窗各拉各的
+/// 全量（握手+会话清单+审计+聊天），scan_gate 常年饱和，排队超看门狗就
+/// 被误判断线（胶囊假"未同步"的土壤，也是"胶囊比主窗慢"的旧病根）。
+/// key 含网关标签与账本口径，配置一换缓存自动失效；force=手动同步直通。
+struct CachedAgentsSnapshot {
+    key: String,
+    at: std::time::Instant,
+    payload: GatewayAgentsPayload,
+}
+
+static AGENTS_SNAPSHOT_CACHE: std::sync::LazyLock<Mutex<Option<CachedAgentsSnapshot>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
+const AGENTS_SNAPSHOT_MIN_INTERVAL_MS: u128 = 2_500;
 
 fn gateway_target(target: &GatewayTargetConfig) -> gateway_tasks::GatewayTarget {
     gateway_tasks::GatewayTarget {
@@ -455,26 +475,27 @@ fn gateway_target(target: &GatewayTargetConfig) -> gateway_tasks::GatewayTarget 
     }
 }
 
-/// 拉一次 Gateway 任务台账并落本地账本（突破官方 7 天保留）。
+/// 拉一次定时任务列表并落本地镜像（cron.list，operator.read 即可读）。
+/// 60 秒全局合并节流（按网关标签记时，两窗共享）：看板数据变化以分钟计，
+/// 不值得让两路轮询各自握手。force=手动同步时直通。
 #[tauri::command]
-async fn gateway_task_snapshot(
+async fn gateway_cron_snapshot(
     gateways: Vec<GatewayTargetConfig>,
+    force: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Vec<GatewayTaskView>, String> {
     let database_path = state.database_path.clone();
     let scan_gate = Arc::clone(&state.scan_gate);
+    let force = force.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         let _gate = scan_gate
             .lock()
             .map_err(|_| "scan lock poisoned".to_owned())?;
         let connection = open_database(&database_path)?;
         let mut views = Vec::new();
-        // 节流状态：同一网关 2.5 秒内的重复快照直接复用上一拍结果。
-        let mut last_fetch: Option<(String, std::time::Instant)> = None;
         for target in &gateways {
             let gw = gateway_target(target);
-            match gateway_tasks::snapshot_gateway_tasks_throttled(&connection, &gw, &mut last_fetch)
-            {
+            match gateway_tasks::snapshot_gateway_crons_throttled(&connection, &gw, force) {
                 Ok(_) => views.push(GatewayTaskView {
                     gateway: target.label.clone(),
                     ok: true,
@@ -492,7 +513,7 @@ async fn gateway_task_snapshot(
         Ok(views)
     })
     .await
-    .map_err(|error| format!("gateway task snapshot failed: {error}"))?
+    .map_err(|error| format!("gateway cron snapshot failed: {error}"))?
 }
 
 /// 读本地任务账本（不联网）：任务页数据源。按 first_seen 倒序，可选状态过滤。
@@ -515,46 +536,6 @@ fn session_run_list(
 ) -> Result<Vec<gateway_tasks::SessionRunRow>, String> {
     let connection = open_database_read_only(&state.database_path)?;
     gateway_tasks::list_session_runs(&connection, limit).map_err(|error| error.to_string())
-}
-
-/// 拉一次定时任务列表并落本地镜像（cron.list，operator.read 即可读）。
-/// 60 秒节流：看板数据变化以分钟计，不值得按 3 秒拍握手。
-#[tauri::command]
-async fn gateway_cron_snapshot(
-    gateways: Vec<GatewayTargetConfig>,
-    state: State<'_, AppState>,
-) -> Result<Vec<GatewayTaskView>, String> {
-    let database_path = state.database_path.clone();
-    let scan_gate = Arc::clone(&state.scan_gate);
-    tauri::async_runtime::spawn_blocking(move || {
-        let _gate = scan_gate
-            .lock()
-            .map_err(|_| "scan lock poisoned".to_owned())?;
-        let connection = open_database(&database_path)?;
-        let mut views = Vec::new();
-        let mut last_fetch: Option<(String, std::time::Instant)> = None;
-        for target in &gateways {
-            let gw = gateway_target(target);
-            match gateway_tasks::snapshot_gateway_crons_throttled(&connection, &gw, &mut last_fetch)
-            {
-                Ok(_) => views.push(GatewayTaskView {
-                    gateway: target.label.clone(),
-                    ok: true,
-                    task_count: 0,
-                    error: None,
-                }),
-                Err(error) => views.push(GatewayTaskView {
-                    gateway: target.label.clone(),
-                    ok: false,
-                    task_count: 0,
-                    error: Some(error.to_string()),
-                }),
-            }
-        }
-        Ok(views)
-    })
-    .await
-    .map_err(|error| format!("gateway cron snapshot failed: {error}"))?
 }
 
 /// 读本地定时任务镜像（不联网）：任务台"定时任务"看板数据源。
@@ -586,18 +567,49 @@ fn session_ledger_options(params: SessionLedgerParams) -> gateway_tasks::Session
 
 /// 拉 Agent 会话活动快照（实时监控北斗等多 Agent 协作）：
 /// 数据源 = sessions.list（各星位会话 status/hasActiveRun/updatedAt）+ agents.list。
-/// 同时返回会话级用量明细（sessions，B 链路 token/上下文数据源）。
-/// 带 2.5s 节流，与前端 3s 刷新节奏对齐。
+/// 同时返回会话级用量明细（sessions，B 链路 token/上下文数据源）与分网关
+/// 成败（results，前端连接灯的真话来源）。2.5s 全局合并缓存对齐前端 3s
+/// 节拍：两窗同拍只真连一次；force=手动同步直通。
 #[tauri::command]
 async fn gateway_agents_snapshot(
     app: tauri::AppHandle,
     gateways: Vec<GatewayTargetConfig>,
     ledger: Option<SessionLedgerParams>,
+    force: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<GatewayAgentsPayload, String> {
+    let ledger_options = session_ledger_options(ledger.unwrap_or_default());
+    // 缓存键含网关标签与账本口径：配置一换自动失效。
+    let cache_key = format!(
+        "{}|r{}|m{}",
+        gateways
+            .iter()
+            .map(|gateway| gateway.label.as_str())
+            .collect::<Vec<_>>()
+            .join("|"),
+        ledger_options.retention_ms,
+        ledger_options.missed_window_ms,
+    );
+    // 命中即回放（短锁快查，绝不在锁内拉网）。失败结果也缓存 2.5s——
+    // 网关真断时两窗看到的都是同一份失败，重试按钮走 force 直通。
+    if !force.unwrap_or(false) {
+        let cached = AGENTS_SNAPSHOT_CACHE
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard.as_ref().and_then(|cache| {
+                    (cache.key == cache_key
+                        && cache.at.elapsed().as_millis() < AGENTS_SNAPSHOT_MIN_INTERVAL_MS)
+                        .then(|| cache.payload.clone())
+                })
+            });
+        if let Some(payload) = cached {
+            return Ok(payload);
+        }
+    }
+
     let database_path = state.database_path.clone();
     let scan_gate = Arc::clone(&state.scan_gate);
-    let ledger_options = session_ledger_options(ledger.unwrap_or_default());
 
     // 闭包显式标注错误类型：拆成 let 绑定后外层返回类型不再参与推断，
     // 内层 Result<E> 悬空（E0282/E0283），锚成 String。
@@ -609,10 +621,10 @@ async fn gateway_agents_snapshot(
             let connection = open_database(&database_path)?;
             let mut merged: Vec<gateway_tasks::AgentActivity> = Vec::new();
             let mut merged_sessions: Vec<gateway_tasks::SessionUsage> = Vec::new();
+            let mut results: Vec<GatewayTaskView> = Vec::new();
             for target in &gateways {
                 let gw = gateway_target(target);
-                // 复用任务快照的节流逻辑：agents 快照与任务快照共享同一网关连接
-                // 成本，这里独立节流窗口。带连接 → 顺带把会话 run 记入本地台账。
+                // 带连接 → 顺带把会话 run 记入本地台账。
                 match gateway_tasks::fetch_agents_snapshot(&gw, Some(&connection), &ledger_options)
                 {
                     Ok(snapshot) => {
@@ -643,13 +655,28 @@ async fn gateway_agents_snapshot(
                             session.key = format!("{}:{}", target.label, session.key);
                             merged_sessions.push(session);
                         }
+                        results.push(GatewayTaskView {
+                            gateway: target.label.clone(),
+                            ok: true,
+                            task_count: 0,
+                            error: None,
+                        });
                     }
-                    Err(_) => { /* 单网关失败不阻塞其它网关 */ }
+                    Err(error) => {
+                        // 单网关失败不阻塞其它网关，但要如实上报给连接灯。
+                        results.push(GatewayTaskView {
+                            gateway: target.label.clone(),
+                            ok: false,
+                            task_count: 0,
+                            error: Some(error.to_string()),
+                        });
+                    }
                 }
             }
             Ok(GatewayAgentsPayload {
                 agents: merged,
                 sessions: merged_sessions,
+                results,
             })
         })
         .await
@@ -658,7 +685,8 @@ async fn gateway_agents_snapshot(
     // JoinHandle 外层，这里解内层——错误同为 String，直接透传。
     let payload = payload?;
     // 星名映射广播：提醒窗是独立 webview（localStorage 不共享），失败文案
-    // 要中文名——权威源就在本快照里，顺手广播（小载荷、幂等）。
+    // 要中文名——权威源就在本快照里，顺手广播（小载荷、幂等）。缓存回放
+    // 路径不重复广播（载荷没变）。
     {
         let mut names = std::collections::HashMap::new();
         for agent in &payload.agents {
@@ -672,6 +700,14 @@ async fn gateway_agents_snapshot(
             }
         }
         let _ = app.emit("tasks://agent-names", names);
+    }
+    // 回填缓存（尽力而为：锁毒化时下次直拉，不影响正确性）。
+    if let Ok(mut guard) = AGENTS_SNAPSHOT_CACHE.lock() {
+        *guard = Some(CachedAgentsSnapshot {
+            key: cache_key,
+            at: std::time::Instant::now(),
+            payload: payload.clone(),
+        });
     }
     Ok(payload)
 }
@@ -905,7 +941,6 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            gateway_task_snapshot,
             gateway_task_list,
             gateway_cron_snapshot,
             gateway_cron_list,

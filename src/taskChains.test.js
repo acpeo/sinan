@@ -17,6 +17,8 @@ import {
   cronScheduleText,
   defuseStaleSnapshotActivity,
   SNAPSHOT_FRESH_MS,
+  gatewayResultsAllOk,
+  gatewayFailureText,
   failureClassOf,
   groupSessionEpisodes,
   isSubagentTask,
@@ -812,4 +814,37 @@ test("stale snapshot defuses active lights instead of lying (Leo 2026-10-08)", (
   assert.equal(defuseStaleSnapshotActivity({ sessions: [] }, now + 10 ** 9).sessions.length, 0);
   const idleOnly = { retrievedAt: now - 10 ** 9, sessions: [{ hasActiveRun: false }] };
   assert.equal(defuseStaleSnapshotActivity(idleOnly, now).sessions[0].hasActiveRun, false);
+});
+
+test("connection light trusts agent snapshot results, never an empty shell call", () => {
+  // 真连接：至少一个网关上报且全成功
+  assert.equal(gatewayResultsAllOk([{ gateway: "vps", ok: true }]), true);
+  assert.equal(
+    gatewayResultsAllOk([{ gateway: "vps", ok: true }, { gateway: "local", ok: true }]),
+    true,
+  );
+  // 空名单=没上报，不许谎报已连接（旧逻辑空数组 every 恒 true 正是假绿灯来源）
+  assert.equal(gatewayResultsAllOk([]), false);
+  assert.equal(gatewayResultsAllOk(null), false);
+  assert.equal(gatewayResultsAllOk(undefined), false);
+  // 任一失败=未连接
+  assert.equal(gatewayResultsAllOk([{ gateway: "vps", ok: true }, { gateway: "local", ok: false }]), false);
+  // 缓存回放的载荷带同一份 results：两窗看到同一个灯
+  const cached = { agents: [], sessions: [], results: [{ gateway: "vps", ok: false, error: "timeout" }] };
+  assert.equal(gatewayResultsAllOk(cached.results), false);
+});
+
+test("gateway failure text names the gateway and its error", () => {
+  assert.equal(gatewayFailureText([]), "");
+  assert.equal(gatewayFailureText(null), "");
+  assert.equal(
+    gatewayFailureText([
+      { gateway: "vps", ok: false, error: "connect failed" },
+      { gateway: "local", ok: true },
+      { gateway: "backup", ok: false, error: "timeout" },
+    ]),
+    "vps：connect failed；backup：timeout",
+  );
+  // 缺字段不炸，如实兜底
+  assert.equal(gatewayFailureText([{ ok: false }]), "?：未知错误");
 });

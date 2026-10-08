@@ -1086,36 +1086,6 @@ pub fn upsert_tasks(
     Ok(written)
 }
 
-/// 一次完整的任务快照。2026.9.8 网关摘除 tasks.list 后本函数不再发起任何
-/// RPC：automation_run 活水走 snapshot_gateway_crons（cron.runs），会话活水
-/// 走 session_run 同步。保留函数壳是因为前端节拍/刷新命令仍会调用它——
-/// 返回 0 表示"本拍经此路无新增"，同步状态不再被 unknown method 打红。
-pub fn snapshot_gateway_tasks(_connection: &Connection, _target: &GatewayTarget) -> Result<usize> {
-    Ok(0)
-}
-
-/// 快照节流：同一网关 MIN_INTERVAL_MS 内的重复调用直接复用上次结果，
-/// 避免前端 3 秒节拍叠加多个视图时对网关发起过量握手。
-const SNAPSHOT_MIN_INTERVAL_MS: i64 = 2500;
-
-pub fn snapshot_gateway_tasks_throttled(
-    connection: &Connection,
-    target: &GatewayTarget,
-    last_fetch_ms: &mut Option<(String, Instant)>,
-) -> Result<usize> {
-    if let Some((label, at)) = last_fetch_ms {
-        if label == &target.label
-            && at.elapsed() < Duration::from_millis(SNAPSHOT_MIN_INTERVAL_MS as u64)
-        {
-            // 视为成功但不重新拉网关；账本内容仍是新鲜的（上一拍刚写过）。
-            return Ok(0);
-        }
-    }
-    let written = snapshot_gateway_tasks(connection, target)?;
-    *last_fetch_ms = Some((target.label.clone(), Instant::now()));
-    Ok(written)
-}
-
 // ---------------------------------------------------------------------------
 // 账本查询（任务页数据源）
 // ---------------------------------------------------------------------------
@@ -1528,20 +1498,31 @@ fn cron_job_name_map(connection: &Connection, target_label: &str) -> std::collec
         .collect()
 }
 
+/// cron 快照的全局节流表：按网关标签记上次真拉时刻，主窗与小组件两路
+/// 轮询共享。此前节流挂在调用方局部变量上（每次调用现建，永不命中），
+/// 注释吹的"60 秒节流"从未生效——两窗每拍各握手一次的病根。
+static CRON_SNAPSHOT_LAST: std::sync::LazyLock<Mutex<HashMap<String, Instant>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
 pub fn snapshot_gateway_crons_throttled(
     connection: &Connection,
     target: &GatewayTarget,
-    last_fetch: &mut Option<(String, Instant)>,
+    force: bool,
 ) -> Result<usize> {
-    if let Some((label, at)) = last_fetch {
-        if label == &target.label
-            && at.elapsed() < Duration::from_millis(CRON_SNAPSHOT_MIN_INTERVAL_MS)
-        {
-            return Ok(0);
+    if !force {
+        if let Ok(guard) = CRON_SNAPSHOT_LAST.lock() {
+            if let Some(at) = guard.get(&target.label) {
+                if at.elapsed() < Duration::from_millis(CRON_SNAPSHOT_MIN_INTERVAL_MS) {
+                    // 视为成功但不重新拉网关；镜像内容仍是新鲜的（上一拍刚写过）。
+                    return Ok(0);
+                }
+            }
         }
     }
     let written = snapshot_gateway_crons(connection, target)?;
-    *last_fetch = Some((target.label.clone(), Instant::now()));
+    if let Ok(mut guard) = CRON_SNAPSHOT_LAST.lock() {
+        guard.insert(target.label.clone(), Instant::now());
+    }
     Ok(written)
 }
 
