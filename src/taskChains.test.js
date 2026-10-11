@@ -19,6 +19,9 @@ import {
   SNAPSHOT_FRESH_MS,
   gatewayResultsAllOk,
   gatewayFailureText,
+  canonicalAgentId,
+  buildStarState,
+  shortStarLabel,
   failureClassOf,
   groupSessionEpisodes,
   isSubagentTask,
@@ -581,6 +584,68 @@ test("buildFleetModules: 一个 agent 一块，跑的在前收班在后，记事
   assert.equal(modules[1].records[0].title, "北斗矩阵");
 });
 
+test("buildFleetModules: 僵尸 running 行不再冒充活跃（Leo 2026-10-11 实锤 57 小时还在呼吸）", () => {
+  const dayStart = 1_000_000_000_000;
+  const now = dayStart + 57 * 3_600_000;
+  const staleMs = 120_000; // 2 分钟没露面即判死
+  // 真机现场：网关不给结束事件，账本行永远停在 running，last_seen 停在 57 小时前。
+  const modules = buildFleetModules({
+    tasks: [],
+    runs: [
+      { id: 70, agentId: "tianshu", status: "running", title: "官方架构对照",
+        startedAtMs: dayStart + 1000, lastSeenMs: dayStart + 720_000, sessionKey: "agent:tianshu:subagent:x" },
+      { id: 69, agentId: "tianshu", status: "done", title: "同批已收尾",
+        startedAtMs: dayStart + 900, endedAtMs: dayStart + 950, sessionKey: "agent:tianshu:main" },
+    ],
+    now,
+    dayStartMs: dayStart,
+    staleMs,
+  });
+  const mod = modules.find((m) => m.agentId === "tianshu");
+  assert.equal(mod.running, null, "陈旧的 running 行必须判死，不许再呼吸");
+  // 记事取判死后的僵尸行本身（它比无关旧任务更贴近事实：这就是那件没收到
+  // 结束回执的事），由渲染层标注"久无动静"。
+  assert.equal(mod.lastEnded.title, "官方架构对照");
+  assert.equal(mod.lastEnded.zombie, true, "僵尸行带标记，渲染层据此标注");
+  // 判死的行仍留在明细里可查（不丢数据）
+  assert.ok(mod.records.some((r) => r.status === "running"), "僵尸行仍在抽屉明细里");
+});
+
+test("buildFleetModules: 北斗长跑不被误杀（Leo 2026-10-11 质疑：一轮派活能停二十几分钟到一小时）", () => {
+  const now = 1_000_000_000_000;
+  const dayStart = now - 3_600_000;
+  const runs = [
+    // 真账本 id=74 原型：开跑 20 分钟、6 分钟前才露面——正在跑，必须活着
+    { id: 74, agentId: "tianshu", status: "running", title: "正在跑的活儿",
+      startedAtMs: now - 20.6 * 60_000, lastSeenMs: now - 6.2 * 60_000, sessionKey: "k1" },
+    // 真账本 id=70 原型：57 小时没露面——真僵尸，必须判死
+    { id: 70, agentId: "tianshu", status: "running", title: "官方架构对照",
+      startedAtMs: now - 57.6 * 3_600_000, lastSeenMs: now - 57.4 * 3_600_000, sessionKey: "k2" },
+  ];
+  const mod = buildFleetModules({ tasks: [], runs, now, dayStartMs: dayStart, staleMs: 1800_000 })[0];
+  assert.equal(mod.running.title, "正在跑的活儿", "6 分钟没露面的长跑必须还活着");
+  assert.equal(mod.records.filter((r) => r.zombie).length, 1, "只判死那一条 57 小时的僵尸");
+  assert.equal(mod.records.length, 2, "判死的行仍在明细里，不丢数据");
+  // 旧做法（2 分钟短阈值）会把这条正在跑的活儿冤枉掉——这正是分家的原因
+  const short = buildFleetModules({ tasks: [], runs, now, dayStartMs: dayStart, staleMs: 120_000 })[0];
+  assert.equal(short.running, null, "短阈值下两条全被判死（旧做法的误杀现场）");
+});
+
+test("buildFleetModules: 新鲜的 running 行照样活跃（staleMs=0 时不判死）", () => {
+  const dayStart = 1_000_000_000_000;
+  const now = dayStart + 3_600_000;
+  const base = {
+    tasks: [],
+    runs: [{ id: 1, agentId: "tianji", status: "running", title: "在跑",
+      startedAtMs: now - 60_000, lastSeenMs: now - 5_000, sessionKey: "k" }],
+    now,
+    dayStartMs: dayStart,
+  };
+  assert.ok(buildFleetModules({ ...base, staleMs: 120_000 }).find((m) => m.agentId === "tianji").running);
+  // staleMs=0 = 关掉判死（设置页阈值语义），照旧认账本状态
+  assert.ok(buildFleetModules({ ...base, staleMs: 0 }).find((m) => m.agentId === "tianji").running);
+});
+
 test("buildFleetModules: 纯收班 agent 出暗模块，空输入不出模块", () => {
   const dayStart = 1_000_000_000_000;
   const modules = buildFleetModules({
@@ -847,4 +912,57 @@ test("gateway failure text names the gateway and its error", () => {
   );
   // 缺字段不炸，如实兜底
   assert.equal(gatewayFailureText([{ ok: false }]), "?：未知错误");
+});
+
+test("canonical agent id strips the gateway prefix so one star is one star", () => {
+  assert.equal(canonicalAgentId("VPS-北斗:tianshu"), "tianshu");
+  assert.equal(canonicalAgentId("tianshu"), "tianshu");
+  assert.equal(canonicalAgentId("a:b:c:yuheng"), "yuheng");
+  assert.equal(canonicalAgentId(""), "");
+  assert.equal(canonicalAgentId(null), "");
+  assert.equal(canonicalAgentId(undefined), "");
+  assert.equal(canonicalAgentId(42), "");
+});
+
+test("star dial lights up from the live snapshot even when the ledger has no running row", () => {
+  const chain = [["tianshu", 0, 0], ["tianji", 1, 1]];
+  // Leo 2026-10-08 实锤：有星位在执行，但账本还没落 running 行（收行能晚十几秒），
+  // 盘面必须跟着快照亮——只认账本就会"有活干却不亮"。
+  const cards = [{
+    type: "episode", agentId: "tianji", tone: "done", at: Date.now() - 60_000,
+    title: "旧的收班卡", progress: "",
+  }];
+  const state = buildStarState(cards, Date.now(), new Set(["tianji"]), chain);
+  assert.equal(state.find((s) => s.id === "tianji").tone, "live");
+  // 没被快照点亮的星照旧读账本
+  assert.equal(state.find((s) => s.id === "tianshu").tone, "idle");
+});
+
+test("star dial running label prefers the progress line, falls back to 执行中", () => {
+  const chain = [["tianji", 0, 0]];
+  const withProgress = [{
+    type: "episode", agentId: "tianji", tone: "done", at: Date.now(), title: "x",
+    progress: "write\n第二行不要",
+  }];
+  assert.equal(
+    buildStarState(withProgress, Date.now(), new Set(["tianji"]), chain)[0].label,
+    "write",
+  );
+  const noProgress = [{ type: "episode", agentId: "tianji", tone: "done", at: Date.now(), title: "x" }];
+  assert.equal(
+    buildStarState(noProgress, Date.now(), new Set(["tianji"]), chain)[0].label,
+    "执行中",
+  );
+});
+
+test("star dial survives a missing live set and shortens routine labels", () => {
+  const chain = [["yuheng", 0, 0]];
+  // liveActiveIds 缺失/传错形态不许炸（旧签名没有这个参数）
+  const s1 = buildStarState([], Date.now(), undefined, chain);
+  assert.equal(s1[0].tone, "idle");
+  assert.equal(buildStarState([], Date.now(), null, chain)[0].tone, "idle");
+  // 例行任务名换中文短词
+  assert.equal(shortStarLabel("skill-collection-review-yuheng"), "skill 检查");
+  assert.equal(shortStarLabel("heartbeat-tianshu"), "心跳");
+  assert.equal(shortStarLabel("这是一句很长很长的话超过八个字"), "这是一句很长很长…");
 });

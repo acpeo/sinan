@@ -37,7 +37,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -1337,10 +1337,21 @@ function TasksWidgetWindow({
             // （悬停卡搬进伴随窗，胶囊本体零程序化挪窗，跟手模态循环没有对手）。
             // 星格/胶卷上按下优先内容拖拽滚动（4px 即认领并打 stripDragging
             // 标记，先于壳层 8px 阈值），OS 拖拽不抢；点按不超阈值=点击展开。
+            // 竖条胶卷两侧的留白边 = 拖窗区（Leo 2026-10-11）：胶卷为让出这两条
+            // 边加了左右 padding，落在 padding 里的按下不归胶卷滚内容，直接走
+            // 壳层 8px 阈值启动拖窗——星位内容区照旧滚，两侧空白随便拖。
+            // 竖条胶卷按方向分家（Leo 2026-10-11"细竖条就是一个显示"+
+            // "上下拖动星位还可以吗"）：竖条窄，横向拖没有别的用处 → 横向拖
+            // = 拖窗；上下拖 = 翻看更多星位（滚内容，原行为保留）。两个动作靠
+            // 方向区分互不打架，不用牺牲任何一个。滚轮翻看也照旧。
+            // 横条保持原样（横向拖=翻链，Leo 未要求改）。
+            const strip = event.target.closest(".tasks-mini-strip");
+            const verticalStrip = Boolean(strip && strip.classList.contains("tasks-mini-strip--vertical"));
             shellDragRef.current = {
               x: event.clientX,
               y: event.clientY,
-              onStrip: Boolean(event.target.closest(".tasks-mini-strip")),
+              onStrip: Boolean(strip),
+              vertical: verticalStrip,
             };
           }}
           onPointerMove={(event) => {
@@ -1348,7 +1359,11 @@ function TasksWidgetWindow({
             if (pointerDownRef.current && (event.buttons ?? 0) === 0) pointerDownRef.current = false;
             const drag = shellDragRef.current;
             if (!drag || (event.buttons ?? 0) !== 1) return;
+            const dx = Math.abs(event.clientX - drag.x);
+            const dy = Math.abs(event.clientY - drag.y);
             if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
+            // 竖条里上下方向为主 = 胶卷在翻星位，别抢（交给它的滚内容手势）
+            if (drag.vertical && dy >= dx) return;
             if (drag.onStrip && event.target.closest(".tasks-mini-strip")?.dataset.stripDragging) return;
             shellDragRef.current = null;
             startWindowDragging();
@@ -1520,7 +1535,10 @@ function TasksWidgetWindow({
   // 明细抽屉（时间线/胶卷随标题栏"明细"按钮），默认收起。
   const dayStart = new Date(now);
   dayStart.setHours(0, 0, 0, 0);
-  const fleetModules = buildFleetModules({ tasks, runs: sessionRuns, now, dayStartMs: dayStart.getTime() });
+  // 僵尸判死用独立的长阈值（不是星位活跃灯的 2 分钟短阈值）：北斗长跑几十分钟
+// 到一小时没动静是常态，短阈值会误杀正在跑的活儿。
+const zombieMs = Math.max(60, loadMonitorConfig().zombieThresholdSec) * 1000;
+const fleetModules = buildFleetModules({ tasks, runs: sessionRuns, now, dayStartMs: dayStart.getTime(), staleMs: zombieMs });
   const renderFleetModule = (mod) => {
     const name = agentDisplayName(agentNameMap, mod.agentId) || mod.agentId;
     const run = mod.running;
@@ -1558,7 +1576,7 @@ function TasksWidgetWindow({
       const dur = formatCompactDuration(ended.startedAtMs, ended.endedAtMs) || "";
       const brief = ended.terminalSummary
         || (tone === "failed" ? sessionErrorText(ended.error, translateProgress) : "")
-        || state;
+        || (ended.zombie ? "久无动静，按收班处理" : state);
       return { text: `${hopGlyphOf(tone)}${dur ? ` ${dur}` : ""} — ${brief}`, tone, raw: brief };
     })();
     return (
@@ -1568,7 +1586,7 @@ function TasksWidgetWindow({
           className="tasks-fleet-head"
           aria-expanded={open}
           onClick={() => toggleFleetModule(mod.agentId)}
-          title={live ? `${name} · ${run.title || "执行中"}${stale ? " · 滞后?" : ""}` : ended ? `${name} · ${ended.title}` : name}
+          title={live ? `${name} · ${run.title || "执行中"}${stale ? " · 滞后?" : ""}` : ended ? `${name} · ${ended.title}${ended.zombie ? " · 久无动静" : ""}` : name}
         >
           <i className={`tasks-fleet-dot is-${accent}`} aria-hidden="true" />
           <span className="tasks-fleet-name">{name}</span>
@@ -1943,6 +1961,7 @@ function MonitorSettingsCard({ tasksWidgetEnabled, onToggleTasksWidget }) {
           <div className="monitor-grid">
             {numberField("自动同步间隔（秒，1–60）", "自动同步间隔秒数", "refreshIntervalSec", 1, 60)}
             {numberField("无活动判定阈值（秒，10–3600）", "无活动判定阈值秒数", "staleThresholdSec", 10, 3600)}
+            {numberField("僵尸行判死阈值（秒，300–21600，默认 1800）", "运行中的行多久没动静就按收班处理；北斗长跑几十分钟到一小时是常态，别设太短", "zombieThresholdSec", 300, 21600)}
           </div>
         </section>
         <section className="monitor-group">
@@ -2311,6 +2330,10 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
     if (!drag.moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    // 竖条按方向分家（Leo 2026-10-11）：横向为主 = 让给壳层拖窗（不加认领
+    // 标记，滚内容也不做）；上下为主 = 认领滚内容（原行为）。此前不分方向，
+    // 4px 就被胶卷抢走，壳层的 8px 拖窗永远轮不到——竖条几乎没有能拖的地方。
+    if (vertical && Math.abs(dx) > Math.abs(dy)) return;
     drag.moved = true;
     // 手势标记：壳层据此判"这条拖拽已被内容滚动认领"，不再启动 OS 挪窗。
     event.currentTarget.dataset.stripDragging = "1";
@@ -2925,6 +2948,9 @@ const DIAL_CHAIN = [
 const DIAL_HUB = { x: 104, y: 70 };
 const DIAL_TONE = { live: "#3DD68C", fail: "#F26D6D", done: "#4E9DB8", cancel: "#4A5568", idle: "#4A5568" };
 const TONE_LABEL = { live: "运行中", fail: "有失败", done: "已完成", cancel: "已取消", idle: "空闲" };
+// 事件流水的"已完成"墨色：中性灰（不抢眼）。星盘/卡片上的收班色 DIAL_TONE.done
+// 是青蓝、语义不变，只有流水这一行换灰——两处语义不同，别混。
+const LOG_DONE_INK = "#4A5568";
 const STAR_NAME_FALLBACK = {
   tianshu: "天枢", tianxuan: "天璇", tianji: "天玑", tianquan: "天权",
   yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "客星",
@@ -3185,34 +3211,8 @@ function buildTasksFeedModel({ rows, episodes, now }) {
   return { briefing, cards, execAgg, skippedNoReply };
 }
 
-// 星盘态：每颗星最近一条非取消卡；取消/跳过不进盘（保留"收班"语义）。
-// 星盘副行的短标签：舰队例行任务换中文短词，其余 CJK 切 8 字（拉丁词硬切难读）。
-function shortStarLabel(text) {
-  const t = String(text ?? "").trim();
-  if (!t) return "";
-  if (/^skill-collection-review/i.test(t)) return "skill 检查";
-  if (/^heartbeat/i.test(t)) return "心跳";
-  if (/^Memory/i.test(t)) return "Memory";
-  return t.length > 8 ? `${t.slice(0, 8)}…` : t;
-}
 
-function buildStarState(cards, now) {
-  const latest = new Map();
-  for (const card of cards) {
-    if (card.type === "batch" || card.tone === "cancel") continue;
-    const id = card.agentId || "main";
-    if (!latest.has(id)) latest.set(id, card);
-  }
-  return DIAL_CHAIN.map(([id]) => {
-    const card = latest.get(id);
-    if (!card) return { id, tone: "idle", stale: true, label: "" };
-    // 副行=这颗星当前/最近在干嘛：运行中优先进度行，否则最近卡标题切片
-    const raw = card.tone === "live"
-      ? (card.progress ? String(card.progress).split("\n")[0] : "执行中")
-      : String(card.title ?? "");
-    return { id, tone: card.tone, stale: card.tone === "done" && now - card.at > 86_400_000, label: shortStarLabel(raw) };
-  });
-}
+
 
 // 案卡链路行（v7.2 折叠芯片，Leo 2026-10-06 拍板）：连续同星同果的跳折叠成
 // 一枚芯片（✓×N），星序一眼可读；悬停芯片弹该星跳列表（时刻/时长/结论），
@@ -3392,7 +3392,7 @@ function CaseChipPop({ seg, now }) {
   );
 }
 
-function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap, usageSessions, idleSessions, live }) {
+function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, now, agentNameMap, usageSessions, idleSessions, live, liveActiveIds, dialEpisodes }) {
   const [selectedStar, setSelectedStar] = useState(null);
   // 案卡折叠芯片的悬停态：null=无悬停，数字=悬停中的芯片序号
   const [hoverChip, setHoverChip] = useState(null);
@@ -3415,10 +3415,13 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   });
 
   const feed = useMemo(
-    () => buildTasksFeedModel({ rows, episodes, now }),
-    [rows, episodes, now],
+    () => buildTasksFeedModel({ rows, episodes: dialEpisodes ?? episodes, now }),
+    [rows, dialEpisodes, episodes, now],
   );
-  const starState = useMemo(() => buildStarState(feed.cards, now), [feed, now]);
+  const starState = useMemo(
+    () => buildStarState(feed.cards, now, liveActiveIds, DIAL_CHAIN),
+    [feed, now, liveActiveIds],
+  );
 
   const isCronKind = (card) => card.kind === "定时" || card.kind === "巡检简报" || card.kind === "巡检" || card.kind === "Memory";
   const filteredCards = feed.cards.filter((card) => {
@@ -3477,7 +3480,11 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   })();
   const sparkPeak = Math.max(...sparkSeries.map((x) => x.count), 1);
 
-  const LOG_GLYPH = { live: ["●", DIAL_TONE.live], fail: ["✕", DIAL_TONE.fail], done: ["✓", DIAL_TONE.done], cancel: ["○", DIAL_TONE.idle] };
+  // 事件流水的符号与颜色（Leo 2026-10-11："完成不该再显示蓝点，容易和运行的绿点混"）：
+  // 完成用中性灰 ✓ —— 符号本身已说清"完成"，颜色只留给活的事（绿=在跑、红=失败）。
+  // 收班的沉下去，视线自然落在还在动的上面（与"静默=健康"同一条老规矩）。
+  // 想改回青蓝：把下面 done 的颜色换回 DIAL_TONE.done 即可（单点可回退）。
+  const LOG_GLYPH = { live: ["●", DIAL_TONE.live], fail: ["✕", DIAL_TONE.fail], done: ["✓", LOG_DONE_INK], cancel: ["○", DIAL_TONE.idle] };
   const logRows = filteredCards.filter((card) => !isConclusionCard(card)).map((card) => {
     const [glyph, glyphColor] = LOG_GLYPH[card.tone] ?? ["○", DIAL_TONE.idle];
     // 折叠卡标题自带「· N 次」，时长列不再重复计数（Leo：事件流水排版错位）
@@ -3844,6 +3851,16 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
     () => listIdleSessions(boardAgentsFresh?.sessions, boardUsageSessions),
     [boardAgentsFresh, boardUsageSessions],
   );
+  // 星盘活跃星集：与胶囊灯牌、星位上下文同源同拍（都读快照 hasActiveRun，
+  // 且都先过新鲜度闸）。快照里这颗星有活跃会话就点亮——账本 running 行
+  // 要等会话收行才写，短活儿整段抓不到，只认账本盘面永远不亮。
+  const boardLiveActiveIds = useMemo(() => {
+    const ids = new Set();
+    for (const session of boardAgentsFresh?.sessions ?? []) {
+      if (session?.hasActiveRun && session.agentId) ids.add(canonicalAgentId(session.agentId));
+    }
+    return ids;
+  }, [boardAgentsFresh]);
   const historyEpisodes = useMemo(() => {
     const windowMs = (monitor.historyWindowMin ?? 0) * 60_000;
     if (!windowMs || !sessionRuns.length) return [];
@@ -3855,6 +3872,18 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
         return latest.status !== "running";
       },
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionRuns, monitor.historyWindowMin, monitor.episodeGapMin]);
+
+  // 星盘专用轮次：historyEpisodes 是"历史回看"，明确排除了还在跑的轮次
+  // （latest.status !== "running"）——那份口径留给回看是对的，但星盘拿它
+  // 就会"有星在干活、盘面却是上一次收班"。这里另起一份放行运行中轮次，
+  // 只喂 buildStarState（副行/点亮），不进动态流卡片。
+  const dialEpisodes = useMemo(() => {
+    if (!sessionRuns.length) return [];
+    // 不跟"历史回看窗口"绑定：那个开关是给动态流回看用的，设 0（关闭）不该
+    // 让星盘连正在跑的轮次都拿不到。星盘只按 gap 分段，一律放行运行中轮次。
+    return groupSessionEpisodes(sessionRuns, Math.max(5, monitor.episodeGapMin) * 60_000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionRuns, monitor.historyWindowMin, monitor.episodeGapMin]);
 
@@ -4085,6 +4114,8 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
           idleSessions={boardIdleSessions}
           now={now}
           live={live}
+          liveActiveIds={boardLiveActiveIds}
+          dialEpisodes={dialEpisodes}
         />
       )}
       {showCron && (cronBoard.length > 0 ? (

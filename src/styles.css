@@ -7529,7 +7529,12 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
 /* 竖条悬停详情卡：胶卷包 42px 定位容器（宽随壳内宽，不随扩窗拉伸），
    卡片固定朝胶卷左侧弹（Leo 2026-10-03 拍板）——side=right 是"胶卷左侧放得下，
    卡往左弹"；贴左缘放不下退 side=left 卡往右兜底。 */
+/* 竖条胶卷左右各留一条空白边 = 拖窗区（Leo 2026-10-11："细竖条上面的区域
+   不需要点击动作，可以在这个位置加"）。条身 71% 被星位内容占着（按下会被
+   胶卷认领去滚内容），能拖窗的只剩底部一小块——这两条边不归胶卷，按下即走
+   壳层 8px 拖窗阈值，星位/按钮/滚内容一个都不改。 */
 .tasks-mini-railwrap {
+  --mini-drag-gutter: 5px;
   position: relative;
   /* 垂直填满壳内高度（替代原胶卷的直接 flex:1）：内容多时由胶卷自身滚动，
      不能 flex:none 随内容长——那会把滚动约束顶穿，窗口内底部被裁且滚不动 */
@@ -7540,7 +7545,13 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
   display: flex;
   justify-content: center;
 }
-.tasks-mini-railwrap .tasks-mini-strip--vertical { width: 100%; }
+.tasks-mini-railwrap .tasks-mini-strip--vertical {
+  width: 100%;
+  /* 左右让出拖窗边：胶卷只占中间，两侧空白归壳层拖窗 */
+  padding-left: var(--mini-drag-gutter, 5px);
+  padding-right: var(--mini-drag-gutter, 5px);
+  box-sizing: border-box;
+}
 /* 定侧类挂在 railwrap 本体上（悬停瞬间同步写），必须复合选择器——曾写成
    后代选择器永远不命中：竖条悬停扩窗后胶卷不钉窗缘、随窗口平移，指针被甩
    出胶卷 → 收窗 → 重进 → 再扩，真机表现为"左右跨越跳动+弹窗闪没"（0.20.12
@@ -7796,7 +7807,11 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
   flex-direction: column;
   align-items: center; /* 名字/呼吸点/竖线共享中轴，别各自靠左 */
   gap: 3px;
-  padding: 2px 0;
+  /* 命中范围收窄（Leo 2026-10-11："每个星位名字左右可选范围有点大，横条的
+     上下范围就很好"）：实测竖向每格曾高达 44px（横条整条才 36px 高），
+     上下留白过多导致鼠标稍微偏移就算选中；收到 32px 与横条观感对齐。 */
+  padding: 1px 0;
+  min-height: 32px;
 }
 
 /* 星名竖排：一字一格（用户点名），呼吸点放名字上方（与明细时间线同序）。
@@ -8404,21 +8419,33 @@ html[data-theme="dark"] .console-root {
 
 /* ===== 司南任务台：状态头 + 签页 + 星轨时间线 ===== */
 .console-hidden { display: none !important; }
-.console-head { position: absolute; top: 10px; left: 16px; right: 232px; display: flex; align-items: center; gap: 8px; z-index: 4; white-space: nowrap; user-select: none; }
+/* 整条状态头浮到拖拽区（z=7）之上：拖拽区为消"隐形边界"已覆盖整条头行，
+   而 .console-head 自己 z-index:4 < 7 —— 子元素 z 再高也被困在父层叠上下文
+   里（抬儿子无效，必须抬父层），同步按钮因此被整块吃掉点击。 */
+.console-head { position: absolute; top: 10px; left: 16px; right: 232px; display: flex; align-items: center; gap: 8px; z-index: 8; white-space: nowrap; user-select: none; }
+/* 头行自己不吃点击（它是个宽盒子），只有里面的可交互元素吃——否则整条
+   空白都被它拦下，拖窗失效。空白落回下层拖拽区。 */
+.console-head { pointer-events: none; }
+.console-head > * { pointer-events: auto; }
 .console-head > * { white-space: nowrap; }
 .console-brand { font-weight: 600; font-size: 15px; }
 .console-brand small { color: var(--fg-faint, #6a6b73); font-weight: 400; margin-left: 6px; font-size: 12px; }
 .console-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-faint, #6a6b73); }
 .console-live--on { color: inherit; }
 .console-sync-at { font-size: 12px; color: var(--fg-faint, #6a6b73); }
-.console-refresh { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid rgba(127, 127, 127, 0.35); background: transparent; color: inherit; cursor: pointer; }
+/* 状态头里的按钮要浮在拖拽区（z=7）之上：拖拽区为消"隐形边界"已覆盖整条
+   头行，z=auto 的按钮会被它整块吃掉点击（Leo 2026-10-08 实锤"同步按钮点不动"）。
+   门面可点元素一律 position:relative + z-index:8，空白区照旧拖窗。 */
+.console-refresh { position: relative; z-index: 8; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid rgba(127, 127, 127, 0.35); background: transparent; color: inherit; cursor: pointer; }
 .console-refresh:disabled { opacity: 0.5; cursor: default; }
-.console-tabs { position: absolute; top: 42px; left: 16px; right: 16px; display: flex; gap: 4px; z-index: 4; border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
+.console-tabs { position: absolute; top: 42px; left: 16px; right: 16px; display: flex; gap: 4px; z-index: 8; border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
 .console-tabs button { appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent; color: inherit; opacity: 0.6; font: inherit; font-size: 13px; padding: 6px 12px 8px; cursor: pointer; }
 .console-tabs button.is-selected { opacity: 1; border-bottom-color: #d9a860; }
 .console-tabs button:hover { opacity: 1; }
 /* 页签行与页签文字同属门面：禁选（正文内容不受影响，可正常复制）。 */
 .console-tabs { user-select: none; }
+/* 页签行同属门面：浮在拖拽区之上，避免被拖窗层吃掉点击。 */
+.console-tabs { position: relative; z-index: 8; }
 .console-tabs button { user-select: none; }
 .console-root .console-scroll { top: 88px; }
 .tasks-section--flush { margin: 0; padding: 0; }

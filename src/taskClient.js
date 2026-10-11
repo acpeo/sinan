@@ -433,6 +433,13 @@ export function loadMonitorConfig() {
     return {
       refreshIntervalSec: clampNumber(raw.refreshIntervalSec, 3, 1, 60),
       staleThresholdSec: clampNumber(raw.staleThresholdSec, 120, 10, 3600),
+      // 僵尸行判死阈值（秒）：只用于判断"这条 running 行是否已经死了"。
+      // 与 staleThresholdSec 分家的原因（Leo 2026-10-11 质疑）：北斗一轮派活
+      // 之间 agent 在思考/等工具返回，十几二十几分钟没露面是常态，极端能到
+      // 一小时——拿 2 分钟的短阈值判死会把正在跑的活儿误杀（真账本 id=74 开跑
+      // 20 分钟、6 分钟前才露面，短阈值下就被冤枉）。默认 30 分钟留足余量，
+      // 下限 5 分钟、上限 6 小时；57 小时没动静的真僵尸照样判死。
+      zombieThresholdSec: clampNumber(raw.zombieThresholdSec, 1800, 300, 21600),
       episodeGapMin: clampNumber(raw.episodeGapMin, 60, 5, 720),
       failedWindowH: clampNumber(raw.failedWindowH, 1, 1, 168),
       ledgerRetentionDays: clampNumber(raw.ledgerRetentionDays, 7, 1, 90),
@@ -459,6 +466,7 @@ export function loadMonitorConfig() {
     return {
       refreshIntervalSec: 3,
       staleThresholdSec: 120,
+      zombieThresholdSec: 1800,
       episodeGapMin: 60,
       failedWindowH: 1,
       ledgerRetentionDays: 7,
@@ -492,6 +500,7 @@ export function saveMonitorConfig(config) {
   const clean = {
     refreshIntervalSec: clampNumber(config.refreshIntervalSec, 3, 1, 60),
     staleThresholdSec: clampNumber(config.staleThresholdSec, 120, 10, 3600),
+    zombieThresholdSec: clampNumber(config.zombieThresholdSec, 1800, 300, 21600),
     episodeGapMin: clampNumber(config.episodeGapMin, 60, 5, 720),
     failedWindowH: clampNumber(config.failedWindowH, 1, 1, 168),
     ledgerRetentionDays: clampNumber(config.ledgerRetentionDays, 7, 1, 90),

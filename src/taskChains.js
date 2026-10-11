@@ -732,7 +732,7 @@ function chatKeyOf(sessionKey) {
 /// 窗口 = 今天 0 点起（"今夜"口径）；今夜没活动的 agent 不出模块。
 /// records 保留 hop 形状（taskId/status/terminalSummary…），抽屉直接喂
 /// TaskChainTimeline / ChainFilmstrip 复用现成组件。
-export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
+export function buildFleetModules({ tasks, runs, now, dayStartMs, staleMs = 0 }) {
   const byAgent = new Map();
   const ensure = (agentId) => {
     if (!byAgent.has(agentId)) byAgent.set(agentId, { agentId, records: [] });
@@ -788,8 +788,26 @@ export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
   for (const { agentId, records } of byAgent.values()) {
     if (!records.length) continue;
     records.sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0));
-    const running = records.find((r) => r.status === "running" || r.status === "queued") ?? null;
-    const lastEnded = records.find((r) => r !== running && r.status !== "running" && r.status !== "queued") ?? null;
+    // 僵尸行判死（Leo 2026-10-11 实锤"57 小时还在呼吸"）：网关不给结束事件时
+    // 账本行会永远停在 running。陈旧（超过 staleMs 没再露面）的 running 行
+    // 一律按收班处理——陈旧的呼吸灯比熄灯更危险（它在撒谎"还在跑"）。
+    // 判死后的行仍留在 records 里（抽屉明细照旧可查），只是不再当"正在跑"。
+    const running = records.find((r) => {
+      if (r.status !== "running" && r.status !== "queued") return false;
+      const seen = Number.isFinite(r.lastSeenMs) ? r.lastSeenMs : 0;
+      return !(staleMs > 0 && seen > 0 && now - seen > staleMs);
+    }) ?? null;
+    // 判死的僵尸行打标记：它还带着 status=running，不标记就会被 lastEnded 的
+    // "非 running" 过滤也排掉——既不算活跃也不算收班，记事行直接变空白
+    // （真机 id=70 现场）。标记后它按收班参与记事，但不参与点亮。
+    if (staleMs > 0) {
+      for (const r of records) {
+        if (r.status !== "running" && r.status !== "queued") continue;
+        const seen = Number.isFinite(r.lastSeenMs) ? r.lastSeenMs : 0;
+        if (seen > 0 && now - seen > staleMs) r.zombie = true;
+      }
+    }
+    const lastEnded = records.find((r) => r !== running && (r.zombie || (r.status !== "running" && r.status !== "queued"))) ?? null;
     let roundIndex = 0;
     if (running?.kind === "session") {
       const chat = chatKeyOf(running.sessionKey);
@@ -805,7 +823,6 @@ export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
     const bt = b.running ? b.running.startedAtMs : (b.lastEnded?.endedAtMs ?? 0);
     return bt - at;
   });
-  void now;
   return modules;
 }
 
@@ -818,6 +835,55 @@ export function buildFleetModules({ tasks, runs, now, dayStartMs }) {
 /// 不在北斗编制——留作北斗失效时与 openclaw 对话的兜底。灯牌里空闲不占格，
 /// 今夜有活动才进末位（兜底星动了才值得看）。
 const IDLE_EXEMPT_AGENTS = new Set(["main"]);
+
+/// agent id 归一：agents.list 的全 id（VPS-北斗:tianshu）与账本的短 id
+/// （tianshu）是同一颗星——不归一就同星双格（真机实锤 2026-10-07）。
+/// 原是 buildAgentRoster 内部闭包，主窗星盘也要用（闭包拿不到会
+/// ReferenceError），提为模块级纯函数。口径与 buildAgentNameMap 的 suffix
+/// 注册一致。
+/// 星盘副行的短标签：舰队例行任务换中文短词，其余 CJK 切 8 字（拉丁词硬切难读）。
+export function shortStarLabel(text) {
+  const t = String(text ?? "").trim();
+  if (!t) return "";
+  if (/^skill-collection-review/i.test(t)) return "skill 检查";
+  if (/^heartbeat/i.test(t)) return "心跳";
+  if (/^Memory/i.test(t)) return "Memory";
+  return t.length > 8 ? `${t.slice(0, 8)}…` : t;
+}
+
+/// 星盘态：每颗星最近一条非取消卡 + 快照活跃信号。
+/// 活跃星以星位快照为准（与胶囊灯牌、星位上下文同源同拍）：账本要等会话
+/// 收行才有 running 行，能晚十几秒甚至整段抓不到——只认账本会让盘面"有星
+/// 在干活却不亮"（Leo 2026-10-08 实锤）。快照说这颗星有活跃会话就点亮。
+/// chain = 星序坐标表（DIAL_CHAIN 形态 [[id, x, y], ...]），由调用方注入。
+export function buildStarState(cards, now, liveActiveIds, chain) {
+  const latest = new Map();
+  for (const card of cards) {
+    if (card.type === "batch" || card.tone === "cancel") continue;
+    const id = card.agentId || "main";
+    if (!latest.has(id)) latest.set(id, card);
+  }
+  const live = liveActiveIds instanceof Set ? liveActiveIds : new Set();
+  return (chain ?? []).map(([id]) => {
+    if (live.has(id)) {
+      const card = latest.get(id);
+      const progress = String(card?.progress ?? "").trim().split("\n")[0];
+      return { id, tone: "live", stale: false, label: shortStarLabel(progress || "执行中") };
+    }
+    const card = latest.get(id);
+    if (!card) return { id, tone: "idle", stale: true, label: "" };
+    // 副行=这颗星当前/最近在干嘛：运行中优先进度行，否则最近卡标题切片
+    const raw = card.tone === "live"
+      ? (card.progress ? String(card.progress).split("\n")[0] : "执行中")
+      : String(card.title ?? "");
+    return { id, tone: card.tone, stale: card.tone === "done" && now - card.at > 86_400_000, label: shortStarLabel(raw) };
+  });
+}
+
+export function canonicalAgentId(id) {
+  if (typeof id !== "string" || !id) return "";
+  return id.includes(":") ? id.slice(id.lastIndexOf(":") + 1) : id;
+}
 
 export function buildAgentRoster({
   agents,
@@ -833,10 +899,6 @@ export function buildAgentRoster({
   // agent id 归一：agents.list 的全 id（VPS-北斗:tianshu）与账本的短 id（tianshu）
   // 是同一颗星——不归一花名册就同星双格（真机实锤），口径与 buildAgentNameMap
   // 的 suffix 注册一致。
-  const canonicalAgentId = (id) => {
-    if (typeof id !== "string" || !id) return "";
-    return id.includes(":") ? id.slice(id.lastIndexOf(":") + 1) : id;
-  };
   const recordsByAgent = new Map();
   const collect = (agentId, record) => {
     const key = canonicalAgentId(agentId);
