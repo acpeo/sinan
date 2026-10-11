@@ -12,6 +12,8 @@ import {
   isStableFloatingMode,
   monitorForWindowPosition,
   physicalWindowSize,
+  isCursorOnDockPeek,
+  stripGestureOwner,
   verticalStripHoverLocalLayout,
   verticalStripHoverLayout,
   viewportCorrectedPhysicalSize,
@@ -454,4 +456,54 @@ test("hop card companion window flips above the horizontal strip when the bottom
   });
   assert.equal(placement.side, "above");
   assert.equal(placement.y, 1060 - 6 - 240);
+});
+
+test("横条胶囊：横向=翻星位，纵向=拖窗（Leo 2026-10-11 拍板原手感）", () => {
+  // 横条矮（实测 180×17.5），横向挥是翻星位的自然动作，纵向挥才是唯一顺手的
+  // 起拖动作——按主轴大者判：横向为主归胶卷翻内容，纵向为主让给壳层拖窗。
+  assert.equal(stripGestureOwner({ vertical: false, dx: 60, dy: 0 }), "scroll");
+  assert.equal(stripGestureOwner({ vertical: false, dx: -60, dy: 0 }), "scroll");
+  assert.equal(stripGestureOwner({ vertical: false, dx: 0, dy: -14 }), "window");
+  assert.equal(stripGestureOwner({ vertical: false, dx: 0, dy: 14 }), "window");
+  // 斜向按主轴大者判，与"横向=翻星位"一致
+  assert.equal(stripGestureOwner({ vertical: false, dx: 40, dy: -14 }), "scroll");
+  assert.equal(stripGestureOwner({ vertical: false, dx: 14, dy: -40 }), "window");
+});
+
+test("竖条胶囊：沿条滚内容、跨条拖窗（原手感不动）", () => {
+  assert.equal(stripGestureOwner({ vertical: true, dx: 0, dy: 50 }), "scroll");
+  assert.equal(stripGestureOwner({ vertical: true, dx: 0, dy: -50 }), "scroll");
+  assert.equal(stripGestureOwner({ vertical: true, dx: 40, dy: 0 }), "window");
+  // 斜向按主轴大者判，与"沿条=翻星位"一致
+  assert.equal(stripGestureOwner({ vertical: true, dx: 20, dy: 40 }), "scroll");
+  assert.equal(stripGestureOwner({ vertical: true, dx: 40, dy: 20 }), "window");
+});
+
+test("手势死区内谁都别动（手抖不该吃掉点击）", () => {
+  assert.equal(stripGestureOwner({ vertical: false, dx: 2, dy: 2 }), "none");
+  assert.equal(stripGestureOwner({ vertical: true, dx: 3, dy: 3 }), "none");
+  assert.equal(stripGestureOwner({ vertical: true, dx: NaN, dy: 50 }), "none");
+});
+
+test("碰边命中区是沿边整条，纵向不受窗口区间限制（Leo 2026-10-11 实锤碰边弹不出）", () => {
+  // 窗贴右缘收起，屏幕 1040 高而窗只占 y=400..624；用户随手碰最右那条 6px
+  // 窄边，纵向位置是随意的——原来要求 cursor.y 落在窗口区间内，绝大多数
+  // 位置都不成立，于是"碰边弹出"等于没有。
+  const dock = { edge: "right", x: 1884, y: 400, width: 36, height: 224,
+    left: 0, top: 0, right: 1919, bottom: 1040, scale: 1 };
+  // 窗纵向范围内：碰得到（原行为也对）
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 500 }, dock, 6), true);
+  // 窗纵向范围外（屏幕顶部/底部）：原来弹不出，现在要能弹出
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 40 }, dock, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 1000 }, dock, 6), true);
+  // 离边太远：不算碰边
+  assert.equal(isCursorOnDockPeek({ x: 1800, y: 500 }, dock, 6), false);
+  // 贴左/上/下缘同样按各自的轴判定
+  assert.equal(isCursorOnDockPeek({ x: 3, y: 900 }, { ...dock, edge: "left", left: 0 }, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 900, y: 2 }, { ...dock, edge: "top", top: 0 }, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 900, y: 1038 }, { ...dock, edge: "bottom", bottom: 1040 }, 6), true);
+  // 脏数据不炸
+  assert.equal(isCursorOnDockPeek(null, dock, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: NaN, y: 5 }, dock, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: 5, y: 5 }, null, 6), false);
 });

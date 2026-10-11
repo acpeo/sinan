@@ -331,17 +331,63 @@ function monitorForWindowPosition(
   return best;
 }
 
+/// 迷你胶囊拖拽手势归属（Leo 2026-10-11）。壳层与胶卷各有一套阈值与方向判定，
+/// 两处必须同一条规则——分家过一次（5586945 只改竖条），横条就落下了。抽成
+/// 纯函数后只有一个判定源。
+///
+/// 横竖对称按方向分家：沿条方向为主 = 胶卷认领去翻内容（横条横向翻星位、
+/// 竖条纵向翻星位）；跨条方向为主 = 让给壳层启动原生拖窗（横条纵向、竖条
+/// 横向）。上下/左右留白不归胶卷（按下不在 .tasks-mini-strip 上），任意方向
+/// 都拖窗——由调用方在 onStrip 为 false 时直接放行，不进这个函数。
+///
+/// 死区内返回 "none"：手抖不该被吃掉成一次拖拽，点击展开要保住。
+///
+/// 返回 "scroll" = 胶卷认领去滚内容；"window" = 让给壳层拖窗；"none" = 还没
+/// 越过死区，谁都别动。
+/// 收起后露出的那条细边的命中判定（Leo 2026-10-11 实锤"碰边弹出并没有这个
+/// 功能"）。此前判定要求光标纵向也落在窗的 y 区间内——窗只有 224 高而屏幕
+/// 1040，用户碰的是屏幕最边缘那条 6px 窄边（纵向随手一放），绝大多数位置都
+/// 不满足，于是"碰边"永远弹不出来。
+/// 命中区改为沿边整条：只要光标贴到那条边所在的屏幕边缘就算碰边，纵向不限。
+/// 横向（贴左/右缘）时比对光标的 x；纵向（贴上/下缘）时比对 y。
+function isCursorOnDockPeek(cursor, dock, peekPx = 6) {
+  if (!cursor || !dock?.edge) return false;
+  const visible = Math.round(peekPx * (dock.scale || 1));
+  const cx = Number(cursor.x);
+  const cy = Number(cursor.y);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+  switch (dock.edge) {
+    case "bottom": return cy >= dock.bottom - visible && cy <= dock.bottom + visible;
+    case "top": return cy >= dock.top - visible && cy <= dock.top + visible;
+    case "left": return cx >= dock.left - visible && cx <= dock.left + visible;
+    default: return cx >= dock.right - visible && cx <= dock.right + visible;
+  }
+}
+
+function stripGestureOwner({ vertical, dx, dy, deadZone = 4 }) {
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  if (!Number.isFinite(ax) || !Number.isFinite(ay)) return "none";
+  if (ax <= deadZone && ay <= deadZone) return "none";
+  // 沿条方向为主才滚内容，否则让给拖窗（横竖同一条规则，只是主轴不同）。
+  const along = vertical ? ay : ax;
+  const across = vertical ? ax : ay;
+  return along > across ? "scroll" : "window";
+}
+
 export {
   desyncHealRetryDelayMs,
   edgeDockHiddenPosition,
   floatingViewportSize,
   horizontalStripTargetWidth,
   hopCardWindowPlacement,
+  isCursorOnDockPeek,
   isDockAnchorPosition,
   isDockGeometryCurrent,
   isStableFloatingMode,
   monitorForWindowPosition,
   physicalWindowSize,
+  stripGestureOwner,
   verticalStripHoverLocalLayout,
   verticalStripHoverLayout,
   viewportCorrectedPhysicalSize,

@@ -38,7 +38,7 @@ import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
-import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth } from "./windowGeometry";
+import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth, stripGestureOwner } from "./windowGeometry";
 import {
   applyStartupUiScale,
   applyWindowMode,
@@ -1360,14 +1360,18 @@ function TasksWidgetWindow({
             const dx = Math.abs(event.clientX - drag.x);
             const dy = Math.abs(event.clientY - drag.y);
             if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
-            // 方向分家只对"按在胶卷上"生效（Leo 2026-10-11）：沿条方向为主 =
-            // 胶卷在翻内容，别抢；跨条方向为主 = 拖窗。横竖对称：横条横向翻链、
-            // 纵向拖窗；竖条纵向翻星位、横向拖窗。此前竖条 4px 就被胶卷抢走，
-            // 壳层的 8px 拖窗永远轮不到（71% 条身不能拖），横条则是任意方向都
-            // 被胶卷认领——细条几乎只剩一小块能拖窗的地方。
-            // 按在胶卷之外（空白/两侧留白边）不受方向约束，任意方向都拖窗。
+            // 手势归属统一问 stripGestureOwner（Leo 2026-10-11）。此前横竖各写
+            // 一套方向判定，5586945 只改了竖条，横条就落下了——分家必漏。现在
+            // 一个判定源，横竖对称：沿条方向为主 = 胶卷翻内容（横条横向翻星位、
+            // 竖条纵向翻星位），跨条方向为主 = 拖窗。
+            // 按在胶卷之外（上下留白/左右留白边）不进这个分支：任意方向都拖窗。
             if (drag.onStrip) {
-              if (drag.vertical ? dy >= dx : dx >= dy) return;
+              const owner = stripGestureOwner({
+                vertical: drag.vertical,
+                dx: event.clientX - drag.x,
+                dy: event.clientY - drag.y,
+              });
+              if (owner !== "window") return;
               if (event.target.closest(".tasks-mini-strip")?.dataset.stripDragging) return;
             }
             shellDragRef.current = null;
@@ -2343,14 +2347,11 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
     }
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
-    if (!drag.moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
-    // 按方向分家（Leo 2026-10-11）：横向为主 = 让给壳层拖窗（不加认领
-    // 标记，滚内容也不做）；上下为主 = 认领滚内容。此前不分方向，4px 就被
-    // 胶卷抢走，壳层的 8px 拖窗永远轮不到——条身几乎没有能拖的地方。
-    // 横条同理（Leo 2026-10-11"横条都改错了，很不容易拖动"）：横条只有
-    // 36px 高，纵向挥一下才是唯一顺手的起拖动作，却被胶卷一并认领去滚内容。
-    // 于是横竖对称——横向为主滚链、纵向为主拖窗，两条都保住。
-    if (vertical ? Math.abs(dx) > Math.abs(dy) : Math.abs(dy) > Math.abs(dx)) return;
+    // 与壳层同一个判定源（Leo 2026-10-11）：横条一律让给拖窗（条身纵向实测
+    // 17.5px，沿条/跨条分不开，硬分就是"怎么拖都在滚内容"——横条的翻链交给
+    // 滚轮，胶卷 onWheel 照旧横滑）；竖条按方向分家，纵向为主才认领滚内容。
+    // 没过死区谁都别动（等更多位移再判，避免手抖把点击吃掉）。
+    if (stripGestureOwner({ vertical, dx, dy }) !== "scroll") return;
     drag.moved = true;
     // 手势标记：壳层据此判"这条拖拽已被内容滚动认领"，不再启动 OS 挪窗。
     event.currentTarget.dataset.stripDragging = "1";

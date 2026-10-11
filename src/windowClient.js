@@ -13,6 +13,7 @@ import {
   desyncHealRetryDelayMs,
   edgeDockHiddenPosition,
   floatingViewportSize,
+  isCursorOnDockPeek,
   isDockAnchorPosition,
   isDockGeometryCurrent,
   isStableFloatingMode,
@@ -1522,7 +1523,11 @@ async function setWindowGlass(enabled, radius = 12, tintStyle = "dark") {
   }
 }
 
-const DOCK_TRIGGER_PX = 8;
+// 贴边触发带宽（Leo 2026-10-11 实锤"成功次数很少，来回挪好几次才生效一次"）：
+// 原来只有 8px——真人拖窗松手的落点差 9~20px 是常态（实测 9px 就挂不上），
+// 于是"贴边"变成运气活。放到 24px（按 DPI 缩放），松手落在边上一指宽内都认。
+// 吸附本身会把窗锚到精确的边缘位，所以放宽容差不会让窗停在歪的地方。
+const DOCK_TRIGGER_PX = 24;
 const DOCK_PEEK_PX = 6;
 const DOCK_HIDE_DELAY_MS = 900;
 const DOCK_POLL_MS = 250;
@@ -1632,7 +1637,6 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     return isStableFloatingMode(mode, Boolean(stripHoverRestore));
   };
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-  const peek = () => Math.round(DOCK_PEEK_PX * dock.scale);
   const exposedPosition = () => ({ x: dock.x, y: dock.y });
   const hiddenPosition = () => edgeDockHiddenPosition(dock, DOCK_PEEK_PX);
   const slideTo = async (position) => {
@@ -1702,14 +1706,10 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     const cursor = await api.cursorPosition().catch(() => null);
     if (!cursor || !dock) return;
     if (hidden) {
-      const visible = peek();
-      const onStrip = dock.edge === "bottom"
-        ? cursor.x >= dock.x && cursor.x <= dock.x + dock.width && cursor.y >= dock.bottom - visible && cursor.y <= dock.bottom + visible
-        : dock.edge === "left"
-          ? cursor.y >= dock.y && cursor.y <= dock.y + dock.height && cursor.x >= dock.left - visible && cursor.x <= dock.left + visible
-          : dock.edge === "right"
-            ? cursor.y >= dock.y && cursor.y <= dock.y + dock.height && cursor.x >= dock.right - visible && cursor.x <= dock.right + visible
-            : cursor.x >= dock.x && cursor.x <= dock.x + dock.width && cursor.y >= dock.top - visible && cursor.y <= dock.top + visible;
+      // 碰边命中区 = 沿边整条（Leo 2026-10-11"碰边弹出并没有这个功能"）：
+      // 纵向不再要求落在窗口区间内——窗只占屏幕一小段，用户随手碰边缘条时
+      // 纵向位置是随意的，原来的判定几乎永远不成立。
+      const onStrip = isCursorOnDockPeek(cursor, dock, DOCK_PEEK_PX);
       if (onStrip) {
         hidden = false;
         outsideSinceMs = null;
