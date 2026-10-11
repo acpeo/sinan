@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "司南",
+  "productName": "Sinan",
   "version": "0.1.0",
-  "mainBinaryName": "司南",
+  "mainBinaryName": "sinan",
   "identifier": "app.sinan.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",

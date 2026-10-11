@@ -1337,14 +1337,12 @@ function TasksWidgetWindow({
             // （悬停卡搬进伴随窗，胶囊本体零程序化挪窗，跟手模态循环没有对手）。
             // 星格/胶卷上按下优先内容拖拽滚动（4px 即认领并打 stripDragging
             // 标记，先于壳层 8px 阈值），OS 拖拽不抢；点按不超阈值=点击展开。
-            // 竖条胶卷两侧的留白边 = 拖窗区（Leo 2026-10-11）：胶卷为让出这两条
-            // 边加了左右 padding，落在 padding 里的按下不归胶卷滚内容，直接走
-            // 壳层 8px 阈值启动拖窗——星位内容区照旧滚，两侧空白随便拖。
-            // 竖条胶卷按方向分家（Leo 2026-10-11"细竖条就是一个显示"+
-            // "上下拖动星位还可以吗"）：竖条窄，横向拖没有别的用处 → 横向拖
-            // = 拖窗；上下拖 = 翻看更多星位（滚内容，原行为保留）。两个动作靠
-            // 方向区分互不打架，不用牺牲任何一个。滚轮翻看也照旧。
-            // 横条保持原样（横向拖=翻链，Leo 未要求改）。
+            // 胶卷按方向分家（Leo 2026-10-11"细竖条就是一个显示"+
+            // "上下拖动星位还可以吗"+"横条都改错了，很不容易拖动"）：竖条窄，
+            // 纵向拖 = 翻看更多星位（滚内容），横向拖 = 拖窗；横条矮（36px），
+            // 横向拖 = 翻链，纵向拖 = 拖窗——纵向挥一下是横条唯一顺手的起拖
+            // 动作，此前却被胶卷一并认领。两个动作靠方向区分互不打架。
+            // 按在胶卷之外（空白/两侧留白边）不归胶卷，任意方向都拖窗。
             const strip = event.target.closest(".tasks-mini-strip");
             const verticalStrip = Boolean(strip && strip.classList.contains("tasks-mini-strip--vertical"));
             shellDragRef.current = {
@@ -1362,9 +1360,16 @@ function TasksWidgetWindow({
             const dx = Math.abs(event.clientX - drag.x);
             const dy = Math.abs(event.clientY - drag.y);
             if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
-            // 竖条里上下方向为主 = 胶卷在翻星位，别抢（交给它的滚内容手势）
-            if (drag.vertical && dy >= dx) return;
-            if (drag.onStrip && event.target.closest(".tasks-mini-strip")?.dataset.stripDragging) return;
+            // 方向分家只对"按在胶卷上"生效（Leo 2026-10-11）：沿条方向为主 =
+            // 胶卷在翻内容，别抢；跨条方向为主 = 拖窗。横竖对称：横条横向翻链、
+            // 纵向拖窗；竖条纵向翻星位、横向拖窗。此前竖条 4px 就被胶卷抢走，
+            // 壳层的 8px 拖窗永远轮不到（71% 条身不能拖），横条则是任意方向都
+            // 被胶卷认领——细条几乎只剩一小块能拖窗的地方。
+            // 按在胶卷之外（空白/两侧留白边）不受方向约束，任意方向都拖窗。
+            if (drag.onStrip) {
+              if (drag.vertical ? dy >= dx : dx >= dy) return;
+              if (event.target.closest(".tasks-mini-strip")?.dataset.stripDragging) return;
+            }
             shellDragRef.current = null;
             startWindowDragging();
           }}
@@ -2327,13 +2332,25 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
   const onStripPointerMove = (event) => {
     const drag = dragRef.current;
     if (!drag || event.pointerId !== drag.pointerId) return;
+    // 没按键就不算拖拽（Leo 2026-10-11 实锤"鼠标放上去就自动上下滑"）：
+    // OS 拖窗的模态循环会吞掉 pointerup（本文件别处已为此加了 window 级兜底），
+    // 胶卷的 dragRef 却没人清——残留记录让之后的纯悬停移动也在改 scrollTop，
+    // 表现为"鼠标放上去内容就跟着跑"。首个无按键的 move 即丢弃这次拖拽。
+    if ((event.buttons ?? 0) === 0) {
+      dragRef.current = null;
+      delete event.currentTarget.dataset.stripDragging;
+      return;
+    }
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
     if (!drag.moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
-    // 竖条按方向分家（Leo 2026-10-11）：横向为主 = 让给壳层拖窗（不加认领
-    // 标记，滚内容也不做）；上下为主 = 认领滚内容（原行为）。此前不分方向，
-    // 4px 就被胶卷抢走，壳层的 8px 拖窗永远轮不到——竖条几乎没有能拖的地方。
-    if (vertical && Math.abs(dx) > Math.abs(dy)) return;
+    // 按方向分家（Leo 2026-10-11）：横向为主 = 让给壳层拖窗（不加认领
+    // 标记，滚内容也不做）；上下为主 = 认领滚内容。此前不分方向，4px 就被
+    // 胶卷抢走，壳层的 8px 拖窗永远轮不到——条身几乎没有能拖的地方。
+    // 横条同理（Leo 2026-10-11"横条都改错了，很不容易拖动"）：横条只有
+    // 36px 高，纵向挥一下才是唯一顺手的起拖动作，却被胶卷一并认领去滚内容。
+    // 于是横竖对称——横向为主滚链、纵向为主拖窗，两条都保住。
+    if (vertical ? Math.abs(dx) > Math.abs(dy) : Math.abs(dy) > Math.abs(dx)) return;
     drag.moved = true;
     // 手势标记：壳层据此判"这条拖拽已被内容滚动认领"，不再启动 OS 挪窗。
     event.currentTarget.dataset.stripDragging = "1";
@@ -3193,12 +3210,16 @@ function buildTasksFeedModel({ rows, episodes, now }) {
       });
       continue;
     }
+    // 收工/在跑都进盘（Leo 2026-10-11 实锤"有星在活跃，对应星位却没动作"）：
+    // 此前这里把 tone 归一成 failed/done，还在跑的轮次被硬写成"done"——
+    // 星盘拿到的永远是收班态，呼吸圈与绿点从来没机会亮。现在按原状态分色：
+    // 进行中=绿（活的事）、失败=红、其余=收班蓝。
     cards.push({
       key, type: "episode", episode: ep, agentId: epAgent,
       agent: starNameOf(epAgent), kind: "接力",
       at,
-      tone: tone === "failed" ? "fail" : "done",
-      color: tone === "failed" ? DIAL_TONE.fail : DIAL_TONE.done,
+      tone: tone === "failed" ? "fail" : tone === "done" ? "done" : "live",
+      color: tone === "failed" ? DIAL_TONE.fail : tone === "done" ? DIAL_TONE.done : DIAL_TONE.live,
       title: cleanSessionTitle(latest.title) || cleanSessionTitle(latest.fallbackTitle)
         || (summary ? summary.slice(0, 24) : `${starNameOf(epAgent)} 的派活`),
       slug: false,
@@ -3509,11 +3530,27 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
     return (label.length > 30 ? `${label.slice(0, 30)}…` : label);
   })();
 
+  // 卡片状态点（Leo 2026-10-11："完成的还是都有点点显示，看不出完没完"）：
+  // 收班的点掏空成灰环、星名转中性墨——颜色只留给活的事（绿=在跑、红=失败），
+  // 与事件流水的灰 ✓ 同一条规矩（静默=健康，收班的沉下去）。在跑的绿点加
+  // 呼吸，完没完一眼分得开。spine 仍按原色，卡片不会整张失色。
+  const dotOf = (card) => {
+    if (card.tone === "done") {
+      return { className: "v5-dot v5-dot--hollow", style: undefined, ink: LOG_DONE_INK };
+    }
+    return {
+      className: `v5-dot${card.tone === "live" ? " v5-dot--live" : ""}`,
+      style: { background: card.color, opacity: card.decayed ? 0.55 : 1 },
+      ink: card.color,
+    };
+  };
+
   const renderCard = (card) => {
     if (card.type === "batch") {
+      const dot = dotOf(card);
       return (
         <article key={card.key} className="v5card v5card--dump spine" style={{ "--spine": card.color }}>
-          <div className="v5-l1"><i className="v5-dot" style={{ background: card.color }} /><b style={{ color: card.color }}>{card.agent}</b><span className="v5-kind">巡检</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+          <div className="v5-l1"><i className={dot.className} style={dot.style} /><b style={{ color: dot.ink }}>{card.agent}</b><span className="v5-kind">巡检</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
           <div className="v5-l2">{card.title}</div>
           <div className="v5-batchdetail">{card.detail}</div>
         </article>
@@ -3521,9 +3558,10 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
     }
     if (card.type === "episode") {
       const expanded = expandedSet.has(card.key);
+      const dot = dotOf(card);
       return (
         <article key={card.key} className={`v5card spine${card.summary && card.cjk ? "" : " v5card--dump"}`} style={{ "--spine": card.color }}>
-          <div className="v5-l1"><i className="v5-dot" style={{ background: card.color }} /><b style={{ color: card.color }}>{card.agent}</b><span className="v5-kind">接力</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+          <div className="v5-l1"><i className={dot.className} style={dot.style} /><b style={{ color: dot.ink }}>{card.agent}</b><span className="v5-kind">接力</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
           <div className="v5-l2">{card.title}</div>
           {card.summary ? <div className="v5-concl">{card.summary}</div> : null}
           <div className="v5-morerow">
@@ -3563,17 +3601,19 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
     const clamped = card.summary && card.summary.length > 96;
     const expanded = expandedSet.has(card.key);
     if (card.summary && !card.cjk) {
+      const dot = dotOf(card);
       return (
         <article key={card.key} className="v5card v5card--dump spine" style={{ "--spine": card.color }}>
-          <div className="v5-l1"><i className="v5-dot" style={{ background: card.color, opacity: card.decayed ? 0.55 : 1 }} /><b style={{ color: card.color }}>{card.agent}</b><span className="v5-kind">{card.kind}</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+          <div className="v5-l1"><i className={dot.className} style={dot.style} /><b style={{ color: dot.ink }}>{card.agent}</b><span className="v5-kind">{card.kind}</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
           <div className={`v5-l2${card.slug ? " is-slug" : ""}`}>{card.title}</div>
           <div className="v5-concl-en">{card.summary}</div>
         </article>
       );
     }
+    const dot = dotOf(card);
     return (
       <article key={card.key} className={`v5card spine${isBriefing ? " v5card--brief" : ""}`} style={{ "--spine": card.color }}>
-        <div className="v5-l1"><i className="v5-dot" style={{ background: card.color, opacity: card.decayed ? 0.55 : 1 }} /><b style={{ color: card.color }}>{card.agent}</b><span className={`v5-kind${isBriefing ? " v5-kind--gold" : ""}`}>{card.kind}</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
+        <div className="v5-l1"><i className={dot.className} style={dot.style} /><b style={{ color: dot.ink }}>{card.agent}</b><span className={`v5-kind${isBriefing ? " v5-kind--gold" : ""}`}>{card.kind}</span><span className="v5-when">{formatHistoryTime(card.at, now)}</span></div>
         <div className={`v5-l2${card.slug ? " is-slug" : ""}`}>{card.title}</div>
         {card.summary ? <div className={`v5-concl${expanded ? " is-open" : ""}`}>{card.summary}</div> : null}
         {card.error && card.tone === "fail" ? <div className="v5-err">{card.error}</div> : null}
@@ -3856,11 +3896,28 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
   // 要等会话收行才写，短活儿整段抓不到，只认账本盘面永远不亮。
   const boardLiveActiveIds = useMemo(() => {
     const ids = new Set();
+    // 第一路：快照（与胶囊灯牌、星位上下文同源同拍，都过新鲜度闸）。
     for (const session of boardAgentsFresh?.sessions ?? []) {
       if (session?.hasActiveRun && session.agentId) ids.add(canonicalAgentId(session.agentId));
     }
+    // 第二路：账本兜底（Leo 2026-10-11 实锤"有星在活跃，星位却没动作"）。
+    // 快照的 hasActiveRun 对群聊 run 大部分时间为 false，审计补的活跃还要
+    // sessionKey 在 sessions.list 里对得上才认——两条路都可能缺证据，于是
+    // 盘面把正在干活的星按收班渲染（静默的蓝点、没有呼吸、没有任何动作）。
+    // 账本里"还在跑且近期露过面"的 run 行是第三路证据，取并集：任何一路
+    // 说在跑，星位就动。僵尸行（久无动静已判死）不算活跃。
+    const zombieMs = Math.max(60, monitor.zombieThresholdSec) * 1000;
+    const seen = Date.now();
+    for (const run of sessionRuns) {
+      if (!run || (run.status !== "running" && run.status !== "queued")) continue;
+      const at = Number.isFinite(run.lastSeenMs) ? run.lastSeenMs : 0;
+      if (at > 0 && seen - at > zombieMs) continue;
+      const id = canonicalAgentId(run.agentId);
+      if (id) ids.add(id);
+    }
     return ids;
-  }, [boardAgentsFresh]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardAgentsFresh, sessionRuns, monitor.zombieThresholdSec]);
   const historyEpisodes = useMemo(() => {
     const windowMs = (monitor.historyWindowMin ?? 0) * 60_000;
     if (!windowMs || !sessionRuns.length) return [];

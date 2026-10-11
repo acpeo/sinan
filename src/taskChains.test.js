@@ -966,3 +966,26 @@ test("star dial survives a missing live set and shortens routine labels", () => 
   assert.equal(shortStarLabel("heartbeat-tianshu"), "心跳");
   assert.equal(shortStarLabel("这是一句很长很长的话超过八个字"), "这是一句很长很长…");
 });
+
+test("星盘：账本里在跑的星也点亮（Leo 2026-10-11 实锤有星在活跃却没动作）", () => {
+  const chain = [["yuheng", 0, 0]];
+  // 快照一路证据为空（群聊 run 的 hasActiveRun 大部分时间为 false、
+  // 审计补的活跃还要 sessionKey 对得上），此时只剩账本里的 running 行。
+  const now = Date.now();
+  const cards = [{
+    type: "episode", agentId: "yuheng", tone: "done", at: now - 60_000, title: "收班卡",
+  }];
+  // 只有快照：盘面停在收班（这是 Leo 看到的现象）
+  assert.equal(buildStarState(cards, now, new Set(), chain)[0].tone, "done");
+  // 账本说这颗星还在跑：点亮（活的事优先）
+  assert.equal(buildStarState(cards, now, new Set(["yuheng"]), chain)[0].tone, "live");
+});
+
+test("星盘点亮不吃僵尸行（久无动静的 running 不冒充活跃）", () => {
+  const chain = [["tianshu", 0, 0]];
+  const cards = [{ type: "episode", agentId: "tianshu", tone: "done", at: Date.now(), title: "x" }];
+  // 调用方（App.jsx）已按 zombieThresholdSec 把久未露面的 running 行剔除，
+  // 这里验证纯函数本身：进了集合就点亮，不进就不亮——判死逻辑在调用方有测试。
+  assert.equal(buildStarState(cards, Date.now(), new Set(), chain)[0].tone, "done");
+  assert.equal(buildStarState(cards, Date.now(), new Set(["tianshu"]), chain)[0].tone, "live");
+});
