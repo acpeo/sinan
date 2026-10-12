@@ -504,7 +504,9 @@ function edgeSwitchScenario(startWidth, startHeight, startEdge, targetWidth, tar
   return {
     context,
     async run() {
-      await context.startEdgeDock({
+      // startEdgeDock 返回 stop()；不调用它会留下一直跑的 setInterval 轮询，
+      // node --test 等不到事件循环清空，整个 npm test 步骤挂住（真机上过）。
+      const stopPromise = context.startEdgeDock({
         getMode: () => "tasks-widget",
         getPinned: () => false,
         canDockTasksWidget: () => true,
@@ -515,6 +517,8 @@ function edgeSwitchScenario(startWidth, startHeight, startEdge, targetWidth, tar
       const before = visiblePx();
       await context.applyMiniCapsuleSize(targetWidth, targetHeight);
       await wait(1600);                // 轮询重估 + 900ms 收起
+      const stop = await stopPromise;
+      stop?.();
       return { before, after: visiblePx(), position: { ...position }, size: { ...size } };
     },
   };
