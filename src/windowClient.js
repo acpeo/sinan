@@ -1639,6 +1639,29 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const exposedPosition = () => ({ x: dock.x, y: dock.y });
   const hiddenPosition = () => edgeDockHiddenPosition(dock, DOCK_PEEK_PX);
+  // 同一条边换个外形：边不变，沿边坐标沿用原锚点并钳回工作区。竖条 36×224
+  // 贴右的显形位 x=1884，换成 224×36 的横条要重算成 right-224=1696，否则
+  // 右缘冲到 2108 飞出屏幕。
+  const redockSameEdge = (previous, size) => {
+    const x = previous.edge === "left" ? previous.left
+      : previous.edge === "right" ? previous.right - size.width
+      : clamp(previous.x, previous.left, Math.max(previous.left, previous.right - size.width));
+    const y = previous.edge === "top" ? previous.top
+      : previous.edge === "bottom" ? previous.bottom - size.height
+      : clamp(previous.y, previous.top, Math.max(previous.top, previous.bottom - size.height));
+    return { ...previous, x, y, width: size.width, height: size.height };
+  };
+  // 改完尺寸后窗口是否仍停在原边缘上（贴齐，或只剩收起那 6px）。用来区分
+  // "程序化改外形"与"用户把窗拖走了"——后者不该被旧锚点拽回来。
+  const stillOnDockEdge = (pos, size, target) => {
+    const peek = Math.round(DOCK_PEEK_PX * (target.scale || 1));
+    switch (target.edge) {
+      case "left": return pos.x <= target.left + peek;
+      case "right": return pos.x + size.width >= target.right - peek;
+      case "top": return pos.y <= target.top + peek;
+      default: return pos.y + size.height >= target.bottom - peek;
+    }
+  };
   const slideTo = async (position) => {
     if (!dock) return;
     await win.setPosition(new api.PhysicalPosition(position.x, position.y)).catch(() => {});
@@ -1693,11 +1716,27 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     // 锚点自校验：展开/折叠面板这类程序化改尺寸、或外力位移，都会让挂靠
     // 记录的几何过期——按"用户拖动"同一语义释放并重估，不拿旧锚点把窗口
     // 拉回或误判光标离开。收起态先滑回显形位再释放，窗口不至于滞留屏外。
+    //
+    // 改尺寸要分两种。竖条↔横条互切是"同一条边换个外形"（Leo 2026-10-13
+    // 实锤"竖条贴边隐藏时切横条，得手动挪一下才重新隐藏，其他方向都没这
+    // 问题"）：仍停在原边缘上时，按同一条边重算锚点并保持收起态，别按旧
+    // 外形的显形位摆正——竖条 36×224 贴右的显形位 x=1884 套到 224×36 的
+    // 横条上，右缘冲到 2108 飞出屏幕，随后的 onMove 又因坐标不符判成
+    // "用户拖走"把挂靠拆掉，横条既不贴边也点不着，只能手动拖回来。
+    // 为什么只有竖→横犯：竖条沿边跨度小（36）、横条沿边跨度大（224），
+    // 换成竖条时新坐标落在旧锚点 2px 容差里逃过一劫；上下缘互换时长宽比
+    // 不翻转，同理幸免。尺寸翻转 + 侧边，两个条件凑齐才炸。
     const [currentPos, currentSize] = await Promise.all([
       win.outerPosition().catch(() => null),
       win.outerSize().catch(() => null),
     ]);
     if (currentPos && currentSize && !isDockGeometryCurrent(currentPos, currentSize, dock, hidden)) {
+      if (stillOnDockEdge(currentPos, currentSize, dock)) {
+        dock = redockSameEdge(dock, currentSize);
+        // 收起态保持收起：新外形按同一条边重算停泊位，不闪回显形。
+        if (hidden) await slideTo(hiddenPosition());
+        return;
+      }
       if (hidden) await slideTo(exposedPosition());
       releaseDockForDrag();
       scheduleCheck();

@@ -428,3 +428,125 @@ test("position memory refuses coordinates parked off-screen by edge docking", as
   // 贴边收起坐标绝不能覆盖用户正常摆放的位置，否则下次开机窗口停在屏边缘
   assert.deepEqual(written, {});
 });
+
+
+/// 竖条↔横条互切时，接上原来那条边继续收起（Leo 2026-10-13："只要有一个
+/// 已经贴边隐藏了，切到竖条还是横条都还会再贴边隐藏；唯独竖条贴边隐藏时切
+/// 横条不行，得手动挪一下"）。
+///
+/// 真凶在 poll 的锚点自校验：尺寸变了就一律滑回"旧外形的显形位"再释放挂靠。
+/// 竖条 36×224 贴右的显形位 x=1884，套到 224×36 的横条上右缘冲到 2108 飞出
+/// 屏幕；随后 onMove 拿新坐标比对旧锚点，判成"用户拖走"把挂靠拆掉，横条既
+/// 不贴边也点不着。为什么只有竖→横犯：竖条沿边跨度小（36）、横条沿边跨度大
+/// （224），换成竖条时新坐标落在旧锚点 2px 容差里逃过一劫；上下缘互换时长宽
+/// 比不翻转，同理幸免——尺寸翻转 + 侧边，两个条件凑齐才炸。
+function edgeSwitchScenario(startWidth, startHeight, startEdge, targetWidth, targetHeight) {
+  const context = controller();
+  // isDesktop() 认 window.__TAURI_INTERNALS__，台架补上
+  context.window.__TAURI_INTERNALS__ = { invoke: async () => ({}) };
+  // vm 里没有 window 定时器家族；900ms 收起判定要能真的走过去，用真实时延
+  context.window.setTimeout = ((fn, ms) => setTimeout(fn, ms));
+  context.window.setInterval = ((fn, ms) => setInterval(fn, ms));
+  context.window.clearInterval = ((id) => clearInterval(id));
+  context.window.clearTimeout = ((id) => clearTimeout(id));
+  const area = { left: 0, top: 0, right: 1920, bottom: 1040 };
+  let size = { width: startWidth, height: startHeight };
+  let position = startEdge === "left" ? { x: area.left, y: 400 }
+    : startEdge === "right" ? { x: area.right - startWidth, y: 400 }
+    : startEdge === "top" ? { x: 700, y: area.top }
+    : { x: 700, y: area.bottom - startHeight };
+  // 光标先落在窗内（挂靠才成立），随后移开触发收起
+  let cursor = { x: position.x + Math.floor(startWidth / 2), y: position.y + Math.floor(startHeight / 2) };
+  // 真实 Tauri 语义：位置没变不派发 onMoved。乱派发会让 scheduleCheck 反复
+  // 重跑 check()，把 outsideSinceMs 清零——收起永远走不到（台架自己造鬼）。
+  const listeners = [];
+  const appWindow = {
+    outerPosition: async () => ({ ...position }),
+    outerSize: async () => ({ ...size }),
+    setPosition: async (next) => {
+      const moved = next.x !== position.x || next.y !== position.y;
+      position = { x: next.x, y: next.y };
+      if (moved) listeners.forEach((fn) => fn({ payload: { ...position } }));
+    },
+    setSize: async (next) => { size = { width: next.width, height: next.height }; },
+    setMinSize: async () => {},
+    setResizable: async () => {},
+    setAlwaysOnTop: async () => {},
+    onMoved: async (fn) => { listeners.push(fn); return () => {}; },
+    scaleFactor: async () => 1,
+  };
+  Object.assign(context, {
+    isLinuxPlatform: () => false,
+    isMacPlatform: () => false,
+    isWindowsPlatform: () => true,
+    windowApi: async () => ({
+      getCurrentWindow: () => appWindow,
+      currentMonitor: async () => ({ workArea: {
+        position: { x: 0, y: 0 }, size: { width: 1920, height: 1040 },
+      } }),
+      cursorPosition: async () => ({ ...cursor }),
+      LogicalSize: class { constructor(width, height) { this.width = width; this.height = height; } },
+      PhysicalPosition: class { constructor(x, y) { this.x = x; this.y = y; } },
+    }),
+    loadMonitorConfig: () => ({ tasksEdgeDock: true }),
+  });
+  // 屏内可见像素：按所在边算，"右缘-左缘"在左边收起时会把负半轴算成可见。
+  const visiblePx = () => {
+    const left = Math.max(0, position.x);
+    const right = Math.min(1920, position.x + size.width);
+    const top = Math.max(0, position.y);
+    const bottom = Math.min(1040, position.y + size.height);
+    return startEdge === "left" || startEdge === "right"
+      ? Math.max(0, right - left)
+      : Math.max(0, bottom - top);
+  };
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  return {
+    context,
+    async run() {
+      await context.startEdgeDock({
+        getMode: () => "tasks-widget",
+        getPinned: () => false,
+        canDockTasksWidget: () => true,
+      });
+      await wait(300);                 // 挂靠成立
+      cursor = { x: 900, y: 900 };     // 光标离开
+      await wait(1400);                // 900ms 后收起
+      const before = visiblePx();
+      await context.applyMiniCapsuleSize(targetWidth, targetHeight);
+      await wait(1600);                // 轮询重估 + 900ms 收起
+      return { before, after: visiblePx(), position: { ...position }, size: { ...size } };
+    },
+  };
+}
+
+test("竖条贴边隐藏时切横条，横条接上同一条边继续收起（Leo 2026-10-13）", async () => {
+  const scenario = edgeSwitchScenario(36, 224, "right", 224, 36);
+  const { before, after } = await scenario.run();
+  // 前置条件：竖条确实收起了，屏内只剩约 6px 细边
+  assert.ok(before <= 8, `前置：竖条应收起（实际可见 ${before}px）`);
+  // 修好后横条必须接上同一条边继续收起，而不是停在显形位等用户推
+  assert.ok(after <= 8, `切横条后应接上贴边隐藏（实际可见 ${after}px）`);
+});
+
+test("反向：横条贴边隐藏时切竖条，同样接上原边继续收起", async () => {
+  const scenario = edgeSwitchScenario(224, 36, "right", 36, 224);
+  const { before, after } = await scenario.run();
+  assert.ok(before <= 8, `前置：横条应收起（实际可见 ${before}px）`);
+  assert.ok(after <= 8, `切竖条后应接上贴边隐藏（实际可见 ${after}px）`);
+});
+
+test("其余三边互切也接上原边继续收起（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
+  const combos = [
+    [36, 224, "left", 224, 36],
+    [224, 36, "left", 36, 224],
+    [36, 224, "top", 224, 36],
+    [224, 36, "bottom", 36, 224],
+  ];
+  for (const [sw, sh, edge, tw, th] of combos) {
+    const scenario = edgeSwitchScenario(sw, sh, edge, tw, th);
+    const { before, after } = await scenario.run();
+    assert.ok(before <= 8, `${edge} 边前置应收起（实际 ${before}px）`);
+    assert.ok(after <= 8, `${edge} 边 ${sw}x${sh}→${tw}x${th} 切换后应收起（实际 ${after}px）`);
+  }
+});
