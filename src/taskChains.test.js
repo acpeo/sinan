@@ -181,6 +181,62 @@ test("hopToneOf: 四档状态映射，current 只认正在跑的任务本身（�
   assert.equal(hopToneOf({ status: "running", taskId: "a" }, "b").current, false);
 });
 
+test("hopToneOf: 会话台账的 done 也是完成，绝不默认成 current（Leo 2026-10-13 实锤常亮）", () => {
+  // 真机 55 行 session_run 全是 status="done"。这个值在旧口径里六项全不中，
+  // 落到 else 的 current——主窗每一段接力轮都被点成绿"进行中"，星盘点、值班
+  // 案卡、折叠芯片一片常亮，而 agent 其实早停了。台账词汇必须就地认下。
+  const ledger = hopToneOf({ status: "done", taskId: "session-run:55", error: null });
+  assert.equal(ledger.tone, "done");
+  assert.equal(ledger.done, true);
+  assert.equal(ledger.current, false);
+  assert.equal(ledger.state, "已完成");
+  // 点名也点不亮它：done 不是 current 的候选（current 有 !done 前置条件）。
+  assert.equal(hopToneOf({ status: "done", taskId: "a" }, "a").current, false);
+  // 两套词汇同结果：任务行 succeeded 与台账 done 必须等价。
+  assert.equal(
+    hopToneOf({ status: "done", taskId: "a" }).tone,
+    hopToneOf({ status: "succeeded", taskId: "a" }).tone,
+  );
+  // 台账的 failed 仍是失败（别把修复做成了"台账状态全算完成"）。
+  assert.equal(hopToneOf({ status: "failed", taskId: "a" }, "a").tone, "failed");
+  // 真 running 仍是在跑——修复不能把还在跑的活儿也判成收班。
+  assert.equal(hopToneOf({ status: "running", taskId: "a" }, "a").tone, "current");
+});
+
+test("真台账喂进去：每段接力轮都不再被点成 live（Leo 2026-10-13 截图复现）", () => {
+  // 复刻主窗路径：groupSessionEpisodes 给的是原生账本行，案卡循环直接拿
+  // latest.status 喂 hopToneOf，再用三目定 card.tone。全 done 的账本应当
+  // 一张 live 卡都不剩。
+  const runs = [
+    { id: 1, agentId: "yuheng", status: "done", sessionKey: "g:group:a", startedAtMs: 100, endedAtMs: 200, lastSeenMs: 200 },
+    { id: 2, agentId: "tianshu", status: "done", sessionKey: "g:group:a", startedAtMs: 300, endedAtMs: 400, lastSeenMs: 400 },
+    { id: 3, agentId: "kaiyang", status: "done", sessionKey: "g:group:a", startedAtMs: 500, endedAtMs: 600, lastSeenMs: 600 },
+  ];
+  const episodes = groupSessionEpisodes(runs, 300_000);
+  assert.ok(episodes.length >= 1, "账本要能分出至少一段接力轮");
+  const liveCards = [];
+  for (const ep of episodes) {
+    const latest = ep.runs[ep.runs.length - 1];
+    const { tone } = hopToneOf({ status: latest.status, taskId: latest.taskId ?? latest.id, error: latest.error });
+    const cardTone = tone === "failed" ? "fail" : tone === "done" ? "done" : "live";
+    if (cardTone === "live") liveCards.push(`${latest.agentId}/${latest.status}`);
+  }
+  assert.deepEqual(liveCards, [], "账本全 done 时不该有任何 live 卡");
+  // 对照组：掺一行 running，那段必须仍然是 live（灯该亮时得亮）。
+  const withLive = [
+    ...runs,
+    { id: 4, agentId: "tianji", status: "running", sessionKey: "g:group:a", startedAtMs: 700, endedAtMs: null, lastSeenMs: 750 },
+  ];
+  const liveEpisodes = groupSessionEpisodes(withLive, 300_000);
+  let sawLive = false;
+  for (const ep of liveEpisodes) {
+    const latest = ep.runs[ep.runs.length - 1];
+    const { tone } = hopToneOf({ status: latest.status, taskId: latest.taskId ?? latest.id, error: latest.error });
+    if ((tone === "failed" ? "fail" : tone === "done" ? "done" : "live") === "live") sawLive = true;
+  }
+  assert.equal(sawLive, true, "账本里有 running 时必须还能点亮");
+});
+
 test("failureClassOf: 真机话术分诊，词表外一律真失败（宁可错杀不漏报）", () => {
   // 真机 18791 采集的三类良性话术
   assert.equal(failureClassOf("heartbeat skipped: quiet-hours"), "skip");

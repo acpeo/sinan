@@ -181,12 +181,21 @@ export function countIdleSessions(sessions, shown) {
 /// skipped = 失败分诊（2026-10-04 六案②）判定的良性未跑：真机 27 条 failed
 /// 里大半是心跳静默跳过/重启中止/手动取消，全染红会把真失败淹没——灰显
 /// ◌ 档，不占失败区（排序计数都只认 failed）。
+///
+/// 词汇表有两套，进来什么就认什么（Leo 2026-10-13 实锤"agent 早停了、灯还
+/// 全亮着"）：
+///   任务行/跳   running / queued / succeeded / failed / timed_out / lost / cancelled
+///   会话台账行  running / done / failed
+/// 台账的 "done" 在旧口径里六项全不中，落到 else 的 "current"——主窗把每一段
+/// 接力轮都点成绿"进行中"，星盘星点、值班案卡、折叠芯片一片常亮。真机 55 行
+/// 全是 done，于是整屏都是"还在跑"。这里把台账词汇一并认下，别让"不认识的
+/// 状态"默认成"正在跑"——灯撒谎比灯不亮危险得多。
 export function hopToneOf(hop, currentTaskId) {
   // 灯牌空闲星（2026-10-06 七星灯牌）：无今夜记录的 agent，○ 半隐
   if (hop?.status === "rest") {
     return { done: false, failed: false, pending: false, current: false, benign: false, tone: "rest", state: "空闲" };
   }
-  const done = hop?.status === "succeeded";
+  const done = hop?.status === "succeeded" || hop?.status === "done";
   const pending = hop?.status === "queued";
   const failedRaw = hop?.status === "failed" || hop?.status === "timed_out" || hop?.status === "lost";
   const cancelled = hop?.status === "cancelled";
