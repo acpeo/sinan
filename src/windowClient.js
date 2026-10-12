@@ -1706,9 +1706,10 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     const cursor = await api.cursorPosition().catch(() => null);
     if (!cursor || !dock) return;
     if (hidden) {
-      // 碰边命中区 = 沿边整条（Leo 2026-10-11"碰边弹出并没有这个功能"）：
-      // 纵向不再要求落在窗口区间内——窗只占屏幕一小段，用户随手碰边缘条时
-      // 纵向位置是随意的，原来的判定几乎永远不成立。
+      // 碰边命中区 = 窗口收起后自己占的那一段边缘（Leo 2026-10-12："只有鼠标
+      // 碰到软件的那个位置，隐藏的才会出来"）。上一批为了能弹出把窗口区间限制
+      // 删掉，变成整条屏幕边都能弹出——任务小组件 63%、竖条 78%、横条 96% 的
+      // 边是误触。真实要 empowerment 的那段很小，但必须精确到软件自己那一段。
       const onStrip = isCursorOnDockPeek(cursor, dock, DOCK_PEEK_PX);
       if (onStrip) {
         hidden = false;

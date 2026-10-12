@@ -364,3 +364,67 @@ test("hop card probe falls back to the in-window preview path when commands are 
   };
   assert.equal(await context.probeHopCardWindow(), false);
 });
+
+// 位置记忆整套函数从 metrik 整搬过来时只搬了函数、没人点火（2026-10-12 审计
+// 发现）：司南里 startPositionMemory/restoreWindowPosition 曾经只有 App.jsx 的
+// import、没有一个调用。函数本身一直是好的——坏在接线。这两条测锁住函数行为，
+// 免得下次有人动它们时静默走样；接线缺失只有 App.jsx 那边看得出。
+test("position memory round-trips the capsule position through storage", async () => {
+  const stored = {};
+  const context = controller(stored);
+  let position = { x: 900, y: 400 };
+  const appWindow = {
+    outerPosition: async () => position,
+    outerSize: async () => ({ width: 224, height: 36 }),
+  };
+  const written = {};
+  Object.assign(context, {
+    isLinuxPlatform: () => false,
+    isMacPlatform: () => false,
+    windowApi: async () => ({
+      getCurrentWindow: () => appWindow,
+      currentMonitor: async () => ({ workArea: {
+        position: { x: 0, y: 0 }, size: { width: 1920, height: 1040 },
+      } }),
+      availableMonitors: async () => [{ position: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } }],
+    }),
+    localStorage: {
+      getItem: (key) => stored[key] ?? null,
+      setItem: (key, value) => { written[key] = value; stored[key] = value; },
+    },
+  });
+  await context.rememberWindowPosition(
+    await context.windowApi(), appWindow, "strip-horizontal",
+  );
+  // 命中的键按形态分开；挂靠收起/屏外坐标不会漏进 storage（在同一函数里拦）
+  assert.ok(written["metrik:stripHorizontalPosition"], "横条位置应落到横条自己的键");
+  assert.equal(JSON.parse(written["metrik:stripHorizontalPosition"]).x, 900);
+});
+
+test("position memory refuses coordinates parked off-screen by edge docking", async () => {
+  const written = {};
+  const context = controller();
+  // 收起态：只剩一条细边在工作区内（贴右缘 1914）
+  const position = { x: 1914, y: 400 };
+  const appWindow = {
+    outerPosition: async () => position,
+    outerSize: async () => ({ width: 224, height: 36 }),
+  };
+  Object.assign(context, {
+    isLinuxPlatform: () => false,
+    isMacPlatform: () => false,
+    windowApi: async () => ({
+      getCurrentWindow: () => appWindow,
+      currentMonitor: async () => ({ workArea: {
+        position: { x: 0, y: 0 }, size: { width: 1920, height: 1040 },
+      } }),
+      availableMonitors: async () => [{ position: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } }],
+    }),
+    localStorage: { getItem: () => null, setItem: (key, value) => { written[key] = value; } },
+  });
+  await context.rememberWindowPosition(
+    await context.windowApi(), appWindow, "strip-horizontal",
+  );
+  // 贴边收起坐标绝不能覆盖用户正常摆放的位置，否则下次开机窗口停在屏边缘
+  assert.deepEqual(written, {});
+});

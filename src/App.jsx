@@ -805,6 +805,9 @@ function TasksWidgetWindow({
   useEffect(() => {
     localStorage.setItem("metrik:tasksWidgetCollapsed", collapsed ? "1" : "0");
   }, [collapsed]);
+  // 延时回调、挂靠引擎与位置记忆都要读最新折叠态，统一经 ref 取。
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
   // 提醒卡点击的 A 案落点：Rust 仲裁广播 → 就地展开面板（窗已由 Rust show）。
   useEffect(() => {
     let unlistenPromise;
@@ -866,6 +869,35 @@ function TasksWidgetWindow({
   // 延时关闭回调里读的是注册时刻的闭包，方向要经 ref 取最新值。
   const miniOrientationRef = useRef("horizontal");
   miniOrientationRef.current = miniOrientation;
+  // 位置记忆接线（Leo 2026-10-12）：这一整套（startPositionMemory /
+  // restoreWindowPosition / POSITION_KEYS）从 metrik 整搬过来时只搬了函数、
+  // 没人点火——用户把窗拖到哪都不会被记住，重启回原位。接线照源项目的原始
+  // 写法（metrik-clean App.jsx:8096/8103/8137）搬回来，不凭空发明。
+  //
+  // 形态拆分比源项目多一层：司南的小组件窗 = 折叠胶囊 / 展开面板共用同一个
+  // tasks-widget 模式，而 POSITION_KEYS 给胶囊横竖各留了键。于是——
+  //   折叠 = strip-horizontal / strip-vertical（横竖各记各的，互不覆盖）
+  //   展开 = tasks-widget（面板位置单独一份）
+  // 用 useLayoutEffect 且声明在尺寸副作用之前：布局副作用按声明顺序跑，这样
+  // 恢复坐标排队在应用尺寸之前——源项目的注释交代得很清楚，先到位才能按最终
+  // 所在显示器的 DPI 算物理尺寸，反过来 Content 会被裁。
+  const positionModeOf = () => {
+    if (!collapsedRef.current) return "tasks-widget";
+    return miniOrientationRef.current === "vertical"
+      ? "strip-vertical"
+      : "strip-horizontal";
+  };
+  useLayoutEffect(() => {
+    runWindowAction(() => restoreWindowPosition(positionModeOf()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // 拖动结束后按形态记住位置（有 400ms 去抖，松手才记）。
+  useEffect(() => {
+    const stopPromise = startPositionMemory(positionModeOf);
+    return () => {
+      stopPromise.then((stop) => stop?.());
+    };
+  }, []);
   // 悬停详情卡：hoverCard = { hop, index, total, orientation, center?, windowY?,
   // cellRect?, *Screen }。orientation 决定锚点集：竖条锚胶卷缘+格中心，
   // 横条锚壳缘+格中心。视口坐标（center/windowY/cellRect）= 预览路径定位；

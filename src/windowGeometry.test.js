@@ -485,25 +485,45 @@ test("手势死区内谁都别动（手抖不该吃掉点击）", () => {
   assert.equal(stripGestureOwner({ vertical: true, dx: NaN, dy: 50 }), "none");
 });
 
-test("碰边命中区是沿边整条，纵向不受窗口区间限制（Leo 2026-10-11 实锤碰边弹不出）", () => {
-  // 窗贴右缘收起，屏幕 1040 高而窗只占 y=400..624；用户随手碰最右那条 6px
-  // 窄边，纵向位置是随意的——原来要求 cursor.y 落在窗口区间内，绝大多数
-  // 位置都不成立，于是"碰边弹出"等于没有。
+test("碰边命中区=窗口收起后自己占的那一段边缘（Leo 2026-10-12 口径）", () => {
+  // 窗贴右缘收起：y=400..624 那一段才是它的位置，屏幕同侧其它纵向位置不算。
   const dock = { edge: "right", x: 1884, y: 400, width: 36, height: 224,
     left: 0, top: 0, right: 1919, bottom: 1040, scale: 1 };
-  // 窗纵向范围内：碰得到（原行为也对）
+  // 命中：贴边且落在窗那一段内（含首尾与取整 slack）
   assert.equal(isCursorOnDockPeek({ x: 1916, y: 500 }, dock, 6), true);
-  // 窗纵向范围外（屏幕顶部/底部）：原来弹不出，现在要能弹出
-  assert.equal(isCursorOnDockPeek({ x: 1916, y: 40 }, dock, 6), true);
-  assert.equal(isCursorOnDockPeek({ x: 1916, y: 1000 }, dock, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 400 }, dock, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 624 }, dock, 6), true);
+  // 同侧屏幕边、但不在软件那一段： misconceived touches——去点右上角关闭、
+  // 走任务栏、开始菜单方向，都不该把它弹出来（上一批这里判 true=误触来源）
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 40 }, dock, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 1000 }, dock, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 300 }, dock, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: 1916, y: 700 }, dock, 6), false);
   // 离边太远：不算碰边
   assert.equal(isCursorOnDockPeek({ x: 1800, y: 500 }, dock, 6), false);
-  // 贴左/上/下缘同样按各自的轴判定
-  assert.equal(isCursorOnDockPeek({ x: 3, y: 900 }, { ...dock, edge: "left", left: 0 }, 6), true);
-  assert.equal(isCursorOnDockPeek({ x: 900, y: 2 }, { ...dock, edge: "top", top: 0 }, 6), true);
-  assert.equal(isCursorOnDockPeek({ x: 900, y: 1038 }, { ...dock, edge: "bottom", bottom: 1040 }, 6), true);
+  // 贴左/上/下缘按各自轴判定：沿边轴换成窗宽那一段（x=600..824）
+  assert.equal(isCursorOnDockPeek({ x: 3, y: 500 }, { ...dock, edge: "left", left: 0 }, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 3, y: 900 }, { ...dock, edge: "left", left: 0 }, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: 700, y: 2 }, { ...dock, x: 600, width: 224, edge: "top", top: 0 }, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 100, y: 2 }, { ...dock, x: 600, width: 224, edge: "top", top: 0 }, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: 700, y: 1038 }, { ...dock, x: 600, width: 224, edge: "bottom", bottom: 1040 }, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 1800, y: 1038 }, { ...dock, x: 600, width: 224, edge: "bottom", bottom: 1040 }, 6), false);
   // 脏数据不炸
   assert.equal(isCursorOnDockPeek(null, dock, 6), false);
   assert.equal(isCursorOnDockPeek({ x: NaN, y: 5 }, dock, 6), false);
   assert.equal(isCursorOnDockPeek({ x: 5, y: 5 }, null, 6), false);
+});
+
+test("藏屏幕上缘时命中区是横向那一段（Leo 2026-10-12 追问：上边也应当如此）", () => {
+  // 横胶囊 224×36 藏到工作区顶边：命中区=x..x+224，纵向顶±6，横向 widen 不做。
+  const dock = { edge: "top", x: 600, y: 0, width: 224, height: 36,
+    left: 0, top: 0, right: 1919, bottom: 1040, scale: 1 };
+  assert.equal(isCursorOnDockPeek({ x: 700, y: 2 }, dock, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 600, y: 0 }, dock, 6), true);
+  assert.equal(isCursorOnDockPeek({ x: 824, y: 4 }, dock, 6), true);
+  // 同一条顶边的其它横向位置：不是它的位置，不该弹出
+  assert.equal(isCursorOnDockPeek({ x: 100, y: 2 }, dock, 6), false);
+  assert.equal(isCursorOnDockPeek({ x: 1800, y: 2 }, dock, 6), false);
+  // 往里脱离那条边：不算碰边
+  assert.equal(isCursorOnDockPeek({ x: 700, y: 40 }, dock, 6), false);
 });

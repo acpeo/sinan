@@ -344,18 +344,30 @@ function monitorForWindowPosition(
 ///
 /// 返回 "scroll" = 胶卷认领去滚内容；"window" = 让给壳层拖窗；"none" = 还没
 /// 越过死区，谁都别动。
-/// 收起后露出的那条细边的命中判定（Leo 2026-10-11 实锤"碰边弹出并没有这个
-/// 功能"）。此前判定要求光标纵向也落在窗的 y 区间内——窗只有 224 高而屏幕
-/// 1040，用户碰的是屏幕最边缘那条 6px 窄边（纵向随手一放），绝大多数位置都
-/// 不满足，于是"碰边"永远弹不出来。
-/// 命中区改为沿边整条：只要光标贴到那条边所在的屏幕边缘就算碰边，纵向不限。
-/// 横向（贴左/右缘）时比对光标的 x；纵向（贴上/下缘）时比对 y。
-function isCursorOnDockPeek(cursor, dock, peekPx = 6) {
+/// 收起后露出的那条细边的命中判定（Leo 2026-10-12 口径："只有鼠标碰到软件的
+/// 那个位置，隐藏的才会出来"）。两个条件必须同时满足：
+///   1. 光标贴住窗口收起时所在的那条屏幕边（±peekPx，按 DPI 折算）；
+///   2. 光标沿边方向的坐标落在窗口自己那一段里（贴左右缘看窗高的那一段、
+///      贴上下缘看窗宽的那一段；slackPx 只吸收物理像素取整差）。
+/// 这条路走过两次弯路，都留着当判例：早先只按第 1 条所在的那条边、且要求落在
+/// 窗口区间，用户报"碰边弹出没这功能"——真凶是当时贴边阈值只有 8px，压根难得
+/// 到收起态，无从碰边；上一批为了能弹出把第 2 条整个删掉，变成"整条边都能弹
+/// 出"，横条 36 高贴侧边时 96% 的边、竖条 78%、任务小组件 63% 都是误触（碰到
+/// 任务栏、去点右上角关闭，它都窜出来）。正确粒度=窗口停在哪，哪里才是命中区。
+function isCursorOnDockPeek(cursor, dock, peekPx = 6, slackPx = 2) {
   if (!cursor || !dock?.edge) return false;
   const visible = Math.round(peekPx * (dock.scale || 1));
+  const slack = Math.round(slackPx * (dock.scale || 1));
   const cx = Number(cursor.x);
   const cy = Number(cursor.y);
   if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+  // 沿边轴：贴左右缘比对窗高那一段，贴上下缘比对窗宽那一段。
+  const alongAxisIsY = dock.edge === "left" || dock.edge === "right";
+  const start = alongAxisIsY ? dock.y : dock.x;
+  const span = alongAxisIsY ? dock.height : dock.width;
+  if (!Number.isFinite(start) || !Number.isFinite(span)) return false;
+  const along = alongAxisIsY ? cy : cx;
+  if (along < start - slack || along > start + span + slack) return false;
   switch (dock.edge) {
     case "bottom": return cy >= dock.bottom - visible && cy <= dock.bottom + visible;
     case "top": return cy >= dock.top - visible && cy <= dock.top + visible;
