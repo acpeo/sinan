@@ -3014,6 +3014,10 @@ const TONE_LABEL = { live: "运行中", fail: "有失败", done: "已完成", ca
 // 事件流水的"已完成"墨色：中性灰（不抢眼）。星盘/卡片上的收班色 DIAL_TONE.done
 // 是青蓝、语义不变，只有流水这一行换灰——两处语义不同，别混。
 const LOG_DONE_INK = "#4A5568";
+// 事件流水默认上屏行数（Leo 2026-10-13："这太长太多了"）。一段接力只出一行
+// 之后，行数从一夜几十降到"一段一行"，24 行约覆盖两天的活跃密度；更早的收进
+// "展开全部"——要看史册时点一下，平时流水只管当下出了什么事。
+const LOG_ROW_BUDGET = 24;
 const STAR_NAME_FALLBACK = {
   tianshu: "天枢", tianxuan: "天璇", tianji: "天玑", tianquan: "天权",
   yuheng: "玉衡", kaiyang: "开阳", yaoguang: "摇光", main: "客星",
@@ -3464,6 +3468,9 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   // 案卡折叠芯片的悬停态：null=无悬停，数字=悬停中的芯片序号
   const [hoverChip, setHoverChip] = useState(null);
   const [feedFilter, setFeedFilter] = useState("all"); // all | failed | cron
+  // 事件流水"展开全部"（Leo 2026-10-13）：默认只上屏最近 LOG_ROW_BUDGET 行，
+  // 点一下看更早的
+  const [logExpanded, setLogExpanded] = useState(false);
   // 动态流视图（Leo 2026-10-06 拍板 B）：速览=按星分组（默认），明细=跨星时间线。
   // 「速览/明细」按钮从小组件标题栏换岗到这里（那边只剩抽屉一个用途=删除）。
   const [feedView, setFeedView] = useState(() =>
@@ -3497,8 +3504,8 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
     if (selectedStar && card.agentId !== selectedStar) return false;
     return true;
   });
-  // v7 分栏：中文结论卡/接力/巡检批次走左栏"案与结论"，其余（心跳折叠、
-  // 取消、英文检查卡、主 Agent 对话卡）进右栏"事件流水"紧凑日志——日志行永不留空腔。
+  // v7 分栏：中文结论卡/接力/巡检批次走左栏"案与结论"（正文要空间），其余
+  // （心跳折叠、取消、英文检查卡、主 Agent 对话卡）进右栏"事件流水"紧凑日志。
   const isConclusionCard = (card) =>
     !card.mainChat && ((card.summary && card.cjk) || card.type === "episode" || card.type === "batch");
   const conclusionCards = filteredCards.filter(isConclusionCard);
@@ -3552,7 +3559,15 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   // 收班的沉下去，视线自然落在还在动的上面（与"静默=健康"同一条老规矩）。
   // 想改回青蓝：把下面 done 的颜色换回 DIAL_TONE.done 即可（单点可回退）。
   const LOG_GLYPH = { live: ["●", DIAL_TONE.live], fail: ["✕", DIAL_TONE.fail], done: ["✓", LOG_DONE_INK], cancel: ["○", DIAL_TONE.idle] };
-  const logRows = filteredCards.filter((card) => !isConclusionCard(card)).map((card) => {
+  // 事件流水 = 事件节点，不是左栏的回放（Leo 2026-10-13 第三轮："这太长太多了，
+  // 而且这里与动态流是不是重叠了"——上一轮把会话接力的每一跳都铺进流水，而每一跳
+  // 在左栏结论卡里已有正文，同一批数据两栏各演一遍，右栏被撑成竖长条）。
+  // 新口径两条：
+  //   ① 一段接力只在流水里留一行：该段最近一次活动的星 + 起止 + 跳数。要看每跳
+  //      的正文，左栏结论卡就是干这个的（点开有全文），流水不复制。
+  //   ② 定时/任务卡照旧一行一条，它们是流水的老住户（失败/取消/心跳折叠）。
+  // 这样流水回到"刚才舰队出了什么事"的一眼扫描：绿点=正在跑，灰✓=收班，红✕=失败。
+  const logRowOf = (card) => {
     const [glyph, glyphColor] = LOG_GLYPH[card.tone] ?? ["○", DIAL_TONE.idle];
     // 折叠卡标题自带「· N 次」，时长列不再重复计数（Leo：事件流水排版错位）
     const dur = card.type === "fold"
@@ -3561,7 +3576,50 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
         ? formatCompactDuration(card.startedAtMs, card.endedAtMs)
         : "";
     return { key: card.key, at: card.at, star: card.agent, event: card.title, glyph, glyphColor, dur, day: dayLabelOf(card.at, now) };
-  });
+  };
+  // 会话接力一段一行：短签只写"N 跳"，标题正文归左栏结论卡（Leo 2026-10-13
+  // "与动态流重叠"——流水复制正文就是重复）。时间取该段最后一次活动，符号取最近
+  // 一跳的态（在跑=绿、失败=红、收班=灰）。
+  const relayLogRows = [];
+  for (const card of filteredCards) {
+    if (card.type !== "episode" || !card.episode) continue;
+    const runs = card.episode.runs ?? [];
+    if (!runs.length) continue;
+    const latest = runs[runs.length - 1];
+    const { tone } = hopToneOf({ status: latest.status, taskId: latest.taskId ?? latest.id, error: latest.error });
+    const hopTone = tone === "failed" ? "fail" : tone === "done" ? "done" : "live";
+    const [glyph, glyphColor] = LOG_GLYPH[hopTone] ?? ["○", DIAL_TONE.idle];
+    const at = card.episode.lastActivityMs ?? latest.startedAtMs ?? 0;
+    const starCount = new Set(runs.map((hop) => starNameOf(hop.agentId))).size;
+    relayLogRows.push({
+      key: `relay:${card.key}`,
+      at, star: card.agent,
+      event: starCount > 1 ? `接力 ${runs.length} 跳 · ${starCount} 星` : `接力 ${runs.length} 跳`,
+      glyph, glyphColor,
+      dur: Number.isFinite(latest.endedAtMs) && Number.isFinite(latest.startedAtMs) && latest.endedAtMs > latest.startedAtMs
+        ? formatCompactDuration(latest.startedAtMs, latest.endedAtMs)
+        : "",
+      day: dayLabelOf(at, now),
+    });
+  }
+  // 在跑的一律排在前面（绿点是流水的眼睛），其余按时间倒序。
+  const sortedLogRows = [
+    // episode 段已按上面的 relayLogRows 出一行，别再整段重复一行
+    ...filteredCards.filter((card) => card.type !== "episode").map(logRowOf),
+    ...relayLogRows,
+  ]
+    .sort((a, b) => {
+      const liveA = a.glyph === LOG_GLYPH.live[0] ? 1 : 0;
+      const liveB = b.glyph === LOG_GLYPH.live[0] ? 1 : 0;
+      if (liveA !== liveB) return liveB - liveA;
+      return b.at - a.at;
+    });
+  // 流水默认只上屏最近 LOG_ROW_BUDGET 行：全渲染会把右栏撑成竖长条，把下面的
+  // 用量卡顶出屏幕（Leo 2026-10-13 实测注入 80 行两栏一起飙到 2678px）。
+  // 更早的收进"展开全部"，要看史册时点一下——流水本职是看当下在动什么。
+  const logRowBudget = logExpanded ? Infinity : LOG_ROW_BUDGET;
+  const logRows = sortedLogRows.slice(0, logRowBudget);
+  const logHiddenCount = sortedLogRows.length - logRows.length;
   const isEmpty = !feed.cards.length && !feed.execAgg.size && !activeEpisodes.length;
   // 值班案卡只装星位案（v7.1）：主 Agent 的纯对话轮不成案
   const dutyCase = starEpisodes[0] ?? null;
@@ -3864,7 +3922,10 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
           {feed.skippedNoReply > 0 && <div className="v5-foot">已跳过 {feed.skippedNoReply} 条空定时 · 不占位</div>}
         </div>
         <aside className="v7card v7-logcard">
-          <div className="v7-mhead">事件流水</div>
+          <div className="v7-mhead">
+            <span>事件流水</span>
+            {sortedLogRows.length > 0 && <span className="v7-mcount">{sortedLogRows.length} 条</span>}
+          </div>
           {(() => {
             const nodes = [];
             let lastDay = null;
@@ -3883,8 +3944,18 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
               );
             }
             if (!nodes.length) nodes.push(<div key="logempty" className="v7-qempty">没有事件</div>);
-            return nodes;
+            return <div className="v7-lscroll">{nodes}</div>;
           })()}
+          {logHiddenCount > 0 && (
+            <button type="button" className="v5-foot v7-lmore" onClick={() => setLogExpanded(true)}>
+              展开更早的 {logHiddenCount} 条
+            </button>
+          )}
+          {logExpanded && logHiddenCount === 0 && sortedLogRows.length > LOG_ROW_BUDGET && (
+            <button type="button" className="v5-foot v7-lmore" onClick={() => setLogExpanded(false)}>
+              只回看最近 {LOG_ROW_BUDGET} 条
+            </button>
+          )}
         </aside>
       </div>
       <TasksUsageCard

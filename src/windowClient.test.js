@@ -659,28 +659,46 @@ function edgeSwitchWithControlsScenario(edge, fromWidth, fromHeight, toWidth, to
       cursor = { x: position.x + openWidth / 2, y: position.y + openHeight / 2 };
       await context.applyMiniCapsuleSize(openWidth, openHeight);
       await wait(1500);
+      // ★ Leo 2026-10-13 第三轮实锤："点 ••• 打开选择按钮时，在贴边隐藏的前提
+      // 下，一闪就没了，没有给停留选择时间"。上一轮为修竖横互切，把"边收起过"
+      // 当成"换完外形立刻回到收起态"——于是手按在 ••• 上、指针还在窗内时，poll
+      // 一见尺寸变了就把窗滑回停泊位，控制簇跟着窗口一起被推出屏幕。改完后
+      // 这段窗口必须稳稳停在显形位等人选，不能一闪就没。
+      // 判据用"几乎整个外形都看得见"：显形位 = 整条贴着工作区边。沿屏幕边的
+      // 那一维因边而异——贴左右边看宽、贴上下边看高。竖条 36×376 贴右边时
+      // 沿边跨度是 36（宽），不是 376；横条 308×36 贴右边才是 308。
+      const alongOpen = edge === "left" || edge === "right" ? openWidth : openHeight;
+      const whileChoosing = visiblePx();
       // 手按在横竖切换钮上点它：尺寸再变，指针仍在窗内
       cursor = { x: position.x + toWidth / 2, y: position.y + toHeight / 2 };
       await context.applyMiniCapsuleSize(toWidth, toHeight);
       await wait(1500);
+      // 选完了，手离开窗口 → 900ms 后接上原边继续收起
+      cursor = { x: 900, y: 900 };
+      await wait(1500);
       const after = visiblePx();
       const stop = await stopPromise;
       stop?.();
-      return { before, after, offScreen: offScreenPx(), position: { ...position }, size: { ...size } };
+      return {
+        before, after, whileChoosing, alongOpen, offScreen: offScreenPx(), position: { ...position }, size: { ...size },
+      };
     },
   };
 }
 
-test("竖条贴边隐藏→碰边弹出→开控制簇→切横条，横条接上原边继续收起（Leo 2026-10-13 第二轮实锤）", async () => {
+test("竖条贴边隐藏→碰边弹出→开控制簇→切横条：选的时候别一闪就没，手走了才接上原边收起（Leo 2026-10-13 第三轮实锤）", async () => {
   const scenario = edgeSwitchWithControlsScenario("right", 36, 224, 308, 36);
-  const { before, after, offScreen } = await scenario.run();
+  const { before, whileChoosing, alongOpen, after, offScreen } = await scenario.run();
   assert.ok(before <= 8, `前置：竖条应收起（实际可见 ${before}px）`);
+  // ★ 核心断言：控制簇开着的那 1.5 秒里，窗口必须停在显形位。此前被
+  //   edgeHiddenRecently 一拍收回停泊位，Leo 根本来不及点后面的按钮。
+  assert.ok(whileChoosing >= alongOpen - 2, `开控制簇后应停在显形位等人选（实际可见 ${whileChoosing}px，外形沿边 ${alongOpen}px）`);
   // 横条不能摊在显形位等用户推，更不能飞出屏幕（挂靠死掉的标志）
-  assert.ok(after <= 8, `切横条后应接上贴边隐藏（实际可见 ${after}px）`);
+  assert.ok(after <= 8, `手离开后应接上贴边隐藏（实际可见 ${after}px）`);
   assert.ok(offScreen <= 8, `窗口不应冲出屏幕（实际越界 ${offScreen}px）`);
 });
 
-test("四边两向互切都接上原边收起，且不飞出屏幕（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
+test("四边两向互切：选的时候都停在显形位，手走了都接上原边收起（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
   const combos = [
     [36, 224, "right", 308, 36],
     [308, 36, "right", 36, 376],
@@ -693,9 +711,10 @@ test("四边两向互切都接上原边收起，且不飞出屏幕（ Leo 的口
   ];
   for (const [fw, fh, edge, tw, th] of combos) {
     const scenario = edgeSwitchWithControlsScenario(edge, fw, fh, tw, th);
-    const { before, after, offScreen } = await scenario.run();
+    const { before, whileChoosing, alongOpen, after, offScreen } = await scenario.run();
     assert.ok(before <= 8, `${edge} 边前置应收起（实际 ${before}px）`);
-    assert.ok(after <= 8, `${edge} 边 ${fw}x${fh}→${tw}x${th} 切换后应收起（实际 ${after}px）`);
+    assert.ok(whileChoosing >= alongOpen - 2, `${edge} 边开控制簇后应停在显形位（实际可见 ${whileChoosing}px，外形沿边 ${alongOpen}px）`);
+    assert.ok(after <= 8, `${edge} 边 ${fw}x${fh}→${tw}x${th} 手离开后应收起（实际可见 ${after}px）`);
     assert.ok(offScreen <= 8, `${edge} 边切换后不应冲出屏幕（实际越界 ${offScreen}px）`);
   }
 });

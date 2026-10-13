@@ -8546,10 +8546,20 @@ html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background:
    90% 灰阶（色=状态点+金色单重音）、事件流=紧凑日志、密度梯度 ============ */
 .tasksboard { display: flex; flex-direction: column; min-height: 100%; padding-bottom: 12px; }
 .v7row { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; }
-.v7-feedrow { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; align-items: stretch; }
+.v7-feedrow { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; align-items: start; }
+/* 行高由左栏内容说了算（右栏行数能一夜涨到几十行，让它参与 stretch 就是
+   互相撑高：Leo 2026-10-13 实测注入 80 行后两栏一起飙到 2678px）。
+   右栏自己 stretch 拿满这个行高，内部 flex 列把剩余高全给滚动区——行少时
+   左右仍同框同顶同底，行多时滚动区压回卡内自滚，整页不再被拉长。
+   不写 max-height: 100%：grid 行高是 auto，百分比解析不到确定高度，是死代码。 */
+.v7-feedrow > .v7-logcard { align-self: stretch; }
 /* 左右底部对齐：矮的一栏末卡吃满剩余高（空腔收进卡内，不再裸在页面上） */
 .v7-feedmain > .v5card:last-child, .v7-feedmain > .v7-gsec:last-child { flex: 1 1 auto; margin-bottom: 0; }
 .v7-feedmain > .v7-gsec:last-child > .v5card:last-child { flex: 1 1 auto; margin-bottom: 0; }
+/* 右栏流水卡同样吃满：卡是 flex 列，滚动区是唯一能伸缩的孩子，行少时它把
+   剩余高吃掉（卡片不会比左栏矮一截）；行多时 flex 把它压回卡内剩余高，
+   超出部分自己滚——不用 max-height 封顶，那会在卡片底部留一条空带。 */
+.v7-logcard > .v7-lscroll { flex: 1 1 auto; min-height: 120px; }
 /* 速览 = 按星分组（Leo 2026-10-06 拍板 B）：节头 = 点+星名+案数 */
 .v7-gsec { display: flex; flex-direction: column; }
 .v7-gsec + .v7-gsec { margin-top: 12px; }
@@ -8612,7 +8622,21 @@ html:not([data-theme="dark"]) .console-root .dial-leader { stroke: rgba(146, 100
 
 .v7-feedmain { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 10px 14px 8px; }
 /* 筛选 chips 的归属行：动态流头上，管谁贴谁（v7.1） */
-.v7-logcard { padding: 10px 14px 8px; }
+.v7-logcard { padding: 10px 14px 8px; display: flex; flex-direction: column; min-height: 0; }
+/* 流水是滚动的日志，不是越长越好的史册（Leo 2026-10-13"好长时间没动静"那轮
+   把会话接力的每一跳都接进来了，一夜几十行）。滚动区是 flex 列里唯一能伸缩
+   的孩子：行少时吃掉左栏剩下的高（左右底边仍对齐，Leo 2026-10-06 定稿的
+   "同框同顶同底"）；行多时 flex 把它压到卡内剩余高，超出部分自己滚。
+   不能加 vh/px 的 max-height：那会把滚动区封在某个高，卡片底部留一条空
+   带——grid 的 stretch 已经把卡高和左栏拉齐了，再封顶就是自己跟自己抢。 */
+.v7-logcard .v7-lscroll { overflow-y: auto; min-height: 0; scrollbar-width: thin; }
+/* "展开更早的 N 条"脚注：贴卡底，不抢戏（v5-foot 同款淡墨），可点 */
+.v7-lmore { display: block; width: 100%; margin-top: 6px; padding: 4px 0 0; border: none; border-top: 1px solid #1b2331; background: none; color: #5c6779; font-size: 10.5px; text-align: left; cursor: pointer; }
+.v7-lmore:hover { color: #9aa5b5; }
+html:not([data-theme="dark"]) .console-root .v7-lmore { border-top-color: rgba(31,33,36,.1); color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v7-lmore:hover { color: #54565a; }
+.v7-logcard .v7-lscroll::-webkit-scrollbar { width: 6px; }
+.v7-logcard .v7-lscroll::-webkit-scrollbar-thumb { background: rgba(240,240,240,.14); border-radius: 3px; }
 .v7-lday { font-size: 10px; color: #5c6779; letter-spacing: .1em; margin: 8px 0 2px; }
 .v7-mhead + .v7-lday { margin-top: 4px; }
 .v7-lrow { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px solid #1b2331; font-size: 11.5px; }
@@ -8748,6 +8772,7 @@ html:not([data-theme="dark"]) .console-root .v7-execnum { color: #26282b; }
 html:not([data-theme="dark"]) .console-root .v7-ls { color: #6b6e78; }
 html:not([data-theme="dark"]) .console-root .v7-sb { background: rgba(31,33,36,.14); }
 html:not([data-theme="dark"]) .console-root .v7-sb.is-now { background: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v7-logcard .v7-lscroll::-webkit-scrollbar-thumb { background: rgba(31,33,36,.2); }
 
 /* ---- v5.1：单一滚动容器（Leo：左右两根滑轨多余）——外层 html/body 裁剪，
    console-scroll 是任务台唯一的滚动条 ---- */

@@ -1647,13 +1647,19 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
   let checkTimer;
   let pollTimer;
   let alwaysOnTopQueue = Promise.resolve();
-  // 这条边近期是否收起过（程序化换外形会临时打断）。Leo 2026-10-13 的口径：
-  // "只要有一个是已经贴边隐藏了，切换到竖条还是横条都还会再贴边隐藏"——竖条收
-  // 起着，为点横竖切换钮先碰边弹出、手还按在条身上，此刻 hidden 已是 false，
-  // 按"指针在窗内就绝不收起"的常规矩办，横条会摊在显形位等手离开。可用户的意
-  // 图从来是"换完继续藏着"，不是"换完摊开来"。记住这条边收起过，换外形后
-  // 指针一离开就照常收起，且不因中途弹出而作废。
-  let edgeHiddenRecently = false;
+  // 这条边收起过、且弹出后指针还没离开过窗（Leo 2026-10-13 的口径："只要有
+  // 一个是已经贴边隐藏了，切到竖条还是横条都还会再贴边隐藏"）。竖条收起着，
+  // 为点横竖切换钮先碰边弹出、手还按在条身上，此刻 hidden 已是 false，按
+  // "指针在窗内就绝不收起"的常规矩办，横条会摊在显形位等手离开——可用户的
+  // 意图从来是"换完继续藏着"。
+  //
+  // 但"记住"不等于"立刻收"：上一轮把它当成"换完外形就马上回到收起态"，结果
+  // Leo 点 ••• 开控制簇时，手按在按钮上、指针在窗内，poll 的自校验一见尺寸变
+  // 了就把窗滑回停泊位——控制簇一闪就没，根本没时间选（Leo 2026-10-13 实锤）。
+  // 所以这里改成"指针离开时才作数"：pendingRehide 只把收起判定提前到"指针一
+  // 出窗就收"，具体时机仍归 poll 的常规 outsideSinceMs 分支管，宽限期照给。
+  // 换外形/开控制簇本身绝不触发滑动，窗口停在显形位等人选完。
+  let pendingRehide = false;
 
   const canDock = () => {
     const mode = getMode();
@@ -1721,6 +1727,8 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     dock = null;
     hidden = false;
     outsideSinceMs = null;
+    // 用户动手拖窗 = 明确的新意图，"换完继续藏着"的等待作废
+    pendingRehide = false;
     publishDockEdge();
     stopPoll();
     setDockAlwaysOnTop(getPinned());
@@ -1731,6 +1739,7 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     dock = null;
     hidden = false;
     outsideSinceMs = null;
+    pendingRehide = false;
     publishDockEdge();
     stopPoll();
     await setDockAlwaysOnTop(getPinned());
@@ -1775,15 +1784,11 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
         // 屏幕边"，2320 ≥ 2048-6 照样判"仍在边上"，于是每拍重算、每拍都不搬，
         // 横条挂在屏外点不着——Leo 说的"必须手动挪一下"就是人被逼着去救它。
         // 收起态滑停泊位，展开态滑显形位：新外形按同一条边把窗口摆正。
-        const wasHidden = hidden;
+        // 只搬窗，不收回起态——展开态被程序化改尺寸时（点 ••• 开控制簇、切横
+        // 竖），指针还在窗内，此刻收回起等于把刚展开的控制簇推出屏幕。
+        // "换完继续藏着"由 pendingRehide 在指针离开时兑现（见收起分支）。
         dock = redocked;
         publishDockEdge();
-        // 这条边收起过、且切换时指针还在窗内（为点按钮先碰边弹出、手没离开），
-        // 换完外形直接回到收起态——用户要的是"换完继续藏着"，不是"摊开来等手走"。
-        if (!wasHidden && edgeHiddenRecently) {
-          hidden = true;
-          outsideSinceMs = null;
-        }
         await slideTo(hidden ? hiddenPosition() : exposedPosition());
         return;
       }
@@ -1802,6 +1807,9 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
       const onStrip = isCursorOnDockPeek(cursor, dock, DOCK_PEEK_PX);
       if (onStrip) {
         hidden = false;
+        // 从收起态弹出来：记住"这条边想继续藏着"，但只在指针真的离开后才收
+        // （见下方收起分支）。手按在按钮上那段时间窗必须停在显形位。
+        pendingRehide = true;
         outsideSinceMs = null;
         await slideTo(exposedPosition());
       }
@@ -1817,7 +1825,7 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     outsideSinceMs = outsideSinceMs ?? Date.now();
     if (Date.now() - outsideSinceMs >= DOCK_HIDE_DELAY_MS) {
       hidden = true;
-      edgeHiddenRecently = true;
+      pendingRehide = false;
       outsideSinceMs = null;
       publishDockEdge();
       await slideTo(hiddenPosition());
