@@ -460,15 +460,30 @@ function edgeSwitchScenario(startWidth, startHeight, startEdge, targetWidth, tar
   // 真实 Tauri 语义：位置没变不派发 onMoved。乱派发会让 scheduleCheck 反复
   // 重跑 check()，把 outsideSinceMs 清零——收起永远走不到（台架自己造鬼）。
   const listeners = [];
+  // 换外形过程中的每一次位置变动都记账。Leo 2026-10-13 第四轮实锤"切横竖条会
+  // 先闪到旁边一段距离，再闪回贴边隐藏位"：那时 setSize 固定顶左角不改坐标，
+  // 横条右缘冲出屏幕 272px，250ms 后 poll 才搬回来——一冲一搬就是两次可见闪动。
+  const slides = [];
   const appWindow = {
     outerPosition: async () => ({ ...position }),
     outerSize: async () => ({ ...size }),
     setPosition: async (next) => {
       const moved = next.x !== position.x || next.y !== position.y;
+      const from = { ...position };
       position = { x: next.x, y: next.y };
+      slides.push({ from, to: { ...position }, size: { ...size }, moved });
       if (moved) listeners.forEach((fn) => fn({ payload: { ...position } }));
     },
     setSize: async (next) => { size = { width: next.width, height: next.height }; },
+    // set_window_bounds（Windows SetWindowPos）：位置+尺寸一次原子落，中间态不存在
+    setBounds: async (x, y, w, h) => {
+      const moved = x !== position.x || y !== position.y;
+      const from = { ...position };
+      position = { x, y };
+      size = { width: w, height: h };
+      slides.push({ from, to: { ...position }, size: { ...size }, moved });
+      if (moved) listeners.forEach((fn) => fn({ payload: { ...position } }));
+    },
     setMinSize: async () => {},
     setResizable: async () => {},
     setAlwaysOnTop: async () => {},
@@ -488,6 +503,11 @@ function edgeSwitchScenario(startWidth, startHeight, startEdge, targetWidth, tar
       LogicalSize: class { constructor(width, height) { this.width = width; this.height = height; } },
       PhysicalPosition: class { constructor(x, y) { this.x = x; this.y = y; } },
     }),
+    // invoke 是模块级 import 绑定，vm 里挂在 context 上供 set_window_bounds 用
+    invoke: async (command, args) => {
+      if (command !== "set_window_bounds") return;
+      await appWindow.setBounds(args.x, args.y, args.width, args.height);
+    },
     loadMonitorConfig: () => ({ tasksEdgeDock: true }),
   });
   // 屏内可见像素：按所在边算，"右缘-左缘"在左边收起时会把负半轴算成可见。
@@ -515,32 +535,55 @@ function edgeSwitchScenario(startWidth, startHeight, startEdge, targetWidth, tar
       cursor = { x: 900, y: 900 };     // 光标离开
       await wait(1400);                // 900ms 后收起
       const before = visiblePx();
+      const slidesBefore = slides.length;
       await context.applyMiniCapsuleSize(targetWidth, targetHeight);
       await wait(1600);                // 轮询重估 + 900ms 收起
       const stop = await stopPromise;
       stop?.();
-      return { before, after: visiblePx(), position: { ...position }, size: { ...size } };
+      // 换外形过程中窗口被搬动过几次。1 次 = 直接从旧停泊位滑到新停泊位（原子
+      // 落位，视觉上是一次整体平移）；≥2 次 = 先冲到半路再被拉回，即 Leo 说的
+      // "先闪到旁边一段距离，再闪回贴边隐藏位"。
+      const switches = slides.slice(slidesBefore).filter((slide) => slide.moved);
+      return {
+        before,
+        after: visiblePx(),
+        switchMoves: switches.length,
+        position: { ...position },
+        size: { ...size },
+      };
     },
   };
 }
 
+/// Leo 2026-10-13 第四轮实锤："在侧边切换横条或者竖条的时候，都是会先闪动
+/// 到旁边一段距离，然后再闪到原先的贴边隐藏的位置"。
+///
+/// 真凶是 setSize 的顶左角语义：竖条贴右显形位 x=1740 宽 36（右缘正好 2048），
+/// 只发 setSize(224,36) 不动坐标，右缘冲到 1964 看着还行；可贴左收起位
+/// x=-30 宽 36 换成 224 宽时右缘冲到 194——整条横条横在屏幕中间 250ms，随后
+/// poll 才按同一条边把它搬回停泊位。这一露一收就是"闪到旁边再闪回"。
+/// 修法：换外形走 set_window_bounds（Windows SetWindowPos），位置+尺寸一次
+/// 原子落，中间态不存在。这三个测试把"只搬一次"锁进回归。
 test("竖条贴边隐藏时切横条，横条接上同一条边继续收起（Leo 2026-10-13）", async () => {
   const scenario = edgeSwitchScenario(36, 224, "right", 224, 36);
-  const { before, after } = await scenario.run();
+  const { before, after, switchMoves } = await scenario.run();
   // 前置条件：竖条确实收起了，屏内只剩约 6px 细边
   assert.ok(before <= 8, `前置：竖条应收起（实际可见 ${before}px）`);
   // 修好后横条必须接上同一条边继续收起，而不是停在显形位等用户推
   assert.ok(after <= 8, `切横条后应接上贴边隐藏（实际可见 ${after}px）`);
+  // 且过程只能搬一次（原子落位）：≥2 次就是"先闪到旁边再闪回"
+  assert.ok(switchMoves <= 1, `换外形只应搬一次（实际 ${switchMoves} 次）`);
 });
 
 test("反向：横条贴边隐藏时切竖条，同样接上原边继续收起", async () => {
   const scenario = edgeSwitchScenario(224, 36, "right", 36, 224);
-  const { before, after } = await scenario.run();
+  const { before, after, switchMoves } = await scenario.run();
   assert.ok(before <= 8, `前置：横条应收起（实际可见 ${before}px）`);
   assert.ok(after <= 8, `切竖条后应接上贴边隐藏（实际可见 ${after}px）`);
+  assert.ok(switchMoves <= 1, `换外形只应搬一次（实际 ${switchMoves} 次）`);
 });
 
-test("其余三边互切也接上原边继续收起（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
+test("其余三边互切也接上原边收起，且不闪到旁边再闪回（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
   const combos = [
     [36, 224, "left", 224, 36],
     [224, 36, "left", 36, 224],
@@ -549,9 +592,10 @@ test("其余三边互切也接上原边继续收起（ Leo 的口径：有一个
   ];
   for (const [sw, sh, edge, tw, th] of combos) {
     const scenario = edgeSwitchScenario(sw, sh, edge, tw, th);
-    const { before, after } = await scenario.run();
+    const { before, after, switchMoves } = await scenario.run();
     assert.ok(before <= 8, `${edge} 边前置应收起（实际 ${before}px）`);
-    assert.ok(after <= 8, `${edge} 边 ${sw}x${sh}→${tw}x${th} 切换后应收起（实际 ${after}px）`);
+    assert.ok(after <= 8, `${edge} 边 ${sw}x${sh}→${tw}x${th} 切换后应收起（实际可见 ${after}px）`);
+    assert.ok(switchMoves <= 1, `${edge} 边换外形只应搬一次（实际 ${switchMoves} 次）`);
   }
 });
 
@@ -585,15 +629,27 @@ function edgeSwitchWithControlsScenario(edge, fromWidth, fromHeight, toWidth, to
         : { x: 700, y: area.bottom - fromHeight };
   let cursor = { x: position.x + fromWidth / 2, y: position.y + fromHeight / 2 };
   const listeners = [];
+  const slides = [];
   const appWindow = {
     outerPosition: async () => ({ ...position }),
     outerSize: async () => ({ ...size }),
     setPosition: async (next) => {
       const moved = next.x !== position.x || next.y !== position.y;
+      const from = { ...position };
       position = { x: next.x, y: next.y };
+      slides.push({ from, to: { ...position }, size: { ...size }, moved });
       if (moved) listeners.forEach((fn) => fn({ payload: { ...position } }));
     },
     setSize: async (next) => { size = { width: next.width, height: next.height }; },
+    // set_window_bounds（Windows SetWindowPos）：位置+尺寸一次原子落
+    setBounds: async (x, y, w, h) => {
+      const moved = x !== position.x || y !== position.y;
+      const from = { ...position };
+      position = { x, y };
+      size = { width: w, height: h };
+      slides.push({ from, to: { ...position }, size: { ...size }, moved });
+      if (moved) listeners.forEach((fn) => fn({ payload: { ...position } }));
+    },
     setMinSize: async () => {},
     setResizable: async () => {},
     setAlwaysOnTop: async () => {},
@@ -613,6 +669,11 @@ function edgeSwitchWithControlsScenario(edge, fromWidth, fromHeight, toWidth, to
       LogicalSize: class { constructor(width, height) { this.width = width; this.height = height; } },
       PhysicalPosition: class { constructor(x, y) { this.x = x; this.y = y; } },
     }),
+    // invoke 是模块级 import 绑定，vm 里挂在 context 上供 set_window_bounds 用
+    invoke: async (command, args) => {
+      if (command !== "set_window_bounds") return;
+      await appWindow.setBounds(args.x, args.y, args.width, args.height);
+    },
     loadMonitorConfig: () => ({ tasksEdgeDock: true }),
   });
   const visiblePx = () => {
@@ -671,8 +732,14 @@ function edgeSwitchWithControlsScenario(edge, fromWidth, fromHeight, toWidth, to
       const whileChoosing = visiblePx();
       // 手按在横竖切换钮上点它：尺寸再变，指针仍在窗内
       cursor = { x: position.x + toWidth / 2, y: position.y + toHeight / 2 };
+      const slidesBeforeSwitch = slides.length;
       await context.applyMiniCapsuleSize(toWidth, toHeight);
       await wait(1500);
+      // 换外形那一刻窗口被搬动过几次。这里必须在前一次 applyMiniCapsuleSize
+      // 之后、手离开之前取样：手离开后的那次收起是正常行为，不算闪动。
+      // ≥2 次 = 先冲到半路再被 poll 拉回，即 Leo 2026-10-13 第四轮实锤的
+      // "先闪动到旁边一段距离，然后再闪到原先的贴边隐藏的位置"。
+      const switchMoves = slides.slice(slidesBeforeSwitch).filter((slide) => slide.moved).length;
       // 选完了，手离开窗口 → 900ms 后接上原边继续收起
       cursor = { x: 900, y: 900 };
       await wait(1500);
@@ -680,7 +747,7 @@ function edgeSwitchWithControlsScenario(edge, fromWidth, fromHeight, toWidth, to
       const stop = await stopPromise;
       stop?.();
       return {
-        before, after, whileChoosing, alongOpen, offScreen: offScreenPx(), position: { ...position }, size: { ...size },
+        before, after, whileChoosing, alongOpen, switchMoves, offScreen: offScreenPx(), position: { ...position }, size: { ...size },
       };
     },
   };
@@ -688,7 +755,7 @@ function edgeSwitchWithControlsScenario(edge, fromWidth, fromHeight, toWidth, to
 
 test("竖条贴边隐藏→碰边弹出→开控制簇→切横条：选的时候别一闪就没，手走了才接上原边收起（Leo 2026-10-13 第三轮实锤）", async () => {
   const scenario = edgeSwitchWithControlsScenario("right", 36, 224, 308, 36);
-  const { before, whileChoosing, alongOpen, after, offScreen } = await scenario.run();
+  const { before, whileChoosing, alongOpen, after, switchMoves, offScreen } = await scenario.run();
   assert.ok(before <= 8, `前置：竖条应收起（实际可见 ${before}px）`);
   // ★ 核心断言：控制簇开着的那 1.5 秒里，窗口必须停在显形位。此前被
   //   edgeHiddenRecently 一拍收回停泊位，Leo 根本来不及点后面的按钮。
@@ -696,9 +763,11 @@ test("竖条贴边隐藏→碰边弹出→开控制簇→切横条：选的时�
   // 横条不能摊在显形位等用户推，更不能飞出屏幕（挂靠死掉的标志）
   assert.ok(after <= 8, `手离开后应接上贴边隐藏（实际可见 ${after}px）`);
   assert.ok(offScreen <= 8, `窗口不应冲出屏幕（实际越界 ${offScreen}px）`);
+  // 切横条那一刻只搬一次（原子落位）：≥2 次就是"先闪到旁边再闪回"
+  assert.ok(switchMoves <= 1, `切横条只应搬一次（实际 ${switchMoves} 次）`);
 });
 
-test("四边两向互切：选的时候都停在显形位，手走了都接上原边收起（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
+test("四边两向互切：选的时候都停在显形位，手走了都接上原边收起，且不闪到旁边再闪回（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
   const combos = [
     [36, 224, "right", 308, 36],
     [308, 36, "right", 36, 376],
@@ -711,10 +780,11 @@ test("四边两向互切：选的时候都停在显形位，手走了都接上�
   ];
   for (const [fw, fh, edge, tw, th] of combos) {
     const scenario = edgeSwitchWithControlsScenario(edge, fw, fh, tw, th);
-    const { before, whileChoosing, alongOpen, after, offScreen } = await scenario.run();
+    const { before, whileChoosing, alongOpen, after, switchMoves, offScreen } = await scenario.run();
     assert.ok(before <= 8, `${edge} 边前置应收起（实际 ${before}px）`);
     assert.ok(whileChoosing >= alongOpen - 2, `${edge} 边开控制簇后应停在显形位（实际可见 ${whileChoosing}px，外形沿边 ${alongOpen}px）`);
     assert.ok(after <= 8, `${edge} 边 ${fw}x${fh}→${tw}x${th} 手离开后应收起（实际可见 ${after}px）`);
     assert.ok(offScreen <= 8, `${edge} 边切换后不应冲出屏幕（实际越界 ${offScreen}px）`);
+    assert.ok(switchMoves <= 1, `${edge} 边切横竖只应搬一次（实际 ${switchMoves} 次）`);
   }
 });

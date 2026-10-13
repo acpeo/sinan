@@ -1545,6 +1545,12 @@ const DOCK_POLL_MS = 250;
 // 现在 keepEdgeFlushAfterResize 只要一个布尔值：有挂靠就整体退出，位置归引擎管。
 let activeDockEdge = null;
 
+// 挂靠窗当前是否收起。redockBeforeResize 要知道这个才能把新外形摆到停泊位
+// （收起）而不是显形位——两者差一整个外形宽，摆错就是 Leo 看到的"闪一下"。
+// 与 activeDockEdge 同一模式：引擎写、模块作用域读（引擎的 hidden 是闭包内
+// 局部，redockBeforeResize 在模块作用域够不到）。
+let activeDockHidden = false;
+
 // 纯钳位（不取整）。挂靠内与 keepEdgeFlushAfterResize 共用——后者在模块作用域，
 // 够不到 startEdgeDock 闭包里那个同名但会取整的 clamp（见 2133 行）。
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -1681,15 +1687,26 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     return { ...previous, x, y, width: size.width, height: size.height };
   };
   // 改完尺寸后窗口是否仍停在原边缘上（贴齐，或只剩收起那 6px）。用来区分
-  // "程序化改外形"与"用户把窗拖走了"——后者不该被旧锚点拽回来。
+  // "程序化换外形"与"用户把窗拖走了"——后者不该被旧锚点拽回来。
   // 拿"改尺寸之前"的几何判：setSize 只改尺寸、不动坐标，此刻窗口位置还是旧
   // 外形的，而尺寸已经是新的。竖条 36×224 贴右的显形位 x=1740，换成 36×376
   // 时右缘=1740+36=1776，离屏幕右缘 2048 差 272px——拿新尺寸去比就会判成
   // "用户拖走了"，可用户压根没动鼠标（Leo 2026-10-13 第二轮：横→竖同样犯）。
   // 判据 = 位置仍等于记录里的锚点（收起态用停泊位、展开态用显形位）。
+  //
+  // 停泊位按**当前**尺寸算：setCapsuleBounds 原子换外形后窗口已在新尺寸的停泊位
+  // （308×36 贴左 = -302），记录却还是旧尺寸（36×224 贴左 = -30），只比旧的会
+  // 判"用户拖走了"→ 释放挂靠 → check() 以 hidden=false 重建 → 滑到显形位。Leo
+  // 2026-10-13 实锤的"切横竖条先闪到旁边再闪回贴边隐藏位"就是这一跳。
+  // 但旧尺寸的停泊位也要认：非 Windows 回落路径只发 setSize 不动坐标，窗口停在
+  // 旧外形的坐标上，此刻只有旧尺寸的停泊位能命中（见 applyMiniCapsuleSize 的
+  // 平台分流）。两个都试，命中任一即算"仍停在原边缘上"。
   const stillOnDockEdge = (pos, size, target) => {
-    const parked = hidden ? edgeDockHiddenPosition(target, DOCK_PEEK_PX) : { x: target.x, y: target.y };
-    return isDockAnchorPosition(pos, parked, 2);
+    if (!hidden) return isDockAnchorPosition(pos, { x: target.x, y: target.y }, 2);
+    const withCurrent = edgeDockHiddenPosition({ ...target, width: size.width, height: size.height }, DOCK_PEEK_PX);
+    if (withCurrent && isDockAnchorPosition(pos, withCurrent, 2)) return true;
+    const withRecorded = edgeDockHiddenPosition(target, DOCK_PEEK_PX);
+    return Boolean(withRecorded && isDockAnchorPosition(pos, withRecorded, 2));
   };
   const slideTo = async (position) => {
     if (!dock) return;
@@ -1749,6 +1766,7 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
   // 挂靠"——有就整体退出，位置归引擎管（见 activeDockEdge 注释里 Leo 那两轮的坑）。
   const publishDockEdge = () => {
     activeDockEdge = dock?.edge ?? null;
+    activeDockHidden = dock ? hidden : false;
   };
 
   const poll = async () => {
@@ -1858,8 +1876,18 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     const bottom = top + workArea.size.height;
     const scale = monitor.scaleFactor || 1;
     if (hidden && dock) {
-      const parked = hiddenPosition();
-      if (Math.abs(pos.x - parked.x) <= 2 && Math.abs(pos.y - parked.y) <= 2) return;
+      // 收起态的早退：窗口已经停在停泊位上就别再往下走。停泊位按当前尺寸算，
+      // 但也要认 dock 记录里的旧尺寸——非 Windows 回落路径只发 setSize 不动坐标，
+      // 窗口停在旧外形的坐标上（见 applyMiniCapsuleSize 的平台分流），此刻只有
+      // 旧尺寸的停泊位命中。两个都不中就继续走下面的重估。
+      const parkedNow = edgeDockHiddenPosition(
+        { ...dock, width: size.width, height: size.height },
+        DOCK_PEEK_PX,
+      );
+      const parkedRecorded = edgeDockHiddenPosition(dock, DOCK_PEEK_PX);
+      const onParked = (parked) => parked
+        && Math.abs(pos.x - parked.x) <= 2 && Math.abs(pos.y - parked.y) <= 2;
+      if (onParked(parkedNow) || onParked(parkedRecorded)) return;
     }
     const nearest = [
       { edge: "left", distance: Math.abs(pos.x - left) },
@@ -2215,11 +2243,22 @@ async function applyMiniCapsuleSize(width, height) {
   const before = await currentWindowRect(win);
   await win.setMinSize(null).catch(() => {});
   await win.setResizable(false).catch(() => {});
-  await win.setSize(new api.LogicalSize(width, height)).catch(() => {});
+  // 换外形必须"位置+尺寸"一次原子落。setSize 固定顶左角、不改坐标：竖条贴右
+  // 显形位 x=2012 宽 36（右缘正好 2048），只发 setSize(308,36) 会让右缘冲到
+  // 2320——整条横条飞出屏幕 272px，250ms 后 poll 才按同一条边搬回 x=1740。
+  // 这一冲一搬就是 Leo 2026-10-13 实锤的"切横竖条先闪到旁边一段距离，再闪回
+  // 贴边隐藏位"。
+  // 拆成先 setPosition 再 setSize 也不行：setPosition 落地那一刻窗口还是旧尺寸，
+  // 按新尺寸算出的坐标会让"当前几何"脱离所有边（贴左/上时预搬直接冲出屏外更
+  // 深处），poll 随后的自校验判"用户拖走了"拆挂靠。所以走 set_window_bounds——
+  // Windows 侧 SetWindowPos 一次同时给位置和尺寸，中间态不存在。
+  await setCapsuleBounds(api, win, width, height);
   await keepEdgeFlushAfterResize(api, win, before);
   // WebView2 的合成/zoom 迁就经常晚于 setSize 返回（与主窗 reassertCompactSize
   // 同一族问题）：视口比目标小 1-2px 时胶囊内容溢出，原生滚动条把 36px 细条
   // 顶成滚动残废（0.20.12 真机截图）。慢一拍复核一次，尺寸不符就补发。
+  // 补发也走 setCapsuleBounds：挂靠窗如果只用 setSize 补尺寸，顶左角不动，
+  // 贴右/下缘的窗会再次脱离屏幕边，又要等 poll 搬一次——那就是闪动。
   window.setTimeout(() => {
     void (async () => {
       const [current, scale] = await Promise.all([
@@ -2230,9 +2269,57 @@ async function applyMiniCapsuleSize(width, height) {
       const wantW = Math.round(width * scale);
       const wantH = Math.round(height * scale);
       if (Math.abs(current.width - wantW) <= 2 && Math.abs(current.height - wantH) <= 2) return;
-      await win.setSize(new api.LogicalSize(width, height)).catch(() => {});
+      await setCapsuleBounds(api, win, width, height);
     })();
   }, 320);
+}
+
+/// 换外形：位置+尺寸一次原子落。挂靠中的窗按引擎持有的边和收起态算目标位，
+/// 和 keepEdgeFlushAfterResize 同一个信息源（activeDockEdge / activeDockHidden），
+/// 不自己从 before 矩形猜——猜边那几步 Leo 全踩过。
+/// 没挂靠的窗（主窗/展开面板）保持原位只改尺寸，位置归 keepEdgeFlushAfterResize。
+/// 非 Windows 或命令缺失时回落 Tauri 的 setSize（位置不动，行为同改动前）。
+async function setCapsuleBounds(api, win, width, height) {
+  const scale = await win.scaleFactor().catch(() => 1);
+  const factor = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const w = Math.round(width * factor);
+  const h = Math.round(height * factor);
+  // 当前位置：挂靠时用来算沿边坐标（横条的 y、竖条的 x），没挂靠时原样带回
+  const pos = await win.outerPosition().catch(() => null);
+  let target = null;
+  if (activeDockEdge && pos) {
+    const monitor = await api.currentMonitor().catch(() => null);
+    if (monitor) {
+      const area = monitor.workArea || { position: monitor.position, size: monitor.size };
+      const left = area.position.x;
+      const top = area.position.y;
+      const right = left + area.size.width;
+      const bottom = top + area.size.height;
+      const peek = Math.round(DOCK_PEEK_PX * factor);
+      // 收起态摆停泊位（只留 peek 一条细边在屏内）；显形态摆沿边贴齐的显形位
+      if (activeDockEdge === "left") {
+        target = { x: activeDockHidden ? left - w + peek : left, y: clamp(pos.y, top, Math.max(top, bottom - h)) };
+      } else if (activeDockEdge === "right") {
+        target = { x: activeDockHidden ? right - peek : right - w, y: clamp(pos.y, top, Math.max(top, bottom - h)) };
+      } else if (activeDockEdge === "top") {
+        target = { x: clamp(pos.x, left, Math.max(left, right - w)), y: activeDockHidden ? top - h + peek : top };
+      } else {
+        target = { x: clamp(pos.x, left, Math.max(left, right - w)), y: activeDockHidden ? bottom - peek : bottom - h };
+      }
+    }
+  }
+  // 命令只在 Windows 有实现（SetWindowPos 原子改位置+尺寸）；别处回落 setSize：
+  // 位置不动，由 poll 的自校验按同一条边搬到位——那会有一次可见搬动，但功能不回归。
+  if (!isWindowsPlatform() || typeof invoke !== "function") {
+    await win.setSize(new api.LogicalSize(width, height)).catch(() => {});
+    return;
+  }
+  await invoke("set_window_bounds", {
+    x: Math.round(target ? target.x : pos?.x ?? 0),
+    y: Math.round(target ? target.y : pos?.y ?? 0),
+    width: w,
+    height: h,
+  }).catch(() => {});
 }
 
 async function currentWindowRect(win) {
