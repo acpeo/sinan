@@ -1523,14 +1523,31 @@ async function setWindowGlass(enabled, radius = 12, tintStyle = "dark") {
   }
 }
 
-// 贴边触发带宽（Leo 2026-10-11 实锤"成功次数很少，来回挪好几次才生效一次"）：
-// 原来只有 8px——真人拖窗松手的落点差 9~20px 是常态（实测 9px 就挂不上），
-// 于是"贴边"变成运气活。放到 24px（按 DPI 缩放），松手落在边上一指宽内都认。
-// 吸附本身会把窗锚到精确的边缘位，所以放宽容差不会让窗停在歪的地方。
-const DOCK_TRIGGER_PX = 24;
+// 贴边触发带宽（Leo 2026-10-13 第二轮："感觉现在有点大"）。
+// 这段带宽反复调过，两个方向的力是真实的：
+//   8px  → 真人拖窗松手的落点差 9~20px 是常态（实测 9px 就挂不上），
+//          "贴边"变成运气活，来回挪好几次才生效一次（Leo 2026-10-11 实锤）。
+//   24px → 只是从边附近拖过也会被吸住，Leo 觉得"有点大"。
+// 取 16px：仍覆盖常见的手抖落点（中位数附近），又把误吸 zone 砍掉三分之一。
+// 吸附本身会把窗锚到精确的边缘位，所以收宽容差不会让窗停在歪的地方。
+const DOCK_TRIGGER_PX = 16;
 const DOCK_PEEK_PX = 6;
 const DOCK_HIDE_DELAY_MS = 900;
 const DOCK_POLL_MS = 250;
+
+// 当前生效的挂靠边，由 startEdgeDock 在每次重算/释放时同步。keepEdgeFlushAfterResize
+// 拿它当权威源，而不是自己从 before 矩形猜——猜的那几步全把 Leo 坑过：
+// 竖条贴边隐藏时切横条，before 是隐藏位（右缘贴屏 6px），于是把 308 宽的横条
+// 推到"右缘对齐"的显形位 x=1740；随后 poll 的自校验看到尺寸变了、hidden 还是
+// false（Leo 的手按在条身上点按钮），就按这个显形位重新挂靠并 return——没有
+// 任何人再把它收起来，横条就一直摊在屏幕中间，必须手动拖回边才藏。
+// 引擎已经挂了靠，贴边这回事就该问引擎，别用过期矩形二次猜测。
+// 现在 keepEdgeFlushAfterResize 只要一个布尔值：有挂靠就整体退出，位置归引擎管。
+let activeDockEdge = null;
+
+// 纯钳位（不取整）。挂靠内与 keepEdgeFlushAfterResize 共用——后者在模块作用域，
+// 够不到 startEdgeDock 闭包里那个同名但会取整的 clamp（见 2133 行）。
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 let pinnedHoverBehaviorQueue = Promise.resolve();
 let pinnedHoverEnabled = false;
@@ -1630,13 +1647,19 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
   let checkTimer;
   let pollTimer;
   let alwaysOnTopQueue = Promise.resolve();
+  // 这条边近期是否收起过（程序化换外形会临时打断）。Leo 2026-10-13 的口径：
+  // "只要有一个是已经贴边隐藏了，切换到竖条还是横条都还会再贴边隐藏"——竖条收
+  // 起着，为点横竖切换钮先碰边弹出、手还按在条身上，此刻 hidden 已是 false，
+  // 按"指针在窗内就绝不收起"的常规矩办，横条会摊在显形位等手离开。可用户的意
+  // 图从来是"换完继续藏着"，不是"换完摊开来"。记住这条边收起过，换外形后
+  // 指针一离开就照常收起，且不因中途弹出而作废。
+  let edgeHiddenRecently = false;
 
   const canDock = () => {
     const mode = getMode();
     if (mode === "tasks-widget") return canDockTasksWidget ? Boolean(canDockTasksWidget()) : false;
     return isStableFloatingMode(mode, Boolean(stripHoverRestore));
   };
-  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const exposedPosition = () => ({ x: dock.x, y: dock.y });
   const hiddenPosition = () => edgeDockHiddenPosition(dock, DOCK_PEEK_PX);
   // 同一条边换个外形：边不变，沿边坐标沿用原锚点并钳回工作区。竖条 36×224
@@ -1653,17 +1676,21 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
   };
   // 改完尺寸后窗口是否仍停在原边缘上（贴齐，或只剩收起那 6px）。用来区分
   // "程序化改外形"与"用户把窗拖走了"——后者不该被旧锚点拽回来。
+  // 拿"改尺寸之前"的几何判：setSize 只改尺寸、不动坐标，此刻窗口位置还是旧
+  // 外形的，而尺寸已经是新的。竖条 36×224 贴右的显形位 x=1740，换成 36×376
+  // 时右缘=1740+36=1776，离屏幕右缘 2048 差 272px——拿新尺寸去比就会判成
+  // "用户拖走了"，可用户压根没动鼠标（Leo 2026-10-13 第二轮：横→竖同样犯）。
+  // 判据 = 位置仍等于记录里的锚点（收起态用停泊位、展开态用显形位）。
   const stillOnDockEdge = (pos, size, target) => {
-    const peek = Math.round(DOCK_PEEK_PX * (target.scale || 1));
-    switch (target.edge) {
-      case "left": return pos.x <= target.left + peek;
-      case "right": return pos.x + size.width >= target.right - peek;
-      case "top": return pos.y <= target.top + peek;
-      default: return pos.y + size.height >= target.bottom - peek;
-    }
+    const parked = hidden ? edgeDockHiddenPosition(target, DOCK_PEEK_PX) : { x: target.x, y: target.y };
+    return isDockAnchorPosition(pos, parked, 2);
   };
   const slideTo = async (position) => {
     if (!dock) return;
+    // 记账：这笔 setPosition 是引擎自己发的，onMove 来了别判成用户拖走。
+    // 原生事件可能在 setPosition 返回前就派发，也可能迟到，故先置位、落地后
+    // 由 onMove 消费；永不复位上限由 pending 计数自然收敛（每次滑动 +1）。
+    slidingByDock += 1;
     await win.setPosition(new api.PhysicalPosition(position.x, position.y)).catch(() => {});
   };
   const setDockAlwaysOnTop = (enabled) => {
@@ -1694,6 +1721,7 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     dock = null;
     hidden = false;
     outsideSinceMs = null;
+    publishDockEdge();
     stopPoll();
     setDockAlwaysOnTop(getPinned());
   };
@@ -1703,8 +1731,15 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     dock = null;
     hidden = false;
     outsideSinceMs = null;
+    publishDockEdge();
     stopPoll();
     await setDockAlwaysOnTop(getPinned());
+  };
+
+  // 挂靠有无只在一处写：这里读当前 dock。keepEdgeFlushAfterResize 只问"有没有
+  // 挂靠"——有就整体退出，位置归引擎管（见 activeDockEdge 注释里 Leo 那两轮的坑）。
+  const publishDockEdge = () => {
+    activeDockEdge = dock?.edge ?? null;
   };
 
   const poll = async () => {
@@ -1732,9 +1767,24 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     ]);
     if (currentPos && currentSize && !isDockGeometryCurrent(currentPos, currentSize, dock, hidden)) {
       if (stillOnDockEdge(currentPos, currentSize, dock)) {
-        dock = redockSameEdge(dock, currentSize);
-        // 收起态保持收起：新外形按同一条边重算停泊位，不闪回显形。
-        if (hidden) await slideTo(hiddenPosition());
+        const redocked = redockSameEdge(dock, currentSize);
+        // 锚点一定搬到位，不能只改记录。WebView2 的 setSize 晚于 setPosition
+        // 落地时（applyMiniCapsuleSize 的慢拍复核就是为这个存在的），窗口仍停在
+        // 旧外形的坐标上：竖条 36×224 贴右的显形位 x=2012 套到 308×36 的横条上，
+        // 右缘冲到 2320、飞出屏幕 272px。stillOnDockEdge 看的是"右缘是否够得着
+        // 屏幕边"，2320 ≥ 2048-6 照样判"仍在边上"，于是每拍重算、每拍都不搬，
+        // 横条挂在屏外点不着——Leo 说的"必须手动挪一下"就是人被逼着去救它。
+        // 收起态滑停泊位，展开态滑显形位：新外形按同一条边把窗口摆正。
+        const wasHidden = hidden;
+        dock = redocked;
+        publishDockEdge();
+        // 这条边收起过、且切换时指针还在窗内（为点按钮先碰边弹出、手没离开），
+        // 换完外形直接回到收起态——用户要的是"换完继续藏着"，不是"摊开来等手走"。
+        if (!wasHidden && edgeHiddenRecently) {
+          hidden = true;
+          outsideSinceMs = null;
+        }
+        await slideTo(hidden ? hiddenPosition() : exposedPosition());
         return;
       }
       if (hidden) await slideTo(exposedPosition());
@@ -1767,7 +1817,9 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
     outsideSinceMs = outsideSinceMs ?? Date.now();
     if (Date.now() - outsideSinceMs >= DOCK_HIDE_DELAY_MS) {
       hidden = true;
+      edgeHiddenRecently = true;
       outsideSinceMs = null;
+      publishDockEdge();
       await slideTo(hiddenPosition());
     }
   };
@@ -1816,18 +1868,34 @@ async function startEdgeDock({ getMode, getPinned, canDockTasksWidget }) {
       : clamp(pos.x, left, Math.max(left, right - size.width));
     const y = edge === "top" ? top : edge === "bottom" ? bottom - size.height
       : clamp(pos.y, top, Math.max(top, bottom - size.height));
+    // 已经在同一条边上挂着且仍是收起态，别把 hidden 抹掉再滑回显形位——那样
+    // redockSameEdge 刚摆好的停泊位会被自己推翻（滑停泊位的那一下触发 onMove
+    // → scheduleCheck → 走到这里），换外形就永远藏不住。
+    const sameEdge = dock && dock.edge === edge;
+    const keepHidden = hidden && sameEdge;
     dock = { edge, x, y, width: size.width, height: size.height, left, top, right, bottom, scale };
-    hidden = false;
+    hidden = keepHidden;
     outsideSinceMs = null;
-    await slideTo(exposedPosition());
+    publishDockEdge();
+    await slideTo(hidden ? hiddenPosition() : exposedPosition());
     await setDockAlwaysOnTop(true);
     if (!pollTimer) pollTimer = window.setInterval(poll, DOCK_POLL_MS);
   };
 
+  // 挂靠自己发的滑动（slideTo：收起、换外形重锚、碰边弹出）不该被判成"用户拖走"。
+  // onMove 只有物理坐标真变了才派发，而引擎这几笔滑动改的正是坐标——不认账的
+  // 话，poll 刚把换外形后的窗口摆到新停泊位，onMove 就因对不上旧锚点把挂靠拆了，
+  // 随后的 check() 再按显形位重建，横条从此摊在屏内不再收起（Leo 2026-10-13
+  // 实锤"必须手动挪一下"）。滑动落地期间置位，onMove 见到就只重排检查、不拆家。
+  let slidingByDock = 0;
   const onMove = (event) => {
     if (dock) {
-      const anchor = hidden ? hiddenPosition() : exposedPosition();
-      if (!isDockAnchorPosition(event?.payload, anchor)) releaseDockForDrag();
+      if (slidingByDock > 0) {
+        slidingByDock -= 1;
+      } else {
+        const anchor = hidden ? hiddenPosition() : exposedPosition();
+        if (!isDockAnchorPosition(event?.payload, anchor)) releaseDockForDrag();
+      }
     }
     scheduleCheck();
   };
@@ -2170,7 +2238,13 @@ async function currentWindowRect(win) {
 
 /// 程序化改尺寸后保持贴边：setSize 固定顶左角，贴右/下缘的窗口一缩就脱离
 /// 屏幕边，挂靠系统会因"不再贴边"而解除。改尺寸前若与某条工作区边缘平齐
-/// （≤8 逻辑像素，与挂靠触发阈值一致），改完后把那条边重新贴齐。
+/// （≤贴边触发阈值），改完后把那条边重新贴齐。
+///
+/// 只服务"没挂靠"的窗（主窗、展开面板）。挂着靠的窗位置整个归引擎：它的每拍
+/// 自校验会按同一条边重算锚点并搬过去，这里再伸手就会和引擎抢方向盘——
+/// Leo 2026-10-13 两轮实锤的"竖条贴边隐藏时切横条，得手动挪一下才重新隐藏"
+/// 就是两个驱动源轮流搬窗：这里按旧矩形把横条推到显形位，引擎的锚点自校验
+/// 随即判"用户拖走了"拆挂靠，横条从此摊在屏内不再收起。
 async function keepEdgeFlushAfterResize(api, win, before) {
   if (!before) return;
   const [pos, size, monitor] = await Promise.all([
@@ -2185,7 +2259,16 @@ async function keepEdgeFlushAfterResize(api, win, before) {
   const right = left + area.size.width;
   const bottom = top + area.size.height;
   const trigger = Math.round(DOCK_TRIGGER_PX * (monitor.scaleFactor || 1));
+  // 挂着靠就整个交回引擎：停泊位只有 peek 宽，这里无论按"右缘对齐"还是按别的算，
+  // 都会把窗口摆到引擎不认的位置上——随后 poll 的锚点自校验判"用户拖走了"拆挂靠，
+  // 横条从此摊在屏内不再收起（Leo 2026-10-13 两轮实锤的都是这一族）。
+  // 引擎每 250ms 自校验一次几何，尺寸变了它会按同一条边重算锚点并搬过去，
+  // 不需要这里抢先；两个驱动源轮流搬窗正是"必须手动挪一下"的成因。
+  // 没有挂靠才回落旧的"从 before 猜边"，主窗/展开面板走这条路，行为不变。
   let target = null;
+  if (activeDockEdge) {
+    return;
+  }
   if (Math.abs(before.x + before.width - right) <= trigger) target = { x: right - size.width, y: pos.y };
   else if (Math.abs(before.x - left) <= trigger) target = { x: left, y: pos.y };
   else if (Math.abs(before.y + before.height - bottom) <= trigger) target = { x: pos.x, y: bottom - size.height };

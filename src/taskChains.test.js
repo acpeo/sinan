@@ -1045,3 +1045,32 @@ test("星盘点亮不吃僵尸行（久无动静的 running 不冒充活跃）",
   assert.equal(buildStarState(cards, Date.now(), new Set(), chain)[0].tone, "done");
   assert.equal(buildStarState(cards, Date.now(), new Set(["tianshu"]), chain)[0].tone, "live");
 });
+
+/// 胶囊灯牌的居中锚点（Leo 2026-10-13 第三轮："运行执行任务的 agent 应该自动
+/// 显示在中间位置，这样我可以方便地看到哪个 agent 在活动"）。
+/// 锚点在 ChainFilmstrip 里靠 currentRef 挂载，判据必须是 hopToneOf 的 current
+/// （taskId 真对上），不能是 tone——tone 的 "current" 是兜底档，词汇表没枚举过
+/// 的状态（aborted、空串、未来的新状态）也会落成它。拿 tone 判，这些格子全挂上
+/// ref，最后一个胜出，把真正在跑那颗星的居中位抢走：running 的星偏到边上，
+/// 一眼扫过去找不到谁在干活。
+test("居中锚点只归真正在跑的那颗星，别被兜底 tone 抢走（Leo 2026-10-13）", () => {
+  const currentTaskId = "gw:yuheng";
+  const roster = [
+    { taskId: "gw:tianshu", status: "succeeded", agentId: "tianshu" },
+    { taskId: "gw:tianxuan", status: "done", agentId: "tianxuan" },
+    // 唯一在跑的星，排在中间——正是最容易被人找不到的位置
+    { taskId: currentTaskId, status: "running", agentId: "yuheng" },
+    // 旧口径没枚举过的状态：tone 兜底成 "current"，但 current 必须为 false
+    { taskId: "gw:yaoguang", status: "aborted", agentId: "yaoguang" },
+    { taskId: "gw:kaiyang", status: "", agentId: "kaiyang" },
+    { taskId: "gw:main", status: undefined, agentId: "main" },
+  ];
+  const byTone = roster.filter((hop) => hopToneOf(hop, currentTaskId).tone === "current");
+  const byCurrent = roster.filter((hop) => hopToneOf(hop, currentTaskId).current);
+  // 旧判据（tone）会把三个假亮的格子一起算进来，锚点落到最后一个
+  assert.deepEqual(byTone.map((hop) => hop.taskId), [
+    currentTaskId, "gw:yaoguang", "gw:kaiyang", "gw:main",
+  ]);
+  // 新判据（current）只认真正在跑的那颗星
+  assert.deepEqual(byCurrent.map((hop) => hop.taskId), [currentTaskId]);
+});

@@ -2339,11 +2339,19 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
     const strip = stripRef.current;
     const current = currentRef.current;
     if (!strip || !current) return;
-    if (vertical) {
-      strip.scrollTop = current.offsetTop + current.offsetHeight / 2 - strip.clientHeight / 2;
-    } else {
-      strip.scrollLeft = current.offsetLeft + current.offsetWidth / 2 - strip.clientWidth / 2;
-    }
+    const centre = () => {
+      if (vertical) {
+        strip.scrollTop = current.offsetTop + current.offsetHeight / 2 - strip.clientHeight / 2;
+      } else {
+        strip.scrollLeft = current.offsetLeft + current.offsetWidth / 2 - strip.clientWidth / 2;
+      }
+    };
+    centre();
+    // 换形态（横↔竖）会跟着改原生窗尺寸，WebView2 的视口落地晚于布局效果一两
+    // 帧：此刻量到的 clientHeight 还是旧外形的，居中算出来是歪的。补一帧重算，
+    // 尺寸落定即精确（Leo 2026-10-13 第三轮："运行中的星要自动在中间"）。
+    const raf = requestAnimationFrame(centre);
+    return () => cancelAnimationFrame(raf);
   }, [currentKey, vertical]);
   // 按住拖拽滚动（鼠标左键 / 触屏）：按下记录起点，移动 4px 起算拖动，
   // 松开时若拖动过则吞掉紧随的 click——迷你条上点击=展开，拖完不该展开。
@@ -2444,14 +2452,19 @@ function ChainFilmstrip({ hops, currentTaskId, agentNameMap, vertical = false, o
       }}
     >
       {hops.map((hop, index) => {
-        const { tone, state } = hopToneOf(hop, currentTaskId);
+        const { tone, state, current } = hopToneOf(hop, currentTaskId);
         const name = agentDisplayName(agentNameMap, hop.agentId) || hop.agentId || "?";
         const duration = formatCompactDuration(hop.startedAtMs, hop.endedAtMs);
         return (
           <Fragment key={`${hop.gateway ?? ""}:${hop.taskId}`}>
             {index > 0 && <i className="task-chain-link" aria-hidden="true" />}
             <span
-              ref={tone === "current" ? currentRef : undefined}
+              // 居中锚点只认"真的是当前任务"这一条（Leo 2026-10-13 第三轮："运行
+              // 执行任务的 agent 应该自动显示在中间位置"）。不能拿 tone 判——tone
+              // 的 current 是兜底档，词汇表里没枚举过的状态（aborted、空串…）也会
+              // 落成 "current"，于是这些格子也挂上 ref，最后一个胜出，把真正在跑
+              // 那颗星的居中位抢走。灯牌上一眼扫过去， running 的星偏到边上去。
+              ref={current ? currentRef : undefined}
               className={`task-chain-hop task-chain-hop--${tone}`}
               // 悬停详情卡接管提示时撤掉原生 title，避免两层气泡叠出
               title={

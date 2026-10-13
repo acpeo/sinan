@@ -554,3 +554,148 @@ test("其余三边互切也接上原边继续收起（ Leo 的口径：有一个
     assert.ok(after <= 8, `${edge} 边 ${sw}x${sh}→${tw}x${th} 切换后应收起（实际 ${after}px）`);
   }
 });
+
+/// Leo 2026-10-13 第二轮实锤："竖条贴边隐藏时切横条，还得重新挪一下才隐藏"。
+/// 上一批（b56771e）只测了"收起态直接 applyMiniCapsuleSize"，绿了；真机仍犯，
+/// 因为真人不是那么切的——横竖切换钮藏在控制簇里，手序是：
+///   竖条贴着边藏着 → 碰边弹出 → 点 ••• 开控制簇（尺寸先变一次）→
+///   手按在横竖切换钮上点它（尺寸再变一次，且指针始终在窗内）
+/// 这条路径上有三个上一批没覆盖的坑：
+///   ① poll 的锚点自校验只改记录不搬窗口。WebView2 的 setSize 晚于 setPosition
+///     落地时窗口仍停在旧坐标，新外形套上去右缘冲出屏幕 272px，而
+///     stillOnDockEdge 看"右缘是否够得着屏幕边"照样判仍在边上，于是每拍重算、
+///     每拍都不搬，横条挂在屏外点不着——用户只能手动拖回来。
+///   ② 引擎自己发的滑动被 onMove 判成"用户拖走"。poll 刚把换外形后的窗口摆到
+///     新停泊位，onMove 因对不上旧锚点就 releaseDockForDrag，随后 check() 按
+///     显形位重建挂靠，横条从此摊在屏内不再收起。
+///   ③ check() 无条件 hidden=false，会把刚建立的收起态抹掉（滑停泊位触发 onMove
+///     → scheduleCheck → check 走到这里）。
+function edgeSwitchWithControlsScenario(edge, fromWidth, fromHeight, toWidth, toHeight) {
+  const context = controller();
+  context.window.__TAURI_INTERNALS__ = { invoke: async () => ({}) };
+  context.window.setTimeout = ((fn, ms) => setTimeout(fn, ms));
+  context.window.setInterval = ((fn, ms) => setInterval(fn, ms));
+  context.window.clearInterval = ((id) => clearInterval(id));
+  context.window.clearTimeout = ((id) => clearTimeout(id));
+  const area = { left: 0, top: 0, right: 2048, bottom: 1104 };
+  let size = { width: fromWidth, height: fromHeight };
+  let position = edge === "left" ? { x: area.left, y: 400 }
+    : edge === "right" ? { x: area.right - fromWidth, y: 400 }
+      : edge === "top" ? { x: 700, y: area.top }
+        : { x: 700, y: area.bottom - fromHeight };
+  let cursor = { x: position.x + fromWidth / 2, y: position.y + fromHeight / 2 };
+  const listeners = [];
+  const appWindow = {
+    outerPosition: async () => ({ ...position }),
+    outerSize: async () => ({ ...size }),
+    setPosition: async (next) => {
+      const moved = next.x !== position.x || next.y !== position.y;
+      position = { x: next.x, y: next.y };
+      if (moved) listeners.forEach((fn) => fn({ payload: { ...position } }));
+    },
+    setSize: async (next) => { size = { width: next.width, height: next.height }; },
+    setMinSize: async () => {},
+    setResizable: async () => {},
+    setAlwaysOnTop: async () => {},
+    onMoved: async (fn) => { listeners.push(fn); return () => {}; },
+    scaleFactor: async () => 1,
+  };
+  Object.assign(context, {
+    isLinuxPlatform: () => false,
+    isMacPlatform: () => false,
+    isWindowsPlatform: () => true,
+    windowApi: async () => ({
+      getCurrentWindow: () => appWindow,
+      currentMonitor: async () => ({ workArea: {
+        position: { x: 0, y: 0 }, size: { width: 2048, height: 1104 },
+      } }),
+      cursorPosition: async () => ({ ...cursor }),
+      LogicalSize: class { constructor(width, height) { this.width = width; this.height = height; } },
+      PhysicalPosition: class { constructor(x, y) { this.x = x; this.y = y; } },
+    }),
+    loadMonitorConfig: () => ({ tasksEdgeDock: true }),
+  });
+  const visiblePx = () => {
+    const left = Math.max(0, position.x);
+    const right = Math.min(2048, position.x + size.width);
+    const top = Math.max(0, position.y);
+    const bottom = Math.min(1104, position.y + size.height);
+    return edge === "left" || edge === "right"
+      ? Math.max(0, right - left)
+      : Math.max(0, bottom - top);
+  };
+  // 越界量 = 可见跨度超出细边（8px）的部分。收起态本来就该大部分在屏外
+  // （贴右缘只剩 6px），所以不能拿"标称矩形超出屏幕多少"算——那会把正常的
+  // 收起判成越界。真正的故障形态是窗口没贴上该贴的那条边：被推到屏幕中间
+  // （可见整个 308/376）或整扇飞出对侧，量级在百 px，与正常收起差两个数量级。
+  const offScreenPx = () => {
+    const left = Math.max(0, position.x);
+    const right = Math.min(2048, position.x + size.width);
+    const top = Math.max(0, position.y);
+    const bottom = Math.min(1104, position.y + size.height);
+    const visibleSpan = edge === "left" || edge === "right" ? right - left : bottom - top;
+    return Math.max(0, visibleSpan - 8);
+  };
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  return {
+    async run() {
+      const stopPromise = context.startEdgeDock({
+        getMode: () => "tasks-widget",
+        getPinned: () => false,
+        canDockTasksWidget: () => true,
+      });
+      await wait(300);
+      cursor = { x: 900, y: 900 };      // 光标离开 → 900ms 后收起
+      await wait(1400);
+      const before = visiblePx();
+      // 碰边弹出：光标必须落在窗口自己那一段边缘内（isCursorOnDockPeek 口径）
+      cursor = edge === "right" ? { x: 2045, y: position.y + fromHeight / 2 }
+        : edge === "left" ? { x: 3, y: position.y + fromHeight / 2 }
+          : edge === "top" ? { x: position.x + fromWidth / 2, y: 3 }
+            : { x: position.x + fromWidth / 2, y: 1101 };
+      await wait(500);
+      // 点 ••• 开控制簇：方向还没切，只是当前方向撑开
+      const [openWidth, openHeight] = fromWidth > fromHeight ? [308, 36] : [36, 376];
+      cursor = { x: position.x + openWidth / 2, y: position.y + openHeight / 2 };
+      await context.applyMiniCapsuleSize(openWidth, openHeight);
+      await wait(1500);
+      // 手按在横竖切换钮上点它：尺寸再变，指针仍在窗内
+      cursor = { x: position.x + toWidth / 2, y: position.y + toHeight / 2 };
+      await context.applyMiniCapsuleSize(toWidth, toHeight);
+      await wait(1500);
+      const after = visiblePx();
+      const stop = await stopPromise;
+      stop?.();
+      return { before, after, offScreen: offScreenPx(), position: { ...position }, size: { ...size } };
+    },
+  };
+}
+
+test("竖条贴边隐藏→碰边弹出→开控制簇→切横条，横条接上原边继续收起（Leo 2026-10-13 第二轮实锤）", async () => {
+  const scenario = edgeSwitchWithControlsScenario("right", 36, 224, 308, 36);
+  const { before, after, offScreen } = await scenario.run();
+  assert.ok(before <= 8, `前置：竖条应收起（实际可见 ${before}px）`);
+  // 横条不能摊在显形位等用户推，更不能飞出屏幕（挂靠死掉的标志）
+  assert.ok(after <= 8, `切横条后应接上贴边隐藏（实际可见 ${after}px）`);
+  assert.ok(offScreen <= 8, `窗口不应冲出屏幕（实际越界 ${offScreen}px）`);
+});
+
+test("四边两向互切都接上原边收起，且不飞出屏幕（ Leo 的口径：有一个藏着就该都藏着 ）", async () => {
+  const combos = [
+    [36, 224, "right", 308, 36],
+    [308, 36, "right", 36, 376],
+    [36, 224, "left", 308, 36],
+    [308, 36, "left", 36, 376],
+    [308, 36, "top", 36, 376],
+    [36, 224, "top", 308, 36],
+    [36, 224, "bottom", 308, 36],
+    [308, 36, "bottom", 36, 376],
+  ];
+  for (const [fw, fh, edge, tw, th] of combos) {
+    const scenario = edgeSwitchWithControlsScenario(edge, fw, fh, tw, th);
+    const { before, after, offScreen } = await scenario.run();
+    assert.ok(before <= 8, `${edge} 边前置应收起（实际 ${before}px）`);
+    assert.ok(after <= 8, `${edge} 边 ${fw}x${fh}→${tw}x${th} 切换后应收起（实际 ${after}px）`);
+    assert.ok(offScreen <= 8, `${edge} 边切换后不应冲出屏幕（实际越界 ${offScreen}px）`);
+  }
+});
