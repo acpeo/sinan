@@ -23,11 +23,14 @@
 //! CI 兜，所以这里刻意只写薄壳：参数校验、身份校验、payload 组装都做成
 //! 可被 node 复算的纯函数，真正的 RPC 只有 `sessions_send` 一次调用。
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// 飞书多维表格主表（真相源）：一案一 ID、当前阶段、打回次数、产物链接。
+/// 主表写入动作在北斗侧 lark-cli 落，这里留常量是为了派发流水里能带上
+/// 「这一案落在哪张表」——出问题时照着查，不用猜。
+#[allow(dead_code)]
 pub const FEISHU_MASTER_TABLE: &str = "tblGWeeAWrYadALt";
 
 /// 交付模式三态。与前端 cockpit.js 的 DELIVERABLE_MODES 同序同值——
@@ -58,6 +61,10 @@ impl DeliverableMode {
         }
     }
 
+    /// 这一案要不要出视频。现在由前端 branchStatesOf 判定分支激活态，
+    /// 后端暂时不消费；留着是因为飞书主表接通后「按模式决定要不要唤醒
+    /// 开阳」要走这一问，那时它就是唯一的判据。
+    #[allow(dead_code)]
     pub fn wants_video(self) -> bool {
         matches!(self, DeliverableMode::Dual | DeliverableMode::VideoOnly)
     }
@@ -93,12 +100,13 @@ pub fn strip_dual_marker(raw: &str) -> String {
                 break;
             }
         }
-        // 收尾孤立连接符：剩「标题 -」这种半截符号也要吃掉
+        // 收尾孤立连接符：剩「标题 -」这种半截符号也要吃掉。
+        // 全串都是连接符时 cut=0，结果是空串——调用方按空标题拒绝发车。
         let trimmed = text.trim_end();
         let cut = trimmed
             .char_indices()
             .rev()
-            .find(|(_, ch)| !matches!(ch, ' ' | ',' | '，' | '、' | '/' | '|' | '+' | '-' | '-'))
+            .find(|(_, ch)| !matches!(ch, ' ' | ',' | '，' | '、' | '/' | '|' | '+' | '-'))
             .map(|(index, _)| index + 1)
             .unwrap_or(0);
         text = trimmed[..cut].trim().to_owned();
@@ -254,7 +262,10 @@ pub fn is_protected_session(session_key: &str) -> bool {
         return true;
     }
     // agent:tianshu:main / agent:tianshu:cron:j1 两种形态都护
-    key.ends_with(":main") || key.contains(":main:") || key.ends_with(":cron") || key.contains(":cron:")
+    key.ends_with(":main")
+        || key.contains(":main:")
+        || key.ends_with(":cron")
+        || key.contains(":cron:")
 }
 
 /// 自愈/关单的会话清理：只准 reset，不准 compact。
@@ -275,7 +286,10 @@ pub fn assert_reset_not_compact(action: &str) -> Result<()> {
 /// 没冻结就追投 = 让开阳基于一份还会改的母稿干活，白做一遍。
 pub fn can_append_video(deliverable_mode: DeliverableMode, master_doc_status: &str) -> bool {
     deliverable_mode == DeliverableMode::ImageOnly
-        && matches!(master_doc_status.trim().to_uppercase().as_str(), "FROZEN" | "READONLY" | "PASS")
+        && matches!(
+            master_doc_status.trim().to_uppercase().as_str(),
+            "FROZEN" | "READONLY" | "PASS"
+        )
 }
 
 /// 追投 payload：模式升 DUAL + 读冻结母稿 docx 链接唤醒开阳。
@@ -331,8 +345,14 @@ mod tests {
     #[test]
     fn unknown_mode_falls_back_to_image_only() {
         assert_eq!(DeliverableMode::from_raw(None), DeliverableMode::ImageOnly);
-        assert_eq!(DeliverableMode::from_raw(Some("garbage")), DeliverableMode::ImageOnly);
-        assert_eq!(DeliverableMode::from_raw(Some("dual")), DeliverableMode::Dual);
+        assert_eq!(
+            DeliverableMode::from_raw(Some("garbage")),
+            DeliverableMode::ImageOnly
+        );
+        assert_eq!(
+            DeliverableMode::from_raw(Some("dual")),
+            DeliverableMode::Dual
+        );
     }
 
     #[test]
@@ -369,14 +389,24 @@ mod tests {
 
     #[test]
     fn lark_identity_is_mandatory() {
-        let ok = vec!["drive".to_owned(), "--profile".to_owned(), "yuheng".to_owned(), "--as".to_owned(), "bot".to_owned()];
+        let ok = vec![
+            "drive".to_owned(),
+            "--profile".to_owned(),
+            "yuheng".to_owned(),
+            "--as".to_owned(),
+            "bot".to_owned(),
+        ];
         assert!(assert_lark_identity(&ok).is_ok());
 
         let no_profile = vec!["drive".to_owned(), "--as".to_owned(), "bot".to_owned()];
         let error = assert_lark_identity(&no_profile).expect_err("missing profile");
         assert!(error.to_string().contains("--profile"));
 
-        let no_bot = vec!["drive".to_owned(), "--profile".to_owned(), "yuheng".to_owned()];
+        let no_bot = vec![
+            "drive".to_owned(),
+            "--profile".to_owned(),
+            "yuheng".to_owned(),
+        ];
         assert!(assert_lark_identity(&no_bot).is_err());
     }
 
@@ -385,7 +415,9 @@ mod tests {
         assert!(is_protected_session("agent:tianshu:main"));
         assert!(is_protected_session("agent:tianshu:cron:j1"));
         assert!(is_protected_session(""));
-        assert!(!is_protected_session("agent:tianji:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a"));
+        assert!(!is_protected_session(
+            "agent:tianji:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a"
+        ));
     }
 
     #[test]
@@ -407,10 +439,16 @@ mod tests {
 
     #[test]
     fn append_video_payload_wakes_kaiyang() {
-        let payload = append_video_payload("BM-2605", "https://my.feishu.cn/docx/CYeOddF3UosU8Wx0a04cSBDMnBe")
-            .expect("payload");
+        let payload = append_video_payload(
+            "BM-2605",
+            "https://my.feishu.cn/docx/CYeOddF3UosU8Wx0a04cSBDMnBe",
+        )
+        .expect("payload");
         assert_eq!(payload.get("to").and_then(Value::as_str), Some("kaiyang"));
-        assert_eq!(payload.get("deliverable_mode").and_then(Value::as_str), Some("DUAL"));
+        assert_eq!(
+            payload.get("deliverable_mode").and_then(Value::as_str),
+            Some("DUAL")
+        );
         assert!(append_video_payload("BM-2605", "").is_err());
     }
 
@@ -418,10 +456,25 @@ mod tests {
     fn master_table_row_has_all_columns() {
         let plan = parse_launch("餐边柜别贴墙", None);
         let row = master_table_row(&plan, "BM-2604");
-        assert_eq!(row.get("record_id").and_then(Value::as_str), Some("BM-2604"));
-        assert_eq!(row.get("title").and_then(Value::as_str), Some("餐边柜别贴墙"));
-        assert_eq!(row.get("entry_mode").and_then(Value::as_str), Some("AUTO_DISCOVERY"));
-        assert_eq!(row.get("deliverable_mode").and_then(Value::as_str), Some("IMAGE_ONLY"));
-        assert_eq!(row.get("master_doc_status").and_then(Value::as_str), Some("NONE"));
+        assert_eq!(
+            row.get("record_id").and_then(Value::as_str),
+            Some("BM-2604")
+        );
+        assert_eq!(
+            row.get("title").and_then(Value::as_str),
+            Some("餐边柜别贴墙")
+        );
+        assert_eq!(
+            row.get("entry_mode").and_then(Value::as_str),
+            Some("AUTO_DISCOVERY")
+        );
+        assert_eq!(
+            row.get("deliverable_mode").and_then(Value::as_str),
+            Some("IMAGE_ONLY")
+        );
+        assert_eq!(
+            row.get("master_doc_status").and_then(Value::as_str),
+            Some("NONE")
+        );
     }
 }

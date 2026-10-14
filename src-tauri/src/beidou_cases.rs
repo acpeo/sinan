@@ -19,6 +19,14 @@
 //! CASE_ID 尚未注入 = 0 行，飞书主表未接，docx 链接已在 terminal_summary
 //! 里裸奔——所以链接兜底先行，前两条等北斗侧派单约定落地）。
 
+// 本文件前半是「8 列阶段门禁泳道」时代的桥接模型（CaseStage / CaseCard /
+// CaseArtifacts / extract_case_id / extract_feishu_links …）。Leo 2026-10-14
+// 把看板推翻重排成指挥舱后，前端不再消费这些类型，但它们不是废码——
+// 是飞书主表 tblGWeeAWrYadALt 接通后要立刻接上的那一层（一案一 ID、阶段
+// 推导、产物链接归拢）。所以逐个标注 allow(dead_code) 留着，等主表回填时
+// 直接接，不用从零再写一遍。CASE_ID 归拢（extract_case_id）尤其要先留着：
+// 北斗侧一旦按规范注入 [CASE_ID: BM-xxxx]，台账里的 70 行就能自动归案。
+
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
@@ -26,6 +34,7 @@ use serde_json::Value;
 /// 数字即列序：第 3 列是全链路唯一固定人类断点（Leo 标题确认）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub enum CaseStage {
     /// 第 1 列 · 接单建档（天枢）
     Intake,
@@ -83,7 +92,7 @@ impl CaseStage {
     pub fn from_master_text(text: &str) -> Option<Self> {
         let t = text.trim();
         // 主表阶段字段两种可能写法都容错：纯中文 或 "5_母稿创作" 带序号前缀。
-        let t = t.splitn(2, '_').nth(1).unwrap_or(t).trim();
+        let t = t.split_once('_').map(|(_, rest)| rest).unwrap_or(t).trim();
         Some(match t {
             "接单建档" | "建档" => CaseStage::Intake,
             "趋势与选题" | "选题" | "研究" => CaseStage::Research,
@@ -103,6 +112,7 @@ impl CaseStage {
 /// 主表阶段说卡片停第 5 列；天玑这一跳在跑就点绿灯，脚本报错立刻升级熔断。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub enum CaseComputeState {
     /// 有未结束的 running 行 → 绿色呼吸灯
     Running,
@@ -118,6 +128,7 @@ pub const STRIKE_LIMIT: u8 = 3;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub struct StrikeCounter {
     /// 门禁名（初审 / 二审）
     pub gate: &'static str,
@@ -132,7 +143,12 @@ pub struct StrikeCounter {
 impl StrikeCounter {
     pub fn new(gate: &'static str, hits: u8) -> Self {
         let hits = hits.min(STRIKE_LIMIT);
-        StrikeCounter { gate, hits, melted: hits >= STRIKE_LIMIT, remaining: STRIKE_LIMIT - hits }
+        StrikeCounter {
+            gate,
+            hits,
+            melted: hits >= STRIKE_LIMIT,
+            remaining: STRIKE_LIMIT - hits,
+        }
     }
 }
 
@@ -140,6 +156,7 @@ impl StrikeCounter {
 /// 主表字段直接提取；主表没回填的用 terminal_summary 里的裸链接兜底。
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub struct CaseArtifacts {
     /// 该案唯一的飞书云盘文件夹
     pub folder_url: Option<String>,
@@ -173,6 +190,7 @@ impl CaseArtifacts {
 /// 一案一卡视图（前端泳道的直接渲染单元）。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub struct CaseCard {
     /// 一案一 ID：飞书主表 record_id 映射的 BM-xxxx（桥接主键）
     pub case_id: String,
@@ -248,6 +266,7 @@ pub fn ensure_case_tables(connection: &Connection) -> rusqlite::Result<()> {
 /// 只认带 `CASE_ID` 标签的规范形：`[CASE_ID: BM-2604]` 或 `CASE_ID: bm-2604`。
 /// 大小写不敏感，编号段 3-6 位字母数字。
 /// 刻意不做裸编号兜底——理由见下方注释里的真机实测教训。
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub fn extract_case_id(text: &str) -> Option<String> {
     let t = text.trim();
     if t.is_empty() {
@@ -269,9 +288,9 @@ pub fn extract_case_id(text: &str) -> Option<String> {
 /// 按 char（码点）走，不按 byte：编号两侧是中文时（北斗结论全是中文），
 /// 字节下标和码点下标不是同一套坐标系，用 bytes 扫、用 &text[a..b] 切会
 /// 切在字符中间——真机实测「客厅沙发」一案第 4 跳就被切成 " BM-260"。
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 fn regex_lite_capture(text: &str, label: &str, _pattern: &str) -> Option<String> {
     let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
     // 标签锚点：先找到标签位置，只从其后再开始找编号
     let start = if label.is_empty() {
         0
@@ -279,7 +298,7 @@ fn regex_lite_capture(text: &str, label: &str, _pattern: &str) -> Option<String>
         let up = text.to_uppercase();
         up.find(&label.to_uppercase())? + label.len()
     };
-    i = start;
+    let mut i = start;
     while i < chars.len() {
         // 找前缀字母段（2-4 个字母）
         let seg_start = i;
@@ -323,6 +342,7 @@ fn regex_lite_capture(text: &str, label: &str, _pattern: &str) -> Option<String>
 
 /// 把一条 gateway_task 行归拢到一案下（边表挂载，原表不动）。
 /// 幂等：同一条 task 重复挂载只保留第一次（PRIMARY KEY 保证）。
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub fn attach_task_to_case(
     connection: &Connection,
     gateway: &str,
@@ -343,6 +363,7 @@ pub fn attach_task_to_case(
 /// 真机实测：链接裸奔在 session_run.terminal_summary 里，形如
 /// `https://my.feishu.cn/docx/CDcfd…` 与 `https://my.feishu.cn/drive/folder/Rbpj…`。
 /// 顺手剥掉 markdown 强调记号（** 结尾）和尾随标点，别把 `)**` 带进 URL。
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub fn extract_feishu_links(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
@@ -356,7 +377,20 @@ pub fn extract_feishu_links(text: &str) -> Vec<String> {
             while j < bytes.len() {
                 let ch = bytes[j];
                 let is_url_char = ch.is_ascii_alphanumeric()
-                    || matches!(ch, b':' | b'/' | b'.' | b'-' | b'_' | b'~' | b'?' | b'#' | b'=' | b'&' | b'%' | b'+');
+                    || matches!(
+                        ch,
+                        b':' | b'/'
+                            | b'.'
+                            | b'-'
+                            | b'_'
+                            | b'~'
+                            | b'?'
+                            | b'#'
+                            | b'='
+                            | b'&'
+                            | b'%'
+                            | b'+'
+                    );
                 if !is_url_char {
                     break;
                 }
@@ -382,12 +416,28 @@ pub fn extract_feishu_links(text: &str) -> Vec<String> {
 }
 
 /// 剥掉 markdown 强调与尾随标点：真机链接常写成 `https://…docx/xxx**`。
+#[allow(dead_code)] // 指挥舱改造后 extract_feishu_links 暂不被调用，随主表接通一起接上
 fn clean_link(raw: &str) -> String {
     let mut s = raw.trim();
     // 尾部 markdown/标点记号逐个剥（**、*、，。、）) 、、] 】 等）
     loop {
         let trimmed = s.trim_end_matches(|c: char| {
-            matches!(c, '*' | '_' | '`' | ',' | '，' | '。' | ')' | '）' | ']' | '】' | ';' | '；' | '"' | '\'')
+            matches!(
+                c,
+                '*' | '_'
+                    | '`'
+                    | ','
+                    | '，'
+                    | '。'
+                    | ')'
+                    | '）'
+                    | ']'
+                    | '】'
+                    | ';'
+                    | '；'
+                    | '"'
+                    | '\''
+            )
         });
         if trimmed.len() == s.len() {
             break;
@@ -401,6 +451,7 @@ fn clean_link(raw: &str) -> String {
 /// 真机链接形态：/docx/<id> 是云文档，/drive/folder/<id> 是文件夹。
 /// 一个案下同名形态可能出现多个 docx（选题研究/母稿/审查报告/运营方案），
 /// 按出现顺序依次填空位——北斗 SOP 里产出顺序固定，顺序即语义。
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub fn assign_artifacts(links: &[String], into: &mut CaseArtifacts) {
     let mut docx_slots: Vec<&mut Option<String>> = Vec::new();
     // 顺序 = SOP 产出序：研究 → 母稿 → 审查 → 视觉包 → 视频包 → 运营
@@ -438,15 +489,15 @@ pub fn assign_artifacts(links: &[String], into: &mut CaseArtifacts) {
         .iter()
         .filter(|l| !l.contains("/docx/") && !l.contains("/drive/folder/"))
         .collect();
-    let mut slots = vec![&mut into.visual_url, &mut into.video_url];
-    let mut idx = 0;
-    for slot in slots.iter_mut() {
+    for (idx, slot) in [&mut into.visual_url, &mut into.video_url]
+        .into_iter()
+        .enumerate()
+    {
         if slot.is_none() {
             if let Some(found) = others.get(idx) {
                 **slot = Some((*found).clone());
             }
         }
-        idx += 1;
     }
     let _ = &mut docx_slots;
 }
@@ -463,7 +514,10 @@ mod tests {
             Some("BM-2604".to_owned())
         );
         // 大小写不敏感
-        assert_eq!(extract_case_id("case_id: bm-1188"), Some("BM-1188".to_owned()));
+        assert_eq!(
+            extract_case_id("case_id: bm-1188"),
+            Some("BM-1188".to_owned())
+        );
         // 标签在前、编号在后，中间的杂字不干扰
         assert_eq!(
             extract_case_id("CASE_ID 已注入，编号是 TSK-9f3a，请归拢"),
@@ -482,7 +536,10 @@ mod tests {
         // 真机实测教训：70 行结论里做裸编号兜底，会命中这些工具名/模块名——
         // 误拢的后果是卡片挂到错的案下，比拢不上更糟。
         assert_eq!(extract_case_id("lark-cli 读取主表"), None);
-        assert_eq!(extract_case_id("**工作流收敛到一个**：`assets/QWEN-IMAGE`"), None);
+        assert_eq!(
+            extract_case_id("**工作流收敛到一个**：`assets/QWEN-IMAGE`"),
+            None
+        );
         assert_eq!(extract_case_id("SDXL-API 环境已确认 closed"), None);
         assert_eq!(extract_case_id("CNB-COMFY 两个脚本该合成一个"), None);
         assert_eq!(extract_case_id("TOOL-IMAGE 英文提示词这张对了"), None);
@@ -503,9 +560,14 @@ mod tests {
         let links = extract_feishu_links(
             "母稿：https://my.feishu.cn/docx/CDcfdyrAtoVAAJxRhY7ca8OtnNg** 已落盘",
         );
-        assert_eq!(links, vec!["https://my.feishu.cn/docx/CDcfdyrAtoVAAJxRhY7ca8OtnNg".to_owned()]);
+        assert_eq!(
+            links,
+            vec!["https://my.feishu.cn/docx/CDcfdyrAtoVAAJxRhY7ca8OtnNg".to_owned()]
+        );
         // folder 链接 + 中文标点结尾
-        let links = extract_feishu_links("文件夹：https://my.feishu.cn/drive/folder/RbpjfPLoPllQDGdSVDLca8zrnxg。");
+        let links = extract_feishu_links(
+            "文件夹：https://my.feishu.cn/drive/folder/RbpjfPLoPllQDGdSVDLca8zrnxg。",
+        );
         assert_eq!(
             links,
             vec!["https://my.feishu.cn/drive/folder/RbpjfPLoPllQDGdSVDLca8zrnxg".to_owned()]
@@ -533,9 +595,21 @@ mod tests {
         let mut art = CaseArtifacts::default();
         assign_artifacts(&links, &mut art);
         assert!(art.folder_url.as_deref().unwrap().contains("Rbpj"));
-        assert!(art.research_doc_url.as_deref().unwrap().contains("ResearchDoc1"));
-        assert!(art.master_doc_url.as_deref().unwrap().contains("MasterDoc22"));
-        assert!(art.review_doc_url.as_deref().unwrap().contains("ReviewDoc33"));
+        assert!(art
+            .research_doc_url
+            .as_deref()
+            .unwrap()
+            .contains("ResearchDoc1"));
+        assert!(art
+            .master_doc_url
+            .as_deref()
+            .unwrap()
+            .contains("MasterDoc22"));
+        assert!(art
+            .review_doc_url
+            .as_deref()
+            .unwrap()
+            .contains("ReviewDoc33"));
         assert!(art.ops_doc_url.as_deref().unwrap().contains("OpsDoc4444"));
         assert!(art.any());
         // 空链接集 → any() 假，前端不渲染云盘区块
@@ -545,10 +619,22 @@ mod tests {
     #[test]
     fn stage_maps_from_master_text() {
         // 主表阶段字段两种写法都认
-        assert_eq!(CaseStage::from_master_text("母稿创作"), Some(CaseStage::Drafting));
-        assert_eq!(CaseStage::from_master_text("5_母稿创作"), Some(CaseStage::Drafting));
-        assert_eq!(CaseStage::from_master_text("待 Leo 确认"), Some(CaseStage::TitleConfirm));
-        assert_eq!(CaseStage::from_master_text("二审"), Some(CaseStage::SecondReview));
+        assert_eq!(
+            CaseStage::from_master_text("母稿创作"),
+            Some(CaseStage::Drafting)
+        );
+        assert_eq!(
+            CaseStage::from_master_text("5_母稿创作"),
+            Some(CaseStage::Drafting)
+        );
+        assert_eq!(
+            CaseStage::from_master_text("待 Leo 确认"),
+            Some(CaseStage::TitleConfirm)
+        );
+        assert_eq!(
+            CaseStage::from_master_text("二审"),
+            Some(CaseStage::SecondReview)
+        );
         // 认不出来的值返回 None，绝不瞎猜一列
         assert_eq!(CaseStage::from_master_text("天枢在想什么"), None);
         assert_eq!(CaseStage::from_master_text(""), None);
@@ -602,7 +688,10 @@ pub fn next_case_id(connection: &Connection) -> rusqlite::Result<String> {
 
 /// 主表行 → 本地账本 upsert。字段缺省按最保守的初值（未冻结、零打回）。
 /// 返回受影响行数（1 = 新建，>1 = 更新了已有行，用于回包给前端）。
-pub fn upsert_case_from_master_row(connection: &Connection, row: &serde_json::Value) -> rusqlite::Result<usize> {
+pub fn upsert_case_from_master_row(
+    connection: &Connection,
+    row: &serde_json::Value,
+) -> rusqlite::Result<usize> {
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
     let num = |key: &str| row.get(key).and_then(Value::as_i64).unwrap_or(0);
     let case_id = text("record_id").unwrap_or_default();
@@ -657,7 +746,11 @@ pub fn upsert_case_from_master_row(connection: &Connection, row: &serde_json::Va
 }
 
 /// 案件在本地账本里的一行（append-video 判门槛用）。
+/// 现在命令层只读 deliverable_mode 与 master_doc_url 两个字段；其余是
+/// 飞书主表接通后指挥舱卷宗列表要直接渲染的（标题、母稿状态、打回次数、
+/// 冻结锁），先随行取回来，省得那时再改一次 SQL。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CaseLedgerRow {
     pub case_id: String,
     pub title: Option<String>,
@@ -668,7 +761,10 @@ pub struct CaseLedgerRow {
     pub master_frozen: bool,
 }
 
-pub fn load_case(connection: &Connection, case_id: &str) -> rusqlite::Result<Option<CaseLedgerRow>> {
+pub fn load_case(
+    connection: &Connection,
+    case_id: &str,
+) -> rusqlite::Result<Option<CaseLedgerRow>> {
     connection
         .query_row(
             "SELECT case_id, title, task_type, master_doc_url, master_frozen, second_strikes
@@ -679,16 +775,21 @@ pub fn load_case(connection: &Connection, case_id: &str) -> rusqlite::Result<Opt
                     case_id: row.get(0)?,
                     title: row.get(1)?,
                     // task_type 列存的就是交付模式（IMAGE_ONLY/DUAL/VIDEO_ONLY）
-                    deliverable_mode: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "IMAGE_ONLY".to_owned()),
+                    deliverable_mode: row
+                        .get::<_, Option<String>>(2)?
+                        .unwrap_or_else(|| "IMAGE_ONLY".to_owned()),
                     master_doc_url: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                    master_doc_status: if row.get::<_, i64>(4)? == 1 { "FROZEN".to_owned() } else { "NONE".to_owned() },
+                    master_doc_status: if row.get::<_, i64>(4)? == 1 {
+                        "FROZEN".to_owned()
+                    } else {
+                        "NONE".to_owned()
+                    },
                     second_strikes: row.get(5)?,
                     master_frozen: row.get::<_, i64>(4)? == 1,
                 })
             },
         )
         .optional()
-        .map_err(Into::into)
 }
 
 /// 母稿状态（追投门槛的判据）：FROZEN / NONE / REJECTED。
@@ -713,7 +814,11 @@ pub fn master_doc_status(connection: &Connection, case_id: &str) -> rusqlite::Re
 
 /// 唤醒流水留痕：sessions_send 的 payload 原样存一行。
 /// 群消息只作留痕、没有唤醒效力——但留痕本身要有，出问题能照着查是谁派的。
-pub fn record_wakeup(connection: &Connection, case_id: &str, payload: &serde_json::Value) -> rusqlite::Result<()> {
+pub fn record_wakeup(
+    connection: &Connection,
+    case_id: &str,
+    payload: &serde_json::Value,
+) -> rusqlite::Result<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS beidou_wakeups (
             case_id    TEXT NOT NULL,
@@ -731,7 +836,10 @@ pub fn record_wakeup(connection: &Connection, case_id: &str, payload: &serde_jso
             case_id,
             payload.get("to").and_then(Value::as_str).unwrap_or(""),
             payload.get("text").and_then(Value::as_str).unwrap_or(""),
-            payload.get("deliverable_mode").and_then(Value::as_str).unwrap_or(""),
+            payload
+                .get("deliverable_mode")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
             chrono::Utc::now().timestamp_millis(),
         ],
     )?;
@@ -739,7 +847,11 @@ pub fn record_wakeup(connection: &Connection, case_id: &str, payload: &serde_jso
 }
 
 /// 改写交付模式（追投视频：IMAGE_ONLY → DUAL）。
-pub fn set_deliverable_mode(connection: &Connection, case_id: &str, mode: &str) -> rusqlite::Result<usize> {
+pub fn set_deliverable_mode(
+    connection: &Connection,
+    case_id: &str,
+    mode: &str,
+) -> rusqlite::Result<usize> {
     connection.execute(
         "UPDATE beidou_cases SET task_type = ?2, updated_at_ms = ?3 WHERE case_id = ?1",
         rusqlite::params![case_id, mode, chrono::Utc::now().timestamp_millis()],
@@ -766,7 +878,10 @@ mod dispatch_helper_tests {
         assert_eq!(next_case_id(&db).expect("next"), "BM-2602");
         // 脏数据（非规范形）不参与最大值计算，不能把序号顶飞
         let junk = serde_json::json!({ "record_id": "LARK-CLI", "title": "工具名不是案件" });
-        assert_eq!(upsert_case_from_master_row(&db, &junk).expect("upsert junk"), 1);
+        assert_eq!(
+            upsert_case_from_master_row(&db, &junk).expect("upsert junk"),
+            1
+        );
         assert_eq!(next_case_id(&db).expect("next after junk"), "BM-2602");
     }
 
@@ -831,9 +946,15 @@ mod dispatch_helper_tests {
         let db = memory_db();
         let row = serde_json::json!({ "record_id": "BM-2603", "title": "丁案", "deliverable_mode": "IMAGE_ONLY" });
         upsert_case_from_master_row(&db, &row).expect("upsert");
-        assert_eq!(set_deliverable_mode(&db, "BM-2603", "DUAL").expect("update"), 1);
         assert_eq!(
-            load_case(&db, "BM-2603").expect("load").expect("row").deliverable_mode,
+            set_deliverable_mode(&db, "BM-2603", "DUAL").expect("update"),
+            1
+        );
+        assert_eq!(
+            load_case(&db, "BM-2603")
+                .expect("load")
+                .expect("row")
+                .deliverable_mode,
             "DUAL"
         );
     }

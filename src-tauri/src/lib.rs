@@ -33,8 +33,12 @@ struct AppState {
 
 fn open_database(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create app data directory {}: {error}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create app data directory {}: {error}",
+                parent.display()
+            )
+        })?;
     }
     let connection = Connection::open(path)
         .map_err(|error| format!("failed to open task ledger {}: {error}", path.display()))?;
@@ -52,7 +56,12 @@ fn open_database_read_only(path: &Path) -> Result<Connection, String> {
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|error| format!("failed to open task ledger read-only {}: {error}", path.display()))?;
+    .map_err(|error| {
+        format!(
+            "failed to open task ledger read-only {}: {error}",
+            path.display()
+        )
+    })?;
     connection
         .pragma_update(None, "busy_timeout", 5_000_i64)
         .map_err(|error| error.to_string())?;
@@ -70,13 +79,19 @@ fn import_legacy_ledger(local_dir: &Path, target: &Path) {
         Some(root) => root.to_path_buf(),
         None => return,
     };
-    for root in [data_root.join(LEGACY_APP_IDENTIFIER), PathBuf::from(LEGACY_APP_IDENTIFIER)] {
+    for root in [
+        data_root.join(LEGACY_APP_IDENTIFIER),
+        PathBuf::from(LEGACY_APP_IDENTIFIER),
+    ] {
         let legacy = root.join(LEGACY_DATABASE_FILE_NAME);
         if !legacy.exists() {
             continue;
         }
         if std::fs::copy(&legacy, target).is_ok() {
-            eprintln!("sinan imported legacy task ledger from {}", legacy.display());
+            eprintln!(
+                "sinan imported legacy task ledger from {}",
+                legacy.display()
+            );
             for suffix in ["-wal", "-shm"] {
                 let source = legacy.with_file_name(format!("{LEGACY_DATABASE_FILE_NAME}{suffix}"));
                 if source.exists() {
@@ -101,7 +116,9 @@ const TASK_WIDGET_VISIBILITY: &str = "tasks://tasks-widget-visibility";
 
 /// 托盘「任务小组件」勾选态句柄：set_tasks_widget_window 每次显隐后回写，
 /// 菜单勾选 = 窗实际可见性（Leo 2026-10-06：托盘项看不出开关 = 逻辑毛病之一）。
-static TASKS_WIDGET_MENU: std::sync::OnceLock<Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>> = std::sync::OnceLock::new();
+static TASKS_WIDGET_MENU: std::sync::OnceLock<
+    Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>,
+> = std::sync::OnceLock::new();
 
 fn set_tasks_widget_menu_checked(checked: bool) {
     if let Some(cell) = TASKS_WIDGET_MENU.get() {
@@ -181,7 +198,8 @@ async fn set_tasks_widget_window(app: tauri::AppHandle, visible: bool) -> Result
         }
     }
     set_tasks_widget_menu_checked(visible);
-    app.emit(TASK_WIDGET_VISIBILITY, visible).map_err(|error| error.to_string())?;
+    app.emit(TASK_WIDGET_VISIBILITY, visible)
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -256,7 +274,11 @@ fn make_hop_card_unactivatable(window: &tauri::WebviewWindow<tauri::Wry>) {
         unsafe {
             let handle = HWND(hwnd.0 as *mut _);
             let ex = GetWindowLongPtrW(handle, GWL_EXSTYLE) as u32;
-            SetWindowLongPtrW(handle, GWL_EXSTYLE, (ex | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0) as isize);
+            SetWindowLongPtrW(
+                handle,
+                GWL_EXSTYLE,
+                (ex | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0) as isize,
+            );
         }
     }
 }
@@ -392,7 +414,8 @@ async fn set_notification_window(app: tauri::AppHandle, visible: bool) -> Result
             }
         }
     }
-    app.emit(NOTIFICATION_VISIBILITY, visible).map_err(|error| error.to_string())?;
+    app.emit(NOTIFICATION_VISIBILITY, visible)
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -554,8 +577,10 @@ fn session_run_list(
 struct DirectLaunchParams {
     title: String,
     deliverable_mode: Option<String>,
-    /// 目标平台（小红书/公众号…），仅作主表留痕，不参与路由。
+    /// 目标平台（小红书/公众号…）。现在只作主表留痕不参与路由，但字段要
+    /// 收着——前端已经发了，后端悄悄丢掉会让"我明明选了平台"变成幻觉。
     #[serde(default)]
+    #[allow(dead_code)]
     target_platforms: Vec<String>,
 }
 
@@ -605,10 +630,21 @@ fn beidou_direct_launch(
         plan.deliverable_mode,
     )
     .map_err(|error| error.to_string())?;
+    // 铁律二：写飞书主表的 lark-cli 必须带本星位身份，缺一个就整个派发失败。
+    // 不拦的后果是回落成默认天枢身份——等于用天枢的手去建这一案的文件夹。
+    beidou_dispatch::assert_lark_identity(&[
+        "drive".to_owned(),
+        "--profile".to_owned(),
+        "tianshu".to_owned(),
+        "--as".to_owned(),
+        "bot".to_owned(),
+    ])
+    .map_err(|error| error.to_string())?;
     // 落一条派发流水（本地可见的"已唤醒"凭据；真发送在北斗侧网关）。
     {
         let connection = open_database(&state.database_path).map_err(|error| error.to_string())?;
-        beidou_cases::record_wakeup(&connection, &case_id, &wakeup).map_err(|error| error.to_string())?;
+        beidou_cases::record_wakeup(&connection, &case_id, &wakeup)
+            .map_err(|error| error.to_string())?;
     }
     Ok(DirectLaunchResult {
         case_id,
@@ -626,6 +662,16 @@ fn beidou_direct_launch(
 #[serde(rename_all = "camelCase")]
 struct AppendVideoParams {
     case_id: String,
+}
+
+/// auto-heal 入参：案件号 + 要重置的会话键。
+/// 会话键由调用方给——真机干活的是群会话（agent:tianji:feishu:group:oc_xxx），
+/// 不是 :main。受保护的键（main/cron）在命令里直接拒。
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AutoHealParams {
+    case_id: String,
+    session_key: String,
 }
 
 /// 一键追投视频：仅图文案 + 母稿已冻结 → 模式升 DUAL → 唤醒开阳。
@@ -648,6 +694,16 @@ fn beidou_append_video(
     }
     let wakeup = beidou_dispatch::append_video_payload(&params.case_id, &master_url)
         .map_err(|error| error.to_string())?;
+    // 铁律二：唤醒开阳同样要带开阳身份——追投是开阳的活，回落成天枢身份
+    // 会让天枢以别人的手写视频包。
+    beidou_dispatch::assert_lark_identity(&[
+        "drive".to_owned(),
+        "--profile".to_owned(),
+        "kaiyang".to_owned(),
+        "--as".to_owned(),
+        "bot".to_owned(),
+    ])
+    .map_err(|error| error.to_string())?;
     {
         let connection = open_database(&state.database_path).map_err(|error| error.to_string())?;
         beidou_cases::record_wakeup(&connection, &params.case_id, &wakeup)
@@ -666,6 +722,46 @@ fn beidou_append_video(
 fn row_status(state: &State<'_, AppState>, case_id: &str) -> Result<String, String> {
     let connection = open_database_read_only(&state.database_path)?;
     beidou_cases::master_doc_status(&connection, case_id).map_err(|error| error.to_string())
+}
+
+/// 天枢自动自愈：3/3 熔断时重置天玑会话并派发局部重修。
+/// 全自动架构下没有人工裁决这一步——Watchdog 数到 3 就直接自愈。
+/// 铁律三在这里落地：只准 reset 不准 compact，且 main/cron 两类会话
+/// 硬编码保护不被重置（那是舵和锚，重置了整条链路失联）。
+///
+/// 会话键由调用方给（真机形态 agent:tianji:feishu:group:oc_xxx——干活的
+/// 是群会话，不是 :main）。受保护的键直接拒，别等 reset 发出去才发现
+/// 打的是舵。
+#[tauri::command]
+fn beidou_auto_heal(
+    params: AutoHealParams,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if beidou_dispatch::is_protected_session(&params.session_key) {
+        return Err(format!("会话 {} 受保护，不能被重置", params.session_key));
+    }
+    // 铁律三之一：自愈只走 reset。compact 会留着旧的错误判词上下文，
+    // 天玑重修时还在照着错的结论写。
+    beidou_dispatch::assert_reset_not_compact("RESET").map_err(|error| error.to_string())?;
+    let mode = beidou_dispatch::DeliverableMode::from_raw(Some("IMAGE_ONLY"));
+    let wakeup = beidou_dispatch::build_wakeup_payload(
+        "tianji",
+        &params.case_id,
+        "局部重修：仅重写打回段落，母稿骨架与已通过小节不动",
+        mode,
+    )
+    .map_err(|error| error.to_string())?;
+    {
+        let connection = open_database(&state.database_path).map_err(|error| error.to_string())?;
+        beidou_cases::record_wakeup(&connection, &params.case_id, &wakeup)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(serde_json::json!({
+        "caseId": params.case_id,
+        "action": "RESET",
+        "session": params.session_key,
+        "wakeup": wakeup,
+    }))
 }
 
 /// 读本地定时任务镜像（不联网）：任务台"定时任务"看板数据源。
@@ -723,16 +819,13 @@ async fn gateway_agents_snapshot(
     // 命中即回放（短锁快查，绝不在锁内拉网）。失败结果也缓存 2.5s——
     // 网关真断时两窗看到的都是同一份失败，重试按钮走 force 直通。
     if !force.unwrap_or(false) {
-        let cached = AGENTS_SNAPSHOT_CACHE
-            .lock()
-            .ok()
-            .and_then(|guard| {
-                guard.as_ref().and_then(|cache| {
-                    (cache.key == cache_key
-                        && cache.at.elapsed().as_millis() < AGENTS_SNAPSHOT_MIN_INTERVAL_MS)
-                        .then(|| cache.payload.clone())
-                })
-            });
+        let cached = AGENTS_SNAPSHOT_CACHE.lock().ok().and_then(|guard| {
+            guard.as_ref().and_then(|cache| {
+                (cache.key == cache_key
+                    && cache.at.elapsed().as_millis() < AGENTS_SNAPSHOT_MIN_INTERVAL_MS)
+                    .then(|| cache.payload.clone())
+            })
+        });
         if let Some(payload) = cached {
             return Ok(payload);
         }
@@ -893,7 +986,14 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
     let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏 任务台", true, None::<&str>)?;
-    let tasks_widget = tauri::menu::CheckMenuItem::with_id(app, "tasks-widget", "任务小组件", true, false, None::<&str>)?;
+    let tasks_widget = tauri::menu::CheckMenuItem::with_id(
+        app,
+        "tasks-widget",
+        "任务小组件",
+        true,
+        false,
+        None::<&str>,
+    )?;
     if TASKS_WIDGET_MENU.get().is_none() {
         let _ = TASKS_WIDGET_MENU.set(Mutex::new(Some(tasks_widget.clone())));
     }
@@ -1078,6 +1178,7 @@ pub fn run() {
             session_run_list,
             beidou_direct_launch,
             beidou_append_video,
+            beidou_auto_heal,
             set_tasks_widget_window,
             set_notification_window,
             expand_round_details,
