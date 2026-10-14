@@ -56,6 +56,7 @@ pub enum CaseStage {
     Closed,
 }
 
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 impl CaseStage {
     /// 列号（1..=8）。Closed 无列，返回 None——关单的卡不该占泳道。
     pub fn column(self) -> Option<u8> {
@@ -140,6 +141,7 @@ pub struct StrikeCounter {
     pub remaining: u8,
 }
 
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 impl StrikeCounter {
     pub fn new(gate: &'static str, hits: u8) -> Self {
         let hits = hits.min(STRIKE_LIMIT);
@@ -174,6 +176,7 @@ pub struct CaseArtifacts {
     pub ops_doc_url: Option<String>,
 }
 
+#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 impl CaseArtifacts {
     /// 有没有任何一个可点击入口（全空则前端不渲染云盘区块，不摆死按钮）。
     pub fn any(&self) -> bool {
