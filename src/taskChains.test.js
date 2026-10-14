@@ -13,6 +13,9 @@ import {
   chainHopsFor,
   cleanTaskTitle,
   cleanSessionTitle,
+  conclusionTitleOf,
+  hopTitleOf,
+  isGroupishTitle,
   cronNextRunMs,
   cronScheduleText,
   defuseStaleSnapshotActivity,
@@ -1073,4 +1076,114 @@ test("居中锚点只归真正在跑的那颗星，别被兜底 tone 抢走（Le
   ]);
   // 新判据（current）只认真正在跑的那颗星
   assert.deepEqual(byCurrent.map((hop) => hop.taskId), [currentTaskId]);
+});
+
+// ── 跳标题提炼（Leo 2026-10-14 开工第一项）─────────────────────────────
+// 真机实测 sinan.sqlite3 session_run 70 行：北斗主体是飞书群聊接力（玉衡 46
+// 行、天枢 17 行），星位互派没有 user 消息 → chat.history 取不到派活原话，
+// 20 行 title 为 NULL，fallback 只有群名"北斗矩阵"（64 行同名卡）或飞书
+// open_id（4 行裸 id）。同一群每跳同名，Leo 看到的是一堆同名卡片。
+
+test("isGroupishTitle: 群会话的 fallback（房间名）与飞书 open_id 都不当标题", () => {
+  // 群会话主题 = 房间名：同一群每一跳都拿到同一个值，区分不出是哪一跳
+  assert.equal(isGroupishTitle("北斗矩阵", "agent:yuheng:feishu:group:oc_b15d"), true);
+  assert.equal(isGroupishTitle("任何群名", "agent:yuheng:feishu:group:oc_x"), true);
+  // 裸 open_id：内部标识不该上屏
+  assert.equal(isGroupishTitle("ou_a31eeb382624e5bd502bc339e01c1a36", "agent:tianshu:main"), true);
+  // 非群会话里的一句人话照旧当标题
+  assert.equal(isGroupishTitle("开工", "agent:tianshu:main"), false);
+  assert.equal(isGroupishTitle("为什么那么慢呢", "agent:tianshu:cron:x"), false);
+  // 空值一律不当标题
+  assert.equal(isGroupishTitle("", "agent:tianshu:main"), true);
+  assert.equal(isGroupishTitle(null, ""), true);
+});
+
+test("hopTitleOf: 派活原话 title 优先（群会话里也是）", () => {
+  // Leo 自己在群里说的话就是最好的标题——即使会话是 group 也不该被群名顶掉
+  const run = {
+    title: "没把我的北斗系统改废吧",
+    fallbackTitle: "北斗矩阵",
+    sessionKey: "agent:yuheng:feishu:group:oc_b15d",
+  };
+  assert.equal(hopTitleOf(run), "没把我的北斗系统改废吧");
+});
+
+test("hopTitleOf: title 缺席时从收工结论提炼，群名/open_id 一律不用（Leo 真机 64 行同名卡）", () => {
+  const group = {
+    title: null,
+    fallbackTitle: "北斗矩阵",
+    sessionKey: "agent:tianquan:feishu:group:oc_b15d",
+    terminalSummary: "天权初审完成，**PASS**。\n\n## 审查结论\n五轴全部通过",
+  };
+  // 结论的人话上屏，markdown 记号剥掉，"北斗矩阵"不再当标题
+  assert.equal(hopTitleOf(group), "天权初审完成，PASS。");
+  const openid = {
+    title: null,
+    fallbackTitle: "ou_a31eeb382624e5bd502bc339e01c1a36",
+    sessionKey: "agent:tianshu:main",
+    terminalSummary: "两条决策都收到。",
+  };
+  assert.equal(hopTitleOf(openid), "两条决策都收到。");
+});
+
+test("hopTitleOf: cron 会话的 Automation 前缀剥掉（任务名留给人话映射）", () => {
+  const run = {
+    title: null,
+    fallbackTitle: "Automation: skill-collection-review-kaiyang",
+    sessionKey: "agent:kaiyang:cron:588414a0",
+    terminalSummary: "",
+  };
+  assert.equal(hopTitleOf(run), "skill-collection-review-kaiyang");
+});
+
+test("hopTitleOf: 什么都缺时返回空串，由调用方兜底（不硬凑占位文案）", () => {
+  assert.equal(hopTitleOf({ title: null, fallbackTitle: "北斗矩阵", sessionKey: "agent:x:feishu:group:oc_y" }), "");
+  assert.equal(hopTitleOf(null), "");
+});
+
+test("conclusionTitleOf: 剥 markdown 与内部噪声，取第一个有实质的句子", () => {
+  // 真机 tianshu 行开头就是 tool_call（网关把工具调用写进结论流）
+  assert.equal(conclusionTitleOf("tool_call 实测全过了，四件事全 ✅。"), "实测全过了，四件事全 ✅。");
+  // markdown 标题/加粗/分隔线不该上屏
+  assert.equal(conclusionTitleOf("## 摇光完成｜客厅沙发别贴空墙\n\n**发布运营方案**"), "摇光完成｜客厅沙发别贴空墙");
+  // 空结论不产出
+  assert.equal(conclusionTitleOf(""), "");
+  assert.equal(conclusionTitleOf(null), "");
+  assert.equal(conclusionTitleOf("   \n\n  "), "");
+});
+
+test("conclusionTitleOf: 截断不断在半个括号上（真机'（天权又发来…'）", () => {
+  const s = "（天权又发来一条空内容跨会话消息，同前两条，无新增指令。）\n\n【巡检核验】";
+  // 24 字截断落在括号内：去掉孤括号，保留括号里的话
+  assert.equal(conclusionTitleOf(s, 24), "天权又发来一条空内容跨会话消息");
+  // 默认 40 字（案卡标题列实测 733px、13px 字号单行可容）：整句完整保留
+  assert.equal(conclusionTitleOf(s), "（天权又发来一条空内容跨会话消息，同前两条，无新增指令。）");
+  // 放宽到 30 字：整句含闭括号完整保留
+  assert.equal(conclusionTitleOf(s, 30), "（天权又发来一条空内容跨会话消息，同前两条，无新增指令。）");
+  // 括号本就配平的短句原样保留
+  assert.equal(conclusionTitleOf("配置已修正（image 段指向 Qwen）", 40), "配置已修正（image 段指向 Qwen）");
+});
+
+test("conclusionTitleOf: 超出 limit 才截，短句原样保留", () => {
+  assert.equal(conclusionTitleOf("慢的原因找到了", 24), "慢的原因找到了");
+  assert.equal(conclusionTitleOf("你好 Leo。", 24), "你好 Leo。");
+  // 超长句按 limit 截并加省略号
+  const long = "这是一句特别特别特别特别特别特别特别特别特别长的结论需要截断处理";
+  const out = conclusionTitleOf(long, 20);
+  assert.ok([...out].length <= 21, `截断后不应超长（实际 ${[...out].length}）`);
+  assert.ok(out.endsWith("…"), "超长句应以省略号收尾");
+});
+
+test("sessionRunHop.displayTitle: 与 hopTitleOf 同一条链（胶卷格/悬停卡/案卡不各写一套）", () => {
+  const hop = sessionRunHop({
+    id: 7,
+    agentId: "yuheng",
+    sessionKey: "agent:yuheng:feishu:group:oc_b15d",
+    title: null,
+    fallbackTitle: "北斗矩阵",
+    terminalSummary: "玉衡本环节已全部完成。",
+  });
+  assert.equal(hop.displayTitle, "玉衡本环节已全部完成。");
+  // title 有原话时仍以原话为准
+  assert.equal(sessionRunHop({ title: "开工", sessionKey: "agent:x:main" }).displayTitle, "开工");
 });

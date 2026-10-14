@@ -352,12 +352,150 @@ export function cleanSessionTitle(text) {
   return t.replace(/^\[Replying to:[^\]]*\]\s*/i, "");
 }
 
+/// 会话工作台账的标题提炼（Leo 2026-10-14 开工第一项）。
+/// 真机实测 sinan.sqlite3 session_run 70 行：北斗的主体不是定时任务而是飞书群聊
+/// 接力（玉衡 46 行、天枢 17 行，标题是 Leo 在群里跟北斗扯皮的原话），而星位之
+/// 间互派（sessions_send）没有 user 消息，chat.history 取不到派活原话——20 行
+/// title 为 NULL，fallback 只有群名"北斗矩阵"（64 行同名卡）或飞书 open_id
+/// "ou_a31ee…"（4 行裸 id 泄漏上屏）。于是玉衡 46 次工作、天权初审、摇光发稿，
+/// 标题一栏全写着"北斗矩阵"，Leo 看到的是一堆同名卡片；真正有价值的每跳收工
+/// 结论（"天权初审完成，PASS"、"母稿已落盘 docx"）全塞在 terminal_summary 里。
+/// 所以链路是：title → 群名/displayName 不作标题 → 从结论提炼首句。
+/// 提炼只管显示层：剥 markdown 记号与内部噪声（tool_call/分隔线/加粗/标题符）、
+/// 取第一个有实质的句子、按中文标点断句不切断词，最后截到 limit。
+export function conclusionTitleOf(summary, limit = 40) {
+  let t = String(summary ?? "");
+  // 内部噪声：网关把工具调用事件也写进结论流（真机 tianshu 行开头就是 tool_call）
+  t = t.replace(/^\s*tool_call[:\s]*/i, "");
+  // 代码围栏 / 分隔线 / markdown 标题与加粗记号：结论是人话，不该把排版带上屏
+  t = t.replace(/```[\s\S]*?```/g, " ");
+  t = t.replace(/^\s*-{3,}\s*$/gm, " ");
+  t = t.replace(/^#{1,6}\s*/gm, "");
+  // 行内代码的起止反引号成对删，中间内容留字面（真机 "`deactivating
+  // (stop-sigterm)`" 整条删会把 stop- 和 sigterm 粘成一个词）。
+  t = t.replace(/`([^`]*)`/g, "$1");
+  t = t.replace(/\*\*|__/g, "");
+  // 列表/引用记号
+  t = t.replace(/^\s*[-*+]\s+/gm, "").replace(/^\s*>\s?/gm, "");
+  if (!t.trim()) return "";
+  // 段落优先：markdown 的标题行与正文之间常隔着空行，压成空格后两行会粘成
+  // 一句（真机 "## 摇光完成｜…\n\n**发布运营方案**" 粘成一句）。只取第一段，
+  // 段内空白再压成空格——段界才是"这句话到这儿说完了"的真边界。
+  const firstPara = t.split(/\n\s*\n/)[0];
+  t = firstPara.replace(/[ \t]+/g, " ").trim();
+  if (!t) return "";
+  // 取第一个有实质的句子：中文句末标点优先（不断在半个词上），逗号/分号次之，
+  // 段内换行也当句界。句末标点后可能还挂着收尾括号（"…无新增指令。）"），
+  // 一并吃下——只吃到句号会把闭括号丢了，后面配平就永远少一半。
+  const m = /^[^。！？；\n]+[。！？；]?[）)】」』]*/.exec(t);
+  let head = (m ? m[0] : t).trim();
+  if (!head) head = t;
+  // 句内逗号截断：结论首句常是"天权初审完成，PASS"这类，逗号后还有内容时
+  // 逗号处就是自然的短签落点（超出 limit 才截，短句原样保留）。
+  if ([...head].length > limit) {
+    const comma = head.search(/[，,、]/);
+    if (comma > 4 && comma < limit) head = head.slice(0, comma);
+  }
+  if ([...head].length > limit) head = `${[...head].slice(0, limit).join("")}…`;
+  // 括号配平：截断点落在未闭合的括号里会把"（天权又发来一条空内容跨会话消
+  // 息"这种半边句扔上屏（真机实测）。宁可退到最后一个完整括号对之前，也不
+  // 留一个开括号挂在标题上。
+  head = trimUnbalancedBrackets(head);
+  return head.replace(/[，,、\s]+$/, "").trim();
+}
+
+/// 截断后若左右括号不配平，退回最后一个完整括号对的末尾之前。
+/// 只处理成对的中英文括号；标题很短，线性扫足够。
+/// 连一个完整括号对都没有（"（天权又发来一条空内容跨会话消"）时，把那个
+/// 孤零零的开括号也去掉——半句话配半个括号比去掉括号更难读。
+function trimUnbalancedBrackets(text) {
+  const pairs = { "）": "（", ")": "(", "】": "【", "」": "「", "』": "『" };
+  const opens = new Set(Object.values(pairs));
+  const stack = [];
+  let lastBalancedEnd = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (opens.has(ch)) stack.push(ch);
+    else if (pairs[ch]) {
+      if (stack.length && stack[stack.length - 1] === pairs[ch]) {
+        stack.pop();
+        if (!stack.length) lastBalancedEnd = i;
+      }
+    }
+  }
+  if (!stack.length) return text;
+  if (lastBalancedEnd >= 0) {
+    const cut = text.slice(0, lastBalancedEnd).replace(/[，,、\s]+$/, "");
+    return cut || text.slice(0, lastBalancedEnd + 1);
+  }
+  // 没有完整括号对：把未闭合的开括号本身去掉，保留它后面的话
+  // （"（天权又发来一条…" → "天权又发来一条…"）。括号在开头时 slice(0,0)
+  // 是空串，不能靠空串兜底——那会把整条未配平原文还回去。
+  const firstOpen = [...text].findIndex((ch) => opens.has(ch));
+  if (firstOpen < 0) return text;
+  const after = text.slice(firstOpen + 1).replace(/^[，,、\s]+/, "");
+  const before = text.slice(0, firstOpen).replace(/[，,、\s]+$/, "");
+  return (before + after).trim() || text;
+}
+
+/// 这条 fallback 能不能当标题：群会话的主题（房间名）和飞书 open_id 都不行
+/// ——同一群里每颗星的工作都会落成同名卡（真机 64 行 fallback 全叫"北斗矩
+/// 阵"），ou_ 开头的裸 id 更是直接把内部标识泄漏给 Leo。判据放在这里，消费
+/// 方（案卡标题、星盘副行/悬停卡）共用一条口径。
+/// 群名不能靠枚举（Leo 的群叫什么、以后建什么群都不可知），靠结构判：
+/// 会话主题 subject 是"这个房间叫什么"，同一群里每一跳都拿到同一个值——
+/// 真机实测 64 行 group 会话的 fallback 全部相同，4 行非 group 会话才是
+/// open_id。房间名区分不出是哪一跳，所以群会话的 fallback 一律不当标题。
+/// 注意只管 fallback：Leo 自己在群里说的话（真 title）即使会话是 group 也
+/// 照旧当标题——那句话就是这一跳干了什么，把它和房间名一起扔掉是误伤。
+/// "Automation: <任务名>"（真机 2 行 cron 会话）是这一跳自己的身份，不算
+/// 群名——它要过人话映射（jobDisplayName）再上屏，那件事在 App 层做。
+export function isGroupishTitle(text, sessionKey) {
+  const t = String(text ?? "").trim();
+  if (!t) return true;
+  // 飞书 open_id / chat_id：ou_ / oc_ 前缀 + 长十六进制串
+  if (/^(ou|oc|om)_[0-9a-f]{16,}$/i.test(t)) return true;
+  // 群会话的主题 = 房间名，不是这一跳干了什么
+  if (String(sessionKey ?? "").includes(":group:")) return true;
+  return false;
+}
+
+/// 会话工作跳的上屏标题（案卡/星盘副行/悬停卡/轮次提醒共用一条链）。
+/// 派活原话 title 优先；title 缺席时（星位互派没有 user 消息，chat.history
+/// 取不到派活原话）从该跳收工结论提炼一句人话。群名和飞书 open_id 都不作
+/// 标题——同一群里每颗星的工作都会落成同名卡（Leo 真机 64 行全叫"北斗
+/// 矩阵"），ou_ 裸 id 更不该上屏。
+/// automation 触发的 cron 会话（无 user 派活消息）fallback 是
+/// "Automation: <任务名>"，这里剥壳留任务名——人话映射交给 App 层的
+/// jobDisplayName（它认 skill-collection-review 等固定几族），这里只负责
+/// 不让 "Automation:" 这个英文前缀上屏。
+export function hopTitleOf(run, limit = 40) {
+  // 派活原话（Leo 自己在群里说的话）优先，且只挡裸 open_id——群会话里的
+  // 一句人话就是这一跳干了什么，不能因为会话是 group 就把它和房间名一起扔。
+  // 但真机实测 Leo 的派活原话能长到 200+ 字（一句话里追问五六个问题），
+  // 不截会把案卡撑爆（v5-l2 没有行数钳制）。所以三条分支统一过截断：
+  // 长原话按中文标点断句，找不到句界才硬截。
+  const raw = cleanSessionTitle(run?.title ?? "");
+  if (raw && !/^(ou|oc|om)_[0-9a-f]{16,}$/i.test(raw.trim())) {
+    return conclusionTitleOf(raw, limit);
+  }
+  const fb = cleanSessionTitle(run?.fallbackTitle ?? "");
+  if (fb && !isGroupishTitle(fb, run?.sessionKey)) {
+    return fb.replace(/^Automation:\s*/i, "").trim() || fb;
+  }
+  return conclusionTitleOf(run?.terminalSummary ?? run?.progressSummary ?? "", limit);
+}
+
 export function sessionRunHop(run) {
   return {
     taskId: `session-run:${run.id ?? run.runId ?? run.sessionKey}`,
     agentId: run.agentId,
     status: sessionRunHopStatus(run.status),
     title: cleanSessionTitle(run.title ?? run.fallbackTitle ?? ""),
+    // 上屏标题（案卡/星盘副行/悬停卡/提醒共用）：派活原话 title 缺席时
+    // （星位互派没有 user 消息）从该跳收工结论提炼一句人话，群名与
+    // 飞书 open_id 不作标题（Leo 真机 64 行同名卡"北斗矩阵"）。
+    displayTitle: hopTitleOf(run),
     progressSummary: run.progressSummary ?? null,
     startedAtMs: run.startedAtMs ?? 0,
     endedAtMs: run.endedAtMs ?? null,
@@ -678,7 +816,7 @@ export function detectRoundNotifications(runs, snapshot, config, now = Date.now(
         kind: "fail",
         chatId,
         title: "北斗接力 · 失败",
-        body: `${nameOf(latest.agentId) ? `${nameOf(latest.agentId)} ` : ""}「${(latest.title ?? latest.fallbackTitle ?? "会话工作").slice(0, 40)}」—— ${sessionErrorText(latest.error, true) || "run 失败"}`,
+        body: `${nameOf(latest.agentId) ? `${nameOf(latest.agentId)} ` : ""}「${(hopTitleOf(latest) || "会话工作").slice(0, 40)}」—— ${sessionErrorText(latest.error, true) || "run 失败"}`,
         meta: freshFailures.length > 1 ? `本轮 ${freshFailures.length} 次失败` : "",
         count: freshFailures.length,
       });
@@ -697,7 +835,7 @@ export function detectRoundNotifications(runs, snapshot, config, now = Date.now(
         id: `ok:${chatId}:${episode.lastActivityMs}`,
         kind: "ok",
         title: "北斗接力 · 完成",
-        body: `「${(episode.runs[episode.runs.length - 1].title ?? episode.runs[episode.runs.length - 1].fallbackTitle ?? "会话工作").slice(0, 44)}」全部跳收工`,
+        body: `「${(hopTitleOf(episode.runs[episode.runs.length - 1]) || "会话工作").slice(0, 44)}」全部跳收工`,
         meta: `整轮 ${Math.max(1, Math.round(roundMs / 60_000))} 分 · ${episode.runs.length} 跳`,
       });
       next.rounds[chatId] = { running: 0, doneNotifiedMs: episode.lastActivityMs };
