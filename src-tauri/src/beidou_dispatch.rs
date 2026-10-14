@@ -214,9 +214,19 @@ pub fn build_wakeup_payload(
 /// 案件编号规范形：BM- 后接 3-6 位字母数字。
 /// 刻意不认裸编号——真机 70 行结论里裸兜底会命中 LARK-CLI / QWEN-IMAGE /
 /// SDXL-API 这类工具名，误拢比拢不上更糟。
+/// 前缀大小写都认（bm-2601 是手打时的常态），但 normalize 后统一按 BM- 处理。
 pub fn is_case_id(raw: &str) -> bool {
     let text = raw.trim();
-    if !text.starts_with("BM-") {
+    // 取前 3 字节做前缀比较，但先确认它们是 ASCII——直接 text[..3] 在
+    // 输入以中文开头时会 panic（UTF-8 字符边界不齐）。
+    let mut prefix = String::new();
+    for ch in text.chars().take(3) {
+        if !ch.is_ascii() {
+            return false;
+        }
+        prefix.push(ch);
+    }
+    if !prefix.eq_ignore_ascii_case("BM-") {
         return false;
     }
     let tail = &text[3..];
@@ -358,12 +368,17 @@ mod tests {
     #[test]
     fn case_id_only_accepts_prefixed_form() {
         assert!(is_case_id("BM-2601"));
+        // 小写前缀也认：北斗侧手打 bm-2601 是常态，别因此把案件判成非法
         assert!(is_case_id("bm-2601"));
+        assert!(is_case_id("Bm-2601"));
         assert!(!is_case_id("LARK-CLI"));
         assert!(!is_case_id("QWEN-IMAGE"));
         assert!(!is_case_id("BM-1"));
         assert!(!is_case_id("BM-1234567"));
         assert!(!is_case_id(""));
+        // 中文开头不能 panic（UTF-8 边界不齐），直接判否
+        assert!(!is_case_id("中文案件"));
+        assert!(!is_case_id("案件 BM-2601"));
     }
 
     #[test]

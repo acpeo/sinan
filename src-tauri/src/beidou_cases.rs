@@ -770,7 +770,8 @@ pub fn load_case(
 ) -> rusqlite::Result<Option<CaseLedgerRow>> {
     connection
         .query_row(
-            "SELECT case_id, title, task_type, master_doc_url, master_frozen, second_strikes
+            // 列名是 second_strike（单数）——建表语句里的原名，别写成 strikes
+            "SELECT case_id, title, task_type, master_doc_url, master_frozen, second_strike
              FROM beidou_cases WHERE case_id = ?1",
             rusqlite::params![case_id],
             |row| {
@@ -799,7 +800,7 @@ pub fn load_case(
 pub fn master_doc_status(connection: &Connection, case_id: &str) -> rusqlite::Result<String> {
     let status = connection
         .query_row(
-            "SELECT master_frozen, second_strikes FROM beidou_cases WHERE case_id = ?1",
+            "SELECT master_frozen, second_strike FROM beidou_cases WHERE case_id = ?1",
             rusqlite::params![case_id],
             |row| {
                 let frozen = row.get::<_, i64>(0)? == 1;
@@ -923,8 +924,23 @@ mod dispatch_helper_tests {
             "record_id": "BM-2606", "title": "戊案", "second_strike": 3
         });
         upsert_case_from_master_row(&db, &row).expect("upsert");
-        // 3/3 熔断：母稿状态是 REJECTED 而不是 NONE，追投门槛据此拦住
-        assert_eq!(master_doc_status(&db, "BM-2606").expect("status"), "NONE");
+        // 3/3 熔断：母稿状态是 REJECTED 而不是 NONE——追投门槛据此拦住，
+        // 别让开阳基于一份被打回三次的母稿干活。
+        assert_eq!(
+            master_doc_status(&db, "BM-2606").expect("status"),
+            "REJECTED"
+        );
+    }
+
+    #[test]
+    fn none_when_strikes_below_limit() {
+        let db = memory_db();
+        let row = serde_json::json!({
+            "record_id": "BM-2607", "title": "己案", "second_strike": 2
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        // 2/3 还在改，没到熔断线：状态 NONE，既不是冻结也不是毙掉
+        assert_eq!(master_doc_status(&db, "BM-2607").expect("status"), "NONE");
     }
 
     #[test]
