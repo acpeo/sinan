@@ -303,17 +303,11 @@ fn regex_lite_capture(text: &str, label: &str, _pattern: &str) -> Option<String>
         0
     } else {
         let label_up = label.to_uppercase();
-        let mut at = None;
-        let mut idx = 0usize;
-        for window in chars.windows(label_up.chars().count()) {
-            let joined: String = window.iter().collect();
-            if joined.to_uppercase() == label_up {
-                at = Some(idx);
-                break;
-            }
-            idx += 1;
-        }
-        at? + label_up.chars().count()
+        let label_len = label_up.chars().count();
+        let at = chars
+            .windows(label_len)
+            .position(|window| window.iter().collect::<String>().to_uppercase() == label_up);
+        at? + label_len
     };
     let mut i = start;
     while i < chars.len() {
