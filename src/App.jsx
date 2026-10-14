@@ -37,7 +37,8 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { CockpitView } from "./CockpitView.jsx";
 import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth, stripGestureOwner } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -2595,7 +2596,7 @@ function HopHoverCard({ hop, index, total, others, records, live, nextRun, agent
         r.terminalSummary,
         r.status === "failed" && r.error ? sessionErrorText(r.error, translate) : "",
         r.progressSummary,
-        r.title,
+        r.displayTitle || r.title,
       ].find((text) => typeof text === "string" && text.trim());
       return (found ?? "—").trim().slice(0, 46);
     };
@@ -2774,7 +2775,7 @@ function TaskChainTimeline({ hops, currentTaskId, agentNameMap, translate = true
             </span>
             <span className="task-timeline-name">{name}</span>
             {/* 当前跳的标题/时长就是组头那份，不重复；其余跳是各自的任务名 */}
-            {!current && <span className="task-timeline-title">{hop.title || hop.taskId}</span>}
+            {!current && <span className="task-timeline-title">{hop.displayTitle || hop.title || hop.taskId}</span>}
             {!current && duration ? <small>{duration}</small> : null}
             {/* 成果速览（六案①）：收工跳附该轮中文结论，两行截断，悬浮看全文 */}
             {!current && hop.terminalSummary ? (
@@ -3252,8 +3253,7 @@ function buildTasksFeedModel({ rows, episodes, now }) {
         kind: "对话", at,
         tone: tone === "failed" ? "fail" : "done",
         color: DIAL_TONE[tone === "failed" ? "fail" : "done"],
-        title: cleanSessionTitle(latest.title) || cleanSessionTitle(latest.fallbackTitle)
-          || (summary ? summary.slice(0, 24) : "客星 会话"),
+        title: hopTitleOf(latest) || "客星 会话",
         slug: false, summary: "", cjk: false,
         status: latest.status, error: latest.error, decayed: false,
         mainChat: true,
@@ -3270,8 +3270,7 @@ function buildTasksFeedModel({ rows, episodes, now }) {
       at,
       tone: tone === "failed" ? "fail" : tone === "done" ? "done" : "live",
       color: tone === "failed" ? DIAL_TONE.fail : tone === "done" ? DIAL_TONE.done : DIAL_TONE.live,
-      title: cleanSessionTitle(latest.title) || cleanSessionTitle(latest.fallbackTitle)
-        || (summary ? summary.slice(0, 24) : `${starNameOf(epAgent)} 的派活`),
+      title: hopTitleOf(latest) || `${starNameOf(epAgent)} 的派活`,
       slug: false,
       summary, cjk: cjkRatioOf(summary) > 0.3,
       status: latest.status, error: latest.error, decayed: false,
@@ -3864,7 +3863,7 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
         {dutyCase && (
           <article className="v5card v5case">
             <div className="v5-l1"><i className="v5-dot" style={{ background: DIAL_TONE.live }} /><b style={{ color: DIAL_TONE.live }}>案 · 接力</b><span className="v5-kind v5-kind--run">进行中</span><span className="v5-when">已跑 {formatCompactDuration(dutyCase.startedAtMs, now) || "1 分内"}</span></div>
-            <div className="v5-l2">{dutyCase.hops?.[0]?.title || "接力进行中"}</div>
+            <div className="v5-l2">{dutyCase.hops?.[0]?.displayTitle || dutyCase.hops?.[0]?.title || "接力进行中"}</div>
             <div className="v5-chain">
               {dutyChain.map((seg, i) => (
                 <Fragment key={`${seg.agentId}:${i}`}>
@@ -4331,6 +4330,7 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
 }
 
 const CONSOLE_TABS = [
+  { id: "cockpit", label: "指挥舱" },
   { id: "tasks", label: "任务" },
   { id: "cron", label: "定时" },
   { id: "settings", label: "设置" },
@@ -4349,7 +4349,7 @@ export function App() {
   const [viewMode] = useState(initialWindowMode);
   const [gateways, setGateways] = useState(() => loadGatewayConfig());
   const reloadGateways = useCallback(() => setGateways(loadGatewayConfig()), []);
-  const [consoleTab, setConsoleTab] = useState("tasks");
+  const [consoleTab, setConsoleTab] = useState("cockpit");
   const [consoleStatus, setConsoleStatus] = useState(null);
   const [tasksWidgetEnabled, setTasksWidgetEnabled] = useState(
     () => localStorage.getItem("metrik:tasksWidget") !== "off",
@@ -4627,6 +4627,15 @@ export function App() {
         ))}
       </nav>
       <div className="console-scroll">
+        {consoleTab === "cockpit" && (
+          <CockpitView
+            agentNameMap={buildAgentNameMap(null)}
+            busy={consoleStatus?.busy}
+            onLaunch={() => {}}
+            onAppendVideo={() => {}}
+            onOverrideTitle={() => {}}
+          />
+        )}
         <div className={consoleTab === "settings" ? "console-hidden" : ""}>
           <TasksSection
             gateways={gateways}

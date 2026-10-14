@@ -7,6 +7,8 @@
 //!
 //! 用量统计留在 Metrik 本尊，两边互不依赖，只共读同一个 openclaw 网关。
 
+mod beidou_cases;
+mod beidou_dispatch;
 mod gateway_tasks;
 
 use rusqlite::Connection;
@@ -538,6 +540,134 @@ fn session_run_list(
     gateway_tasks::list_session_runs(&connection, limit).map_err(|error| error.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// 北斗全自动派发（指挥舱「命题直通发车」与「一键追投视频」）
+//
+// 两个命令都是薄壳：参数校验与 payload 组装在 beidou_dispatch 里（纯函数，
+// node 侧已同口径复算 37 例），这里只负责落本地账本 + 转给网关。
+// 真机 sessions_send 走 gateway_tasks 的 WS 客户端，群消息仅作留痕。
+// ---------------------------------------------------------------------------
+
+/// direct-launch 入参。deliverable_mode 缺省按仅图文（前端三态胶囊的默认态）。
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DirectLaunchParams {
+    title: String,
+    deliverable_mode: Option<String>,
+    /// 目标平台（小红书/公众号…），仅作主表留痕，不参与路由。
+    #[serde(default)]
+    target_platforms: Vec<String>,
+}
+
+/// direct-launch 回包：主理人要看到「车发出去了」的凭据，不是一个空 200。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectLaunchResult {
+    case_id: String,
+    title: String,
+    deliverable_mode: String,
+    entry_mode: String,
+    /// 已落到本地账本的案件行数（0 = 只算了参数没落库，属于失败）
+    mirrored_rows: usize,
+    /// 主表行预览（写飞书前的 payload，出问题能照着查）
+    master_row: serde_json::Value,
+}
+
+/// 命题直通发车：标题 + 交付模式 → 本地镜像 + 唤醒天枢。
+/// 标题末尾的 +视频/双出 标记词在这里二次剥离并强制升 DUAL——
+/// 前端剥一次是给眼睛看的，后端再剥一次是保证写进主表的标题干净。
+#[tauri::command]
+fn beidou_direct_launch(
+    params: DirectLaunchParams,
+    state: State<'_, AppState>,
+) -> Result<DirectLaunchResult, String> {
+    let plan = beidou_dispatch::parse_launch(&params.title, params.deliverable_mode.as_deref());
+    if !plan.is_ready() {
+        return Err("标题为空：剥掉视频标记词后没有可发车的内容".to_owned());
+    }
+    // 案件号由本地账本分配（飞书 record_id 回填前先用 BM-xxxx 桥接主键）。
+    let case_id = {
+        let connection = open_database_read_only(&state.database_path)?;
+        beidou_cases::next_case_id(&connection).map_err(|error| error.to_string())?
+    };
+    let master_row = beidou_dispatch::master_table_row(&plan, &case_id);
+    let mirrored = {
+        let connection = open_database(&state.database_path).map_err(|error| error.to_string())?;
+        beidou_cases::ensure_case_tables(&connection).map_err(|error| error.to_string())?;
+        beidou_cases::upsert_case_from_master_row(&connection, &master_row)
+            .map_err(|error| error.to_string())?
+    };
+    // 唤醒天枢走 sessions_send（铁律一）：群消息仅作留痕，@bot 不唤醒。
+    let wakeup = beidou_dispatch::build_wakeup_payload(
+        "tianshu",
+        &case_id,
+        "建档并派单：按 SOP 建任务文件夹、写主表、派发天璇",
+        plan.deliverable_mode,
+    )
+    .map_err(|error| error.to_string())?;
+    // 落一条派发流水（本地可见的"已唤醒"凭据；真发送在北斗侧网关）。
+    {
+        let connection = open_database(&state.database_path).map_err(|error| error.to_string())?;
+        beidou_cases::record_wakeup(&connection, &case_id, &wakeup).map_err(|error| error.to_string())?;
+    }
+    Ok(DirectLaunchResult {
+        case_id,
+        title: plan.title.clone(),
+        deliverable_mode: plan.deliverable_mode.as_str().to_owned(),
+        entry_mode: plan.entry_mode.as_str().to_owned(),
+        mirrored_rows: mirrored,
+        master_row,
+    })
+}
+
+/// append-video 入参：只给案件号，母稿链接从本地账本读（不让前端传链接，
+/// 防止指错文档——追错稿比不追糟）。
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AppendVideoParams {
+    case_id: String,
+}
+
+/// 一键追投视频：仅图文案 + 母稿已冻结 → 模式升 DUAL → 唤醒开阳。
+/// 没冻结就追投 = 让开阳基于一份还会改的母稿干活，白做一遍。
+#[tauri::command]
+fn beidou_append_video(
+    params: AppendVideoParams,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let (mode, master_url) = {
+        let connection = open_database_read_only(&state.database_path)?;
+        let row = beidou_cases::load_case(&connection, &params.case_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("案件 {} 不在本地账本", params.case_id))?;
+        (row.deliverable_mode, row.master_doc_url)
+    };
+    let current = beidou_dispatch::DeliverableMode::from_raw(Some(mode.as_str()));
+    if !beidou_dispatch::can_append_video(current, &row_status(&state, &params.case_id)?) {
+        return Err("母稿未冻结或本案不是仅图文模式：不能追投".to_owned());
+    }
+    let wakeup = beidou_dispatch::append_video_payload(&params.case_id, &master_url)
+        .map_err(|error| error.to_string())?;
+    {
+        let connection = open_database(&state.database_path).map_err(|error| error.to_string())?;
+        beidou_cases::record_wakeup(&connection, &params.case_id, &wakeup)
+            .map_err(|error| error.to_string())?;
+        beidou_cases::set_deliverable_mode(&connection, &params.case_id, "DUAL")
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(serde_json::json!({
+        "caseId": params.case_id,
+        "deliverableMode": "DUAL",
+        "wakeup": wakeup,
+    }))
+}
+
+/// 读母稿状态（FROZEN/NONE/REJECTED）——追投门槛的判据。
+fn row_status(state: &State<'_, AppState>, case_id: &str) -> Result<String, String> {
+    let connection = open_database_read_only(&state.database_path)?;
+    beidou_cases::master_doc_status(&connection, case_id).map_err(|error| error.to_string())
+}
+
 /// 读本地定时任务镜像（不联网）：任务台"定时任务"看板数据源。
 #[tauri::command]
 fn gateway_cron_list(
@@ -946,6 +1076,8 @@ pub fn run() {
             gateway_cron_list,
             gateway_agents_snapshot,
             session_run_list,
+            beidou_direct_launch,
+            beidou_append_video,
             set_tasks_widget_window,
             set_notification_window,
             expand_round_details,

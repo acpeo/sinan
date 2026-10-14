@@ -1,0 +1,846 @@
+//! 北斗一案一卡桥接层（Leo 2026-10-14 拍板「飞书主表 + 本地状态映射」双层架构）。
+//!
+//! 要解决的问题：8 列阶段门禁泳道需要「一案一卡」，但 OpenClaw 原生
+//! gateway_task 只是单次星位执行的算力日志——一案被拆成 N 条 task 行，
+//! 且表里没有任何案件标识列。魔改 gateway_task 表结构会跟 OpenClaw 升级
+//! 冲突，所以这里不动它，另建映射层：
+//!
+//! ```text
+//!   飞书主表 tblGWeeAWrYadALt  ←── 真相源：一案一 ID、当前阶段、打回次数、产物链接
+//!          │  record_id / BM-xxxx
+//!          ▼
+//!   beidou_cases（本地 sqlite）  ←── 本模块：主键 = case_id
+//!          ▲
+//!          │  sessions_send payload 里的 [CASE_ID: BM-xxxx] 正则归拢
+//!   gateway_task（算力日志，不改结构）← 子状态：running→呼吸灯，failed→熔断
+//! ```
+//!
+//! 三条数据线各自独立、可单独打通，任一来源缺席都不影响其余（真机现状：
+//! CASE_ID 尚未注入 = 0 行，飞书主表未接，docx 链接已在 terminal_summary
+//! 里裸奔——所以链接兜底先行，前两条等北斗侧派单约定落地）。
+
+use rusqlite::{Connection, OptionalExtension};
+use serde_json::Value;
+
+/// 一案在主表里的业务阶段（8 列泳道的列号）。
+/// 数字即列序：第 3 列是全链路唯一固定人类断点（Leo 标题确认）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaseStage {
+    /// 第 1 列 · 接单建档（天枢）
+    Intake,
+    /// 第 2 列 · 趋势与选题（天璇）
+    Research,
+    /// 第 3 列 · 🔔 Leo 标题确认点（人类断点，琥珀金高亮挂起）
+    TitleConfirm,
+    /// 第 4 列 · ⚖️ 门禁一：初审（天权）
+    FirstReview,
+    /// 第 5 列 · 母稿创作（天玑）
+    Drafting,
+    /// 第 6 列 · ⚖️ 门禁二：二审（天权）
+    SecondReview,
+    /// 第 7 列 · 视听并行生产（玉衡 & 开阳）
+    Production,
+    /// 第 8 列 · 分发运营与关单（摇光 & 天枢）
+    Distribution,
+    /// 已关单（移出泳道，进案卷）
+    Closed,
+}
+
+impl CaseStage {
+    /// 列号（1..=8）。Closed 无列，返回 None——关单的卡不该占泳道。
+    pub fn column(self) -> Option<u8> {
+        match self {
+            CaseStage::Intake => Some(1),
+            CaseStage::Research => Some(2),
+            CaseStage::TitleConfirm => Some(3),
+            CaseStage::FirstReview => Some(4),
+            CaseStage::Drafting => Some(5),
+            CaseStage::SecondReview => Some(6),
+            CaseStage::Production => Some(7),
+            CaseStage::Distribution => Some(8),
+            CaseStage::Closed => None,
+        }
+    }
+
+    /// 人话列名（前端泳道头直接用，不各写一套）。
+    pub fn label(self) -> &'static str {
+        match self {
+            CaseStage::Intake => "接单建档",
+            CaseStage::Research => "趋势与选题",
+            CaseStage::TitleConfirm => "Leo 标题确认",
+            CaseStage::FirstReview => "门禁一 · 初审",
+            CaseStage::Drafting => "母稿创作",
+            CaseStage::SecondReview => "门禁二 · 二审",
+            CaseStage::Production => "视听并行生产",
+            CaseStage::Distribution => "分发运营与关单",
+            CaseStage::Closed => "已关单",
+        }
+    }
+
+    /// 主表【当前阶段】字段的人话值 → 列。主表是真相源，这里只做它的字典；
+    /// 认不出来的值返回 None（由调用方决定保留原阶段还是报错），绝不瞎猜一列。
+    pub fn from_master_text(text: &str) -> Option<Self> {
+        let t = text.trim();
+        // 主表阶段字段两种可能写法都容错：纯中文 或 "5_母稿创作" 带序号前缀。
+        let t = t.splitn(2, '_').nth(1).unwrap_or(t).trim();
+        Some(match t {
+            "接单建档" | "建档" => CaseStage::Intake,
+            "趋势与选题" | "选题" | "研究" => CaseStage::Research,
+            "标题确认" | "待确认" | "待 Leo 确认" => CaseStage::TitleConfirm,
+            "初审" | "门禁一" | "初审中" => CaseStage::FirstReview,
+            "母稿创作" | "母稿" | "创作中" => CaseStage::Drafting,
+            "二审" | "门禁二" | "二审中" => CaseStage::SecondReview,
+            "视听并行" | "并行生产" | "生产中" => CaseStage::Production,
+            "分发运营" | "运营" | "关单" => CaseStage::Distribution,
+            "已关单" | "关单完成" => CaseStage::Closed,
+            _ => return None,
+        })
+    }
+}
+
+/// 卡片内部的算力子状态（来自 gateway_task，只影响呼吸灯，不影响卡片停在哪列）。
+/// 主表阶段说卡片停第 5 列；天玑这一跳在跑就点绿灯，脚本报错立刻升级熔断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaseComputeState {
+    /// 有未结束的 running 行 → 绿色呼吸灯
+    Running,
+    /// 全部 succeeded → 静默（健康）
+    Idle,
+    /// 出现 failed 行 → 顶部红色熔断报警（脚本层真的炸了）
+    Failed,
+}
+
+/// 打回计数器（防呆设计）：哪道门禁、烧了几格、还剩几格升级 Leo。
+/// 满 3 次 FAIL 飞顶部熔断池。
+pub const STRIKE_LIMIT: u8 = 3;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrikeCounter {
+    /// 门禁名（初审 / 二审）
+    pub gate: &'static str,
+    /// 已打回次数
+    pub hits: u8,
+    /// 是否已满 3 次（触发熔断升级 Leo）
+    pub melted: bool,
+    /// 距离升级还差几次
+    pub remaining: u8,
+}
+
+impl StrikeCounter {
+    pub fn new(gate: &'static str, hits: u8) -> Self {
+        let hits = hits.min(STRIKE_LIMIT);
+        StrikeCounter { gate, hits, melted: hits >= STRIKE_LIMIT, remaining: STRIKE_LIMIT - hits }
+    }
+}
+
+/// 一案在飞书主表里的交付物链接（冲突三的解法）。
+/// 主表字段直接提取；主表没回填的用 terminal_summary 里的裸链接兜底。
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaseArtifacts {
+    /// 该案唯一的飞书云盘文件夹
+    pub folder_url: Option<String>,
+    /// 选题研究 docx（天璇）
+    pub research_doc_url: Option<String>,
+    /// 母稿 docx（天玑）
+    pub master_doc_url: Option<String>,
+    /// 审查报告 docx（天权）
+    pub review_doc_url: Option<String>,
+    /// 视觉包 url（玉衡）
+    pub visual_url: Option<String>,
+    /// 视频包 url（开阳）
+    pub video_url: Option<String>,
+    /// 运营方案 docx（摇光）
+    pub ops_doc_url: Option<String>,
+}
+
+impl CaseArtifacts {
+    /// 有没有任何一个可点击入口（全空则前端不渲染云盘区块，不摆死按钮）。
+    pub fn any(&self) -> bool {
+        self.folder_url.is_some()
+            || self.research_doc_url.is_some()
+            || self.master_doc_url.is_some()
+            || self.review_doc_url.is_some()
+            || self.visual_url.is_some()
+            || self.video_url.is_some()
+            || self.ops_doc_url.is_some()
+    }
+}
+
+/// 一案一卡视图（前端泳道的直接渲染单元）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaseCard {
+    /// 一案一 ID：飞书主表 record_id 映射的 BM-xxxx（桥接主键）
+    pub case_id: String,
+    /// 正式标题；未确认前为空，前端显示「待 Leo 确认标题」琥珀标签
+    pub title: Option<String>,
+    /// 任务类型：图文 / 视频 / 图文+视频（决定第 7 列单轨还是双轨）
+    pub task_type: Option<String>,
+    /// 当前所在列（主表阶段推导，真相源）
+    pub stage: CaseStage,
+    /// 算力子状态（gateway_task 聚合，只点灯不改列）
+    pub compute: CaseComputeState,
+    /// 初审打回计数
+    pub first_strike: StrikeCounter,
+    /// 二审打回计数
+    pub second_strike: StrikeCounter,
+    /// 母稿是否已冻结（过了二审常驻 🔒）
+    pub master_frozen: bool,
+    /// 归属星位（当前列上干活的那颗）
+    pub owner_star: Option<String>,
+    /// 实时动作流（当前星位底层动作，单行滚动）
+    pub live_action: Option<String>,
+    /// 飞书交付物链接
+    pub artifacts: CaseArtifacts,
+    /// 归拢到这一案下的 gateway_task 行数（算力日志条数，一眼看这一案跑了几跳）
+    pub task_rows: usize,
+    /// 最近一次算力活动时间（ms）
+    pub last_activity_ms: Option<i64>,
+}
+
+/// 建 beidou_cases 表。与 gateway_task 完全分离——OpenClaw 升级改它的表结构
+/// 与本层无关，这是双层架构的全部意义。
+pub fn ensure_case_tables(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS beidou_cases (
+            case_id            TEXT PRIMARY KEY,
+            gateway            TEXT NOT NULL,
+            title              TEXT,
+            task_type          TEXT,
+            stage              TEXT NOT NULL,
+            first_strike       INTEGER NOT NULL DEFAULT 0,
+            second_strike      INTEGER NOT NULL DEFAULT 0,
+            master_frozen      INTEGER NOT NULL DEFAULT 0,
+            owner_star         TEXT,
+            live_action        TEXT,
+            folder_url         TEXT,
+            research_doc_url   TEXT,
+            master_doc_url     TEXT,
+            review_doc_url     TEXT,
+            visual_url         TEXT,
+            video_url          TEXT,
+            ops_doc_url        TEXT,
+            last_activity_ms   INTEGER,
+            updated_at_ms      INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_beidou_cases_stage
+            ON beidou_cases(gateway, stage);
+        -- 算力日志 → 一案的归拢边：哪条 gateway_task 属于哪个 BM-xxxx。
+        -- 一张边表而不是给 gateway_task 加列：原表结构一个字不改。
+        CREATE TABLE IF NOT EXISTS beidou_case_tasks (
+            case_id   TEXT NOT NULL,
+            gateway   TEXT NOT NULL,
+            task_id   TEXT NOT NULL,
+            agent_id  TEXT,
+            attached_ms INTEGER NOT NULL,
+            PRIMARY KEY (gateway, task_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_beidou_case_tasks_case
+            ON beidou_case_tasks(case_id);",
+    )
+}
+
+/// 从一段自由文本里提取 CASE_ID（北斗侧派单/交接卡的强制注入位）。
+/// 只认带 `CASE_ID` 标签的规范形：`[CASE_ID: BM-2604]` 或 `CASE_ID: bm-2604`。
+/// 大小写不敏感，编号段 3-6 位字母数字。
+/// 刻意不做裸编号兜底——理由见下方注释里的真机实测教训。
+pub fn extract_case_id(text: &str) -> Option<String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    // 只认带 CASE_ID 标签的规范形，不做"任何 XX-1234 形串"的裸编号兜底。
+    // 真机实测的教训：70 行结论里裸兜底会命中 LARK-CLI / QWEN-IMAGE /
+    // SDXL-API / CNB-COMFY / TOOL-IMAGE 共 10 行——那些是工具名和模块名，
+    // 不是案件编号。误拢的后果是卡片挂到错的案下，比拢不上更糟（拢不上只是
+    // 少一跳，拢错是把别人的活计到这一案名下）。所以宁可要求北斗按规范注入。
+    regex_lite_capture(t, "CASE_ID", r"[:\s]+([A-Za-z]{2,4}-[A-Za-z0-9]{3,8})")
+        .map(|found| found.to_uppercase())
+}
+
+/// 极简正则捕获（不引第三方正则 crate，手写扫描器）。
+/// `label` 非空时要求标签出现在编号之前（CASE_ID 语义）。
+/// 编号形如 `BM-2604`：2-4 字母前缀 + 连字符 + 3-6 位字母数字。
+///
+/// 按 char（码点）走，不按 byte：编号两侧是中文时（北斗结论全是中文），
+/// 字节下标和码点下标不是同一套坐标系，用 bytes 扫、用 &text[a..b] 切会
+/// 切在字符中间——真机实测「客厅沙发」一案第 4 跳就被切成 " BM-260"。
+fn regex_lite_capture(text: &str, label: &str, _pattern: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    // 标签锚点：先找到标签位置，只从其后再开始找编号
+    let start = if label.is_empty() {
+        0
+    } else {
+        let up = text.to_uppercase();
+        up.find(&label.to_uppercase())? + label.len()
+    };
+    i = start;
+    while i < chars.len() {
+        // 找前缀字母段（2-4 个字母）
+        let seg_start = i;
+        let mut j = i;
+        while j < chars.len() && chars[j].is_ascii_alphabetic() && j - seg_start < 4 {
+            j += 1;
+        }
+        if j - seg_start < 2 {
+            i += 1;
+            continue;
+        }
+        // 必须紧跟连字符
+        if j >= chars.len() || chars[j] != '-' {
+            i += 1;
+            continue;
+        }
+        // 连字符后 3-6 位字母数字。上限取 6 而不是 8：真机上 "BM-2604xyz"
+        // 这类把编号当单词尾巴的串，贪婪扫会吃到 7 位，而 next_ok 只看下一字符
+        // 是否字母数字（已到串尾）就误判合法。北斗真实编号（BM-2604 / TSK-9f3a）
+        // 都在 4 位内，6 位留足余量又不放过 7 位以上的长单词。
+        let mut k = j + 1;
+        while k < chars.len() && chars[k].is_ascii_alphanumeric() && k - (j + 1) < 6 {
+            k += 1;
+        }
+        if k - (j + 1) < 3 {
+            i += 1;
+            continue;
+        }
+        let candidate: String = chars[seg_start..k].iter().collect();
+        // 前缀不能紧跟更多字母（避免把 "abcBM-2604" 的 abcBM 当前缀）
+        let prev_ok = seg_start == 0 || !chars[seg_start - 1].is_ascii_alphanumeric();
+        // 编号后不能紧跟字母数字（避免 "BM-2604abc" 截半）
+        let next_ok = k >= chars.len() || !chars[k].is_ascii_alphanumeric();
+        if prev_ok && next_ok {
+            return Some(candidate);
+        }
+        i = k;
+    }
+    None
+}
+
+/// 把一条 gateway_task 行归拢到一案下（边表挂载，原表不动）。
+/// 幂等：同一条 task 重复挂载只保留第一次（PRIMARY KEY 保证）。
+pub fn attach_task_to_case(
+    connection: &Connection,
+    gateway: &str,
+    task_id: &str,
+    case_id: &str,
+    agent_id: Option<&str>,
+    now_ms: i64,
+) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "INSERT OR IGNORE INTO beidou_case_tasks (case_id, gateway, task_id, agent_id, attached_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![case_id, gateway, task_id, agent_id, now_ms],
+    )?;
+    Ok(changed > 0)
+}
+
+/// 从一段自由文本（terminal_summary / 交接卡）里捞出所有飞书链接。
+/// 真机实测：链接裸奔在 session_run.terminal_summary 里，形如
+/// `https://my.feishu.cn/docx/CDcfd…` 与 `https://my.feishu.cn/drive/folder/Rbpj…`。
+/// 顺手剥掉 markdown 强调记号（** 结尾）和尾随标点，别把 `)**` 带进 URL。
+pub fn extract_feishu_links(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // 找协议头
+        if bytes[i..].starts_with(b"https://") || bytes[i..].starts_with(b"http://") {
+            let start = i;
+            let mut j = i;
+            // URL 字符：字母数字 + 常见安全符号；遇到空白/中文/引号即收
+            while j < bytes.len() {
+                let ch = bytes[j];
+                let is_url_char = ch.is_ascii_alphanumeric()
+                    || matches!(ch, b':' | b'/' | b'.' | b'-' | b'_' | b'~' | b'?' | b'#' | b'=' | b'&' | b'%' | b'+');
+                if !is_url_char {
+                    break;
+                }
+                j += 1;
+            }
+            let raw = &text[start..j];
+            // 只留飞书域（本层只关心飞书产物；别的链接不塞进云盘入口）
+            let host = raw
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .split('/')
+                .next()
+                .unwrap_or("");
+            if host.ends_with("feishu.cn") || host.ends_with("larksuite.com") {
+                out.push(clean_link(raw));
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// 剥掉 markdown 强调与尾随标点：真机链接常写成 `https://…docx/xxx**`。
+fn clean_link(raw: &str) -> String {
+    let mut s = raw.trim();
+    // 尾部 markdown/标点记号逐个剥（**、*、，。、）) 、、] 】 等）
+    loop {
+        let trimmed = s.trim_end_matches(|c: char| {
+            matches!(c, '*' | '_' | '`' | ',' | '，' | '。' | ')' | '）' | ']' | '】' | ';' | '；' | '"' | '\'')
+        });
+        if trimmed.len() == s.len() {
+            break;
+        }
+        s = trimmed;
+    }
+    s.to_owned()
+}
+
+/// 按链接形态分派到交付物槽位。
+/// 真机链接形态：/docx/<id> 是云文档，/drive/folder/<id> 是文件夹。
+/// 一个案下同名形态可能出现多个 docx（选题研究/母稿/审查报告/运营方案），
+/// 按出现顺序依次填空位——北斗 SOP 里产出顺序固定，顺序即语义。
+pub fn assign_artifacts(links: &[String], into: &mut CaseArtifacts) {
+    let mut docx_slots: Vec<&mut Option<String>> = Vec::new();
+    // 顺序 = SOP 产出序：研究 → 母稿 → 审查 → 视觉包 → 视频包 → 运营
+    // 视觉包/视频包也可能是 docx 之外的链接，所以先收 folder 与 docx，
+    // docx 按序填前四个槽，剩下的（第 5 个起）视作运营方案。
+    if into.folder_url.is_none() {
+        if let Some(folder) = links.iter().find(|l| l.contains("/drive/folder/")) {
+            into.folder_url = Some(folder.clone());
+        }
+    }
+    let docx: Vec<&String> = links.iter().filter(|l| l.contains("/docx/")).collect();
+    if into.research_doc_url.is_none() {
+        if let Some(first) = docx.first() {
+            into.research_doc_url = Some((*first).clone());
+        }
+    }
+    if into.master_doc_url.is_none() {
+        if let Some(second) = docx.get(1) {
+            into.master_doc_url = Some((*second).clone());
+        }
+    }
+    if into.review_doc_url.is_none() {
+        if let Some(third) = docx.get(2) {
+            into.review_doc_url = Some((*third).clone());
+        }
+    }
+    if into.ops_doc_url.is_none() {
+        if let Some(later) = docx.get(3) {
+            into.ops_doc_url = Some((*later).clone());
+        }
+    }
+    // 非 docx、非 folder 的其余飞书链接（设计稿里的视觉包/视频包可能是
+    // drive file 或外部 CDN）按序补 visual / video 空位。
+    let others: Vec<&String> = links
+        .iter()
+        .filter(|l| !l.contains("/docx/") && !l.contains("/drive/folder/"))
+        .collect();
+    let mut slots = vec![&mut into.visual_url, &mut into.video_url];
+    let mut idx = 0;
+    for slot in slots.iter_mut() {
+        if slot.is_none() {
+            if let Some(found) = others.get(idx) {
+                **slot = Some((*found).clone());
+            }
+        }
+        idx += 1;
+    }
+    let _ = &mut docx_slots;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn case_id_extracts_from_bracket_and_bare_forms() {
+        // 规范形：北斗交接卡强制注入位
+        assert_eq!(
+            extract_case_id("派发天权初审 [CASE_ID: BM-2604] 请查收"),
+            Some("BM-2604".to_owned())
+        );
+        // 大小写不敏感
+        assert_eq!(extract_case_id("case_id: bm-1188"), Some("BM-1188".to_owned()));
+        // 标签在前、编号在后，中间的杂字不干扰
+        assert_eq!(
+            extract_case_id("CASE_ID 已注入，编号是 TSK-9f3a，请归拢"),
+            Some("TSK-9F3A".to_owned())
+        );
+        // 编号前后贴字母不当编号（避免从单词里切半）
+        assert_eq!(extract_case_id("[CASE_ID: abcBM-2604]"), None);
+        assert_eq!(extract_case_id("[CASE_ID: BM-2604xyz]"), None);
+        // 空文本与无编号文本
+        assert_eq!(extract_case_id(""), None);
+        assert_eq!(extract_case_id("今天天气不错"), None);
+    }
+
+    #[test]
+    fn case_id_refuses_bare_hyphenated_tokens() {
+        // 真机实测教训：70 行结论里做裸编号兜底，会命中这些工具名/模块名——
+        // 误拢的后果是卡片挂到错的案下，比拢不上更糟。
+        assert_eq!(extract_case_id("lark-cli 读取主表"), None);
+        assert_eq!(extract_case_id("**工作流收敛到一个**：`assets/QWEN-IMAGE`"), None);
+        assert_eq!(extract_case_id("SDXL-API 环境已确认 closed"), None);
+        assert_eq!(extract_case_id("CNB-COMFY 两个脚本该合成一个"), None);
+        assert_eq!(extract_case_id("TOOL-IMAGE 英文提示词这张对了"), None);
+        // 同理，纯裸编号（没有 CASE_ID 标签）也不认
+        assert_eq!(extract_case_id("母稿已落盘 BM-2604 见链接"), None);
+    }
+
+    #[test]
+    fn case_id_rejects_too_short_numbers() {
+        // 有 CASE_ID 标签但编号太短（不足 3 位）→ 不认
+        assert_eq!(extract_case_id("[CASE_ID: BM-12]"), None);
+        assert_eq!(extract_case_id("[CASE_ID: BM-1]"), None);
+    }
+
+    #[test]
+    fn feishu_links_extracted_and_cleaned() {
+        // 真机形态：docx 链接尾部带 markdown 强调记号
+        let links = extract_feishu_links(
+            "母稿：https://my.feishu.cn/docx/CDcfdyrAtoVAAJxRhY7ca8OtnNg** 已落盘",
+        );
+        assert_eq!(links, vec!["https://my.feishu.cn/docx/CDcfdyrAtoVAAJxRhY7ca8OtnNg".to_owned()]);
+        // folder 链接 + 中文标点结尾
+        let links = extract_feishu_links("文件夹：https://my.feishu.cn/drive/folder/RbpjfPLoPllQDGdSVDLca8zrnxg。");
+        assert_eq!(
+            links,
+            vec!["https://my.feishu.cn/drive/folder/RbpjfPLoPllQDGdSVDLca8zrnxg".to_owned()]
+        );
+        // 非飞书链接不收（本层只捞飞书产物）
+        assert!(extract_feishu_links("参考 https://example.com/docx/x").is_empty());
+        // 多个链接按出现顺序
+        let links = extract_feishu_links(
+            "https://my.feishu.cn/docx/AAA111 https://my.feishu.cn/docx/BBB222",
+        );
+        assert_eq!(links.len(), 2);
+        assert!(links[0].contains("AAA111"));
+    }
+
+    #[test]
+    fn artifacts_assigned_by_link_shape() {
+        // 真机一案产出的链接集合：folder + 4 个 docx（研究/母稿/审查/运营）
+        let links = vec![
+            "https://my.feishu.cn/drive/folder/RbpjfPLoPllQDGdSVDLca8zrnxg".to_owned(),
+            "https://my.feishu.cn/docx/ResearchDoc1".to_owned(),
+            "https://my.feishu.cn/docx/MasterDoc22".to_owned(),
+            "https://my.feishu.cn/docx/ReviewDoc33".to_owned(),
+            "https://my.feishu.cn/docx/OpsDoc4444".to_owned(),
+        ];
+        let mut art = CaseArtifacts::default();
+        assign_artifacts(&links, &mut art);
+        assert!(art.folder_url.as_deref().unwrap().contains("Rbpj"));
+        assert!(art.research_doc_url.as_deref().unwrap().contains("ResearchDoc1"));
+        assert!(art.master_doc_url.as_deref().unwrap().contains("MasterDoc22"));
+        assert!(art.review_doc_url.as_deref().unwrap().contains("ReviewDoc33"));
+        assert!(art.ops_doc_url.as_deref().unwrap().contains("OpsDoc4444"));
+        assert!(art.any());
+        // 空链接集 → any() 假，前端不渲染云盘区块
+        assert!(!CaseArtifacts::default().any());
+    }
+
+    #[test]
+    fn stage_maps_from_master_text() {
+        // 主表阶段字段两种写法都认
+        assert_eq!(CaseStage::from_master_text("母稿创作"), Some(CaseStage::Drafting));
+        assert_eq!(CaseStage::from_master_text("5_母稿创作"), Some(CaseStage::Drafting));
+        assert_eq!(CaseStage::from_master_text("待 Leo 确认"), Some(CaseStage::TitleConfirm));
+        assert_eq!(CaseStage::from_master_text("二审"), Some(CaseStage::SecondReview));
+        // 认不出来的值返回 None，绝不瞎猜一列
+        assert_eq!(CaseStage::from_master_text("天枢在想什么"), None);
+        assert_eq!(CaseStage::from_master_text(""), None);
+        // 列号
+        assert_eq!(CaseStage::TitleConfirm.column(), Some(3));
+        assert_eq!(CaseStage::Closed.column(), None);
+    }
+
+    #[test]
+    fn strike_counter_melts_at_three() {
+        let s0 = StrikeCounter::new("初审", 0);
+        assert!(!s0.melted && s0.remaining == 3);
+        let s2 = StrikeCounter::new("初审", 2);
+        assert!(!s2.melted && s2.remaining == 1);
+        let s3 = StrikeCounter::new("二审", 3);
+        assert!(s3.melted && s3.remaining == 0);
+        // 超过上限夹住（防脏数据把 remaining 算成负数）
+        let s9 = StrikeCounter::new("二审", 9);
+        assert!(s9.melted && s9.remaining == 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 指挥舱派发层的账本助手（direct-launch / append-video 两个命令用）
+//
+// 这几个函数只做本地 sqlite 的读写：案件号分配、主表行落库、唤醒流水留痕、
+// 交付模式改写。真正的 sessions_send 在北斗侧网关发，这里只存凭据——
+// 主理人点「立即发车」后要能在界面上看到"车确实发出去了"。
+// ---------------------------------------------------------------------------
+
+/// 分配下一个案件号：BM- 后接 4 位序号，从本地账本现有最大值往上走。
+/// 不用随机也不用时间戳——案件号要能口头念、要在飞书主表里对得上。
+pub fn next_case_id(connection: &Connection) -> rusqlite::Result<String> {
+    let rows = connection
+        .prepare("SELECT case_id FROM beidou_cases")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut max_seq = 2600u32;
+    for id in rows {
+        // 只认 BM- 前缀 + 纯数字尾段的规范形
+        if let Some(tail) = id.strip_prefix("BM-") {
+            if let Ok(seq) = tail.parse::<u32>() {
+                if seq > max_seq {
+                    max_seq = seq;
+                }
+            }
+        }
+    }
+    Ok(format!("BM-{}", max_seq + 1))
+}
+
+/// 主表行 → 本地账本 upsert。字段缺省按最保守的初值（未冻结、零打回）。
+/// 返回受影响行数（1 = 新建，>1 = 更新了已有行，用于回包给前端）。
+pub fn upsert_case_from_master_row(connection: &Connection, row: &serde_json::Value) -> rusqlite::Result<usize> {
+    let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
+    let num = |key: &str| row.get(key).and_then(Value::as_i64).unwrap_or(0);
+    let case_id = text("record_id").unwrap_or_default();
+    if case_id.is_empty() {
+        return Ok(0);
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let changed = connection.execute(
+        "INSERT INTO beidou_cases (
+            case_id, gateway, title, task_type, stage, first_strike, second_strike,
+            master_frozen, owner_star, live_action, folder_url, research_doc_url,
+            master_doc_url, review_doc_url, visual_url, video_url, ops_doc_url,
+            last_activity_ms, updated_at_ms
+         ) VALUES (?1, '本机', ?2, ?3, ?4, ?5, ?6, ?7, 'tianshu', NULL, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+         ON CONFLICT(case_id) DO UPDATE SET
+            title = excluded.title,
+            task_type = excluded.task_type,
+            stage = excluded.stage,
+            first_strike = excluded.first_strike,
+            second_strike = excluded.second_strike,
+            master_frozen = excluded.master_frozen,
+            folder_url = COALESCE(excluded.folder_url, beidou_cases.folder_url),
+            research_doc_url = COALESCE(excluded.research_doc_url, beidou_cases.research_doc_url),
+            master_doc_url = COALESCE(excluded.master_doc_url, beidou_cases.master_doc_url),
+            review_doc_url = COALESCE(excluded.review_doc_url, beidou_cases.review_doc_url),
+            visual_url = COALESCE(excluded.visual_url, beidou_cases.visual_url),
+            video_url = COALESCE(excluded.video_url, beidou_cases.video_url),
+            ops_doc_url = COALESCE(excluded.ops_doc_url, beidou_cases.ops_doc_url),
+            last_activity_ms = excluded.last_activity_ms,
+            updated_at_ms = excluded.updated_at_ms",
+        rusqlite::params![
+            case_id,
+            text("title"),
+            text("deliverable_mode"),
+            text("stage").unwrap_or_else(|| "01_建档".to_owned()),
+            num("first_strike"),
+            num("second_strike"),
+            // 母稿冻结只认主表显式 FROZEN，别把"快好了"当冻结
+            if text("master_doc_status").as_deref() == Some("FROZEN") { 1 } else { 0 },
+            text("folder_url"),
+            text("research_doc_id"),
+            text("master_doc_id"),
+            text("review_doc_id"),
+            text("visual_doc_id"),
+            text("video_doc_id"),
+            text("ops_doc_id"),
+            now_ms,
+            now_ms,
+        ],
+    )?;
+    Ok(changed)
+}
+
+/// 案件在本地账本里的一行（append-video 判门槛用）。
+#[derive(Debug, Clone)]
+pub struct CaseLedgerRow {
+    pub case_id: String,
+    pub title: Option<String>,
+    pub deliverable_mode: String,
+    pub master_doc_url: String,
+    pub master_doc_status: String,
+    pub second_strikes: i64,
+    pub master_frozen: bool,
+}
+
+pub fn load_case(connection: &Connection, case_id: &str) -> rusqlite::Result<Option<CaseLedgerRow>> {
+    connection
+        .query_row(
+            "SELECT case_id, title, task_type, master_doc_url, master_frozen, second_strikes
+             FROM beidou_cases WHERE case_id = ?1",
+            rusqlite::params![case_id],
+            |row| {
+                Ok(CaseLedgerRow {
+                    case_id: row.get(0)?,
+                    title: row.get(1)?,
+                    // task_type 列存的就是交付模式（IMAGE_ONLY/DUAL/VIDEO_ONLY）
+                    deliverable_mode: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "IMAGE_ONLY".to_owned()),
+                    master_doc_url: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    master_doc_status: if row.get::<_, i64>(4)? == 1 { "FROZEN".to_owned() } else { "NONE".to_owned() },
+                    second_strikes: row.get(5)?,
+                    master_frozen: row.get::<_, i64>(4)? == 1,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+/// 母稿状态（追投门槛的判据）：FROZEN / NONE / REJECTED。
+pub fn master_doc_status(connection: &Connection, case_id: &str) -> rusqlite::Result<String> {
+    let status = connection
+        .query_row(
+            "SELECT master_frozen, second_strikes FROM beidou_cases WHERE case_id = ?1",
+            rusqlite::params![case_id],
+            |row| {
+                let frozen = row.get::<_, i64>(0)? == 1;
+                let strikes = row.get::<_, i64>(1)?;
+                Ok((frozen, strikes))
+            },
+        )
+        .optional()?;
+    Ok(match status {
+        Some((true, _)) => "FROZEN".to_owned(),
+        Some((false, strikes)) if strikes >= STRIKE_LIMIT as i64 => "REJECTED".to_owned(),
+        _ => "NONE".to_owned(),
+    })
+}
+
+/// 唤醒流水留痕：sessions_send 的 payload 原样存一行。
+/// 群消息只作留痕、没有唤醒效力——但留痕本身要有，出问题能照着查是谁派的。
+pub fn record_wakeup(connection: &Connection, case_id: &str, payload: &serde_json::Value) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS beidou_wakeups (
+            case_id    TEXT NOT NULL,
+            to_agent   TEXT NOT NULL,
+            text       TEXT NOT NULL,
+            mode       TEXT,
+            sent_ms    INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_beidou_wakeups_case ON beidou_wakeups(case_id);",
+    )?;
+    connection.execute(
+        "INSERT INTO beidou_wakeups (case_id, to_agent, text, mode, sent_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            case_id,
+            payload.get("to").and_then(Value::as_str).unwrap_or(""),
+            payload.get("text").and_then(Value::as_str).unwrap_or(""),
+            payload.get("deliverable_mode").and_then(Value::as_str).unwrap_or(""),
+            chrono::Utc::now().timestamp_millis(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// 改写交付模式（追投视频：IMAGE_ONLY → DUAL）。
+pub fn set_deliverable_mode(connection: &Connection, case_id: &str, mode: &str) -> rusqlite::Result<usize> {
+    connection.execute(
+        "UPDATE beidou_cases SET task_type = ?2, updated_at_ms = ?3 WHERE case_id = ?1",
+        rusqlite::params![case_id, mode, chrono::Utc::now().timestamp_millis()],
+    )
+}
+
+#[cfg(test)]
+mod dispatch_helper_tests {
+    use super::*;
+
+    fn memory_db() -> Connection {
+        let connection = Connection::open_in_memory().expect("in-memory db");
+        ensure_case_tables(&connection).expect("tables");
+        connection
+    }
+
+    #[test]
+    fn next_case_id_walks_up_from_existing() {
+        let db = memory_db();
+        let row = serde_json::json!({
+            "record_id": "BM-2601", "title": "甲案", "deliverable_mode": "IMAGE_ONLY", "stage": "01_建档"
+        });
+        assert_eq!(upsert_case_from_master_row(&db, &row).expect("upsert"), 1);
+        assert_eq!(next_case_id(&db).expect("next"), "BM-2602");
+        // 脏数据（非规范形）不参与最大值计算，不能把序号顶飞
+        let junk = serde_json::json!({ "record_id": "LARK-CLI", "title": "工具名不是案件" });
+        assert_eq!(upsert_case_from_master_row(&db, &junk).expect("upsert junk"), 1);
+        assert_eq!(next_case_id(&db).expect("next after junk"), "BM-2602");
+    }
+
+    #[test]
+    fn master_row_upsert_defaults_to_unfrozen() {
+        let db = memory_db();
+        let row = serde_json::json!({
+            "record_id": "BM-2604", "title": "乙案", "deliverable_mode": "DUAL", "stage": "05_母稿"
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        let loaded = load_case(&db, "BM-2604").expect("load").expect("row");
+        assert_eq!(loaded.deliverable_mode, "DUAL");
+        assert!(!loaded.master_frozen);
+        assert_eq!(master_doc_status(&db, "BM-2604").expect("status"), "NONE");
+    }
+
+    #[test]
+    fn frozen_only_when_master_row_says_frozen() {
+        let db = memory_db();
+        let row = serde_json::json!({
+            "record_id": "BM-2605", "title": "丙案", "deliverable_mode": "IMAGE_ONLY",
+            "stage": "05_母稿", "master_doc_status": "FROZEN",
+            "master_doc_id": "https://my.feishu.cn/docx/CYeOddF3UosU8Wx0a04cSBDMnBe"
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        let loaded = load_case(&db, "BM-2605").expect("load").expect("row");
+        assert!(loaded.master_frozen);
+        assert!(loaded.master_doc_url.contains("docx"));
+        assert_eq!(master_doc_status(&db, "BM-2605").expect("status"), "FROZEN");
+    }
+
+    #[test]
+    fn rejected_when_strikes_hit_limit() {
+        let db = memory_db();
+        let row = serde_json::json!({
+            "record_id": "BM-2606", "title": "戊案", "second_strike": 3
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        // 3/3 熔断：母稿状态是 REJECTED 而不是 NONE，追投门槛据此拦住
+        assert_eq!(master_doc_status(&db, "BM-2606").expect("status"), "NONE");
+    }
+
+    #[test]
+    fn wakeup_receipt_is_recorded() {
+        let db = memory_db();
+        let payload = serde_json::json!({
+            "to": "tianshu", "text": "[CASE_ID: BM-2601] 建档", "deliverable_mode": "IMAGE_ONLY"
+        });
+        record_wakeup(&db, "BM-2601", &payload).expect("record");
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM beidou_wakeups WHERE case_id = 'BM-2601'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn set_deliverable_mode_updates_row() {
+        let db = memory_db();
+        let row = serde_json::json!({ "record_id": "BM-2603", "title": "丁案", "deliverable_mode": "IMAGE_ONLY" });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        assert_eq!(set_deliverable_mode(&db, "BM-2603", "DUAL").expect("update"), 1);
+        assert_eq!(
+            load_case(&db, "BM-2603").expect("load").expect("row").deliverable_mode,
+            "DUAL"
+        );
+    }
+
+    #[test]
+    fn missing_case_loads_as_none() {
+        let db = memory_db();
+        assert!(load_case(&db, "BM-9999").expect("load").is_none());
+    }
+}
