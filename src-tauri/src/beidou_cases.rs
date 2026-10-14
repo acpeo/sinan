@@ -495,7 +495,7 @@ pub fn assign_artifacts(links: &[String], into: &mut CaseArtifacts) {
     {
         if slot.is_none() {
             if let Some(found) = others.get(idx) {
-                **slot = Some((*found).clone());
+                *slot = Some((*found).clone());
             }
         }
     }
