@@ -294,12 +294,26 @@ pub fn extract_case_id(text: &str) -> Option<String> {
 #[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 fn regex_lite_capture(text: &str, label: &str, _pattern: &str) -> Option<String> {
     let chars: Vec<char> = text.chars().collect();
-    // 标签锚点：先找到标签位置，只从其后再开始找编号
+    // 标签锚点：先找到标签位置，只从其后再开始找编号。
+    // 锚点必须按 char 下标算——find 返回的是字节下标，直接拿去索引 Vec<char>
+    // 会在中文前导段上错位（真机「派发天权初审 [CASE_ID: BM-2604]」字节锚点 15
+    // 落在「派」的第三个字节里，char 锚点应是 7）。ASCII 前缀时两者相等所以
+    // 只有中文输入才炸，测试里第一个中文断言就是这么挂的。
     let start = if label.is_empty() {
         0
     } else {
-        let up = text.to_uppercase();
-        up.find(&label.to_uppercase())? + label.len()
+        let label_up = label.to_uppercase();
+        let mut at = None;
+        let mut idx = 0usize;
+        for window in chars.windows(label_up.chars().count()) {
+            let joined: String = window.iter().collect();
+            if joined.to_uppercase() == label_up {
+                at = Some(idx);
+                break;
+            }
+            idx += 1;
+        }
+        at? + label_up.chars().count()
     };
     let mut i = start;
     while i < chars.len() {

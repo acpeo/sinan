@@ -102,12 +102,15 @@ pub fn strip_dual_marker(raw: &str) -> String {
         }
         // 收尾孤立连接符：剩「标题 -」这种半截符号也要吃掉。
         // 全串都是连接符时 cut=0，结果是空串——调用方按空标题拒绝发车。
+        // cut 要按字符字节长度算：char_indices 给的 index 是该字符的起始字节，
+        // 中文一字 3 字节，index + 1 会切在字符中间直接 panic（真机标题
+        // 「玄关别堆杂物」第二个字就是 3 字节）。
         let trimmed = text.trim_end();
         let cut = trimmed
             .char_indices()
             .rev()
             .find(|(_, ch)| !matches!(ch, ' ' | ',' | '，' | '、' | '/' | '|' | '+' | '-'))
-            .map(|(index, _)| index + 1)
+            .map(|(index, ch)| index + ch.len_utf8())
             .unwrap_or(0);
         text = trimmed[..cut].trim().to_owned();
         if text == before {
