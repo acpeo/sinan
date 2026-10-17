@@ -85,13 +85,20 @@ function StarChip({ star, size = 19 }) {
   );
 }
 
-/* ═══════════ 顶栏：品牌 + 连接呼吸灯 ═══════════
-   页签不在这一层：任务台已经有四大分区导航（指挥舱/任务/定时任务/设置），
-   流水线自己再挂一组"流水线/定时"等于同一个应用两层 tab，
-   顶上挤两排按钮（Leo 2026-10-15："顶部菜单给我砍掉了多少个按钮选项"）。
-   定时任务从任务台的「定时任务」页签进，这里只管流水线自己。 */
-function PipelineTopBar({ conn, onOpenStars }) {
+/* ═══════════ 顶栏：品牌 + 分区页签 + 状态 ═══════════
+   Leo 2026-10-17：设计稿是"一行顶栏"——品牌在左、页签紧随、状态在右。
+   产品原来把页签单独占一行（console-tabs），于是顶上有两排东西、跟设计稿对不上。
+   现在指挥舱把页签收进这一行；别的分区（任务/定时任务/设置）仍走原来的 console 壳。
+
+   两枚状态 chip 只报能算出来的数：
+   · 在途 = 账本里没关单的案数
+   · 待你裁决 = 打回满 3 次的案数（这种案停着等人改判）
+   设计稿里还有「今日接力 12 跳」，产品没有这个数据源（要读 session_run 的当日完成数），
+   算不出来就不摆——宁可少一枚，不摆假数字。 */
+function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] }) {
   const tone = conn.state === "ok" ? "jade" : conn.state === "retry" ? "amber" : "cinnabar";
+  const pending = cases.filter((item) => (item.secondStrikes ?? 0) >= 3).length;
+  const inFlight = cases.filter((item) => !caseClosed(item)).length;
   return (
     <header className="pl-topbar">
       <div className="pl-brand">
@@ -101,7 +108,29 @@ function PipelineTopBar({ conn, onOpenStars }) {
           <div className="cp-meta-text" style={{ fontSize: 10, marginTop: 3 }}>Sinan · Zero-Touch</div>
         </div>
       </div>
+      {tabs?.length ? (
+        <nav className="pl-tabs" role="tablist" aria-label="任务台分区">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === item.id}
+              className={activeTab === item.id ? "is-on" : ""}
+              onClick={() => onTab?.(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      ) : null}
       <div className="pl-topright">
+        {pending > 0 ? (
+          <span className="pl-chip pl-chip--alert" title="打回满 3 次，停着等你改判">
+            <span className="pl-dot pl-dot--cinnabar" />待你裁决 {pending}
+          </span>
+        ) : null}
+        <span className="pl-chip" title="账本里还没关单的案">{inFlight} 在途</span>
         {/* 连接呼吸灯：不是只摆个 ws 地址。绿=握手活着；琥珀=重连中；朱砂=断了 */}
         <button
           type="button"
@@ -679,6 +708,9 @@ export function PipelineView({
   onLaunch,
   onAppendVideo,
   busy = false,
+  tabs = null,
+  activeTab = "cockpit",
+  onTab,
 }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [colFilter, setColFilter] = useState(null);
@@ -738,6 +770,10 @@ export function PipelineView({
       <PipelineTopBar
         conn={{ ...conn, onRetry: onRetryConn }}
         onOpenStars={() => setStarsOpen((v) => !v)}
+        tabs={tabs}
+        activeTab={activeTab}
+        onTab={onTab}
+        cases={cases}
       />
 
       <main className="pl-main" ref={dragRef}>

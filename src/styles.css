@@ -9557,6 +9557,8 @@ button.pl-badge { cursor: pointer; }
   white-space: nowrap;
 }
 .pl-chip--bronze { background: var(--cp-bronze-bg); color: var(--cp-bronze); }
+/* 「待你裁决」：打回满 3 次停着等人改判，用朱砂底（与熔断/打回同一个语义色） */
+.pl-chip--alert { background: var(--cp-cinnabar-bg); color: var(--cp-cinnabar); font-weight: 600; }
 .pl-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ---------- 主体两段 ---------- */
@@ -9992,6 +9994,7 @@ button.pl-badge { cursor: pointer; }
 
 /* ---------- 深色主题覆写 ---------- */
 html[data-theme="dark"] .pl-tabs button:hover { background: rgba(240, 238, 232, 0.08); }
+html[data-theme="dark"] .pl-tabs button.is-on { background: var(--cp-ink); color: #1a1917; }
 html[data-theme="dark"] .pl-colhead:hover { background: var(--cp-slot); }
 html[data-theme="dark"] .pl-node.is-idle { opacity: 0.6; }
 html[data-theme="dark"] .pl-btn:hover { border-color: var(--cp-hair-strong); }

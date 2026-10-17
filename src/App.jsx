@@ -3978,6 +3978,8 @@ function TasksSection({
   launchBusy,
   toast,
   cases,
+  tabs,
+  onTab,
 }) {
   const [state, setState] = useState({ status: "loading", filter: "all", data: null });
   const [busy, setBusy] = useState(false);
@@ -4304,6 +4306,9 @@ function TasksSection({
           launchBusy={launchBusy}
           toast={toast}
           cases={cases}
+          tabs={tabs}
+          activeTab={tab}
+          onTab={onTab}
         />
       ) : null}
 
@@ -4380,6 +4385,9 @@ function PipelineTelemetry({
   launchBusy,
   toast,
   cases,
+  tabs,
+  activeTab,
+  onTab,
 }) {
   // 每颗星的遥测：model 与上下文窗口取快照会话行；"最近一次 run 用时"
   // 取本地 session_run 账本里这颗星最新一条的起止差。两条线互补——
@@ -4457,6 +4465,9 @@ function PipelineTelemetry({
         onLaunch={onLaunch}
         onAppendVideo={onAppendVideo}
         busy={launchBusy}
+        tabs={tabs}
+        activeTab={activeTab}
+        onTab={onTab}
       />
     </>
   );
@@ -4792,46 +4803,52 @@ export function App() {
         tasksWidgetEnabled={tasksWidgetEnabled}
         onToggleTasksWidget={handleToggleTasksWidget}
       />
-      <header className="console-head">
-        <span className="console-brand">司南<small>任务台</small></span>
-        {consoleStatus && (
-          <span
-            className={consoleStatus.live ? "console-live console-live--on" : "console-live"}
-            title={consoleStatus.live ? "自动同步 Gateway 中" : "未在同步：检查网关配置或网络"}
-          >
-            <span className="live-dot" />
-            {consoleStatus.live ? "同步中" : "未同步"}
-          </span>
-        )}
-        {consoleStatus?.lastSync ? (
-          <span className="console-sync-at">
-            更新于 {new Date(consoleStatus.lastSync).toLocaleTimeString("zh-CN", { hour12: false })}
-          </span>
-        ) : null}
-        <button
-          type="button"
-          className="console-refresh"
-          disabled={!!consoleStatus?.busy}
-          onClick={() => consoleStatus?.refresh?.()}
-          title="立即拉取网关任务台账"
-        >
-          <ArrowsClockwise size={13} /> {consoleStatus?.busy ? "拉取中…" : "同步"}
-        </button>
-      </header>
-      <nav className="console-tabs" role="tablist" aria-label="任务台分区">
-        {CONSOLE_TABS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={consoleTab === item.id}
-            className={consoleTab === item.id ? "is-selected" : ""}
-            onClick={() => setConsoleTab(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+      {/* 指挥舱把分区页签收进了自己的顶栏（Leo 2026-10-17：设计稿是一行顶栏），
+          所以这一屏不再重复渲染 console-head / console-tabs，否则顶上两排。 */}
+      {consoleTab === "cockpit" ? null : (
+        <>
+          <header className="console-head">
+            <span className="console-brand">司南<small>任务台</small></span>
+            {consoleStatus && (
+              <span
+                className={consoleStatus.live ? "console-live console-live--on" : "console-live"}
+                title={consoleStatus.live ? "自动同步 Gateway 中" : "未在同步：检查网关配置或网络"}
+              >
+                <span className="live-dot" />
+                {consoleStatus.live ? "同步中" : "未同步"}
+              </span>
+            )}
+            {consoleStatus?.lastSync ? (
+              <span className="console-sync-at">
+                更新于 {new Date(consoleStatus.lastSync).toLocaleTimeString("zh-CN", { hour12: false })}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="console-refresh"
+              disabled={!!consoleStatus?.busy}
+              onClick={() => consoleStatus?.refresh?.()}
+              title="立即拉取网关任务台账"
+            >
+              <ArrowsClockwise size={13} /> {consoleStatus?.busy ? "拉取中…" : "同步"}
+            </button>
+          </header>
+          <nav className="console-tabs" role="tablist" aria-label="任务台分区">
+            {CONSOLE_TABS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={consoleTab === item.id}
+                className={consoleTab === item.id ? "is-selected" : ""}
+                onClick={() => setConsoleTab(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        </>
+      )}
       <div className="console-scroll">
         <div className={consoleTab === "settings" ? "console-hidden" : ""}>
           <TasksSection
@@ -4844,6 +4861,8 @@ export function App() {
             launchBusy={beidouBusy}
             toast={beidouToast}
             cases={beidouCases}
+            tabs={CONSOLE_TABS}
+            onTab={setConsoleTab}
           />
         </div>
         <div className={consoleTab === "settings" ? "console-settings" : "console-settings console-hidden"}>
