@@ -9639,6 +9639,11 @@ button.pl-badge { cursor: pointer; }
   transition: background 0.18s var(--cp-motion), border-color 0.18s var(--cp-motion);
 }
 .pl-colhead:hover { background: var(--cp-slot); }
+/* 列头卡壳：设计稿是「白卡 + 发丝边 + 10px 圆角」，底色与泳道区同为白，
+   靠的是这条边——没有边就只剩一排飘着的字（Leo 2026-10-17 指出）。 */
+.pl-colhead-row .pl-colhead { background: var(--cp-surface); border-color: var(--cp-hair); }
+.pl-colhead-row .pl-colhead:hover { background: var(--cp-surface); border-color: var(--cp-hair-strong); }
+.pl-colhead-row .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: var(--cp-bronze); }
 .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
 .pl-colhead-star { display: flex; align-items: center; gap: 6px; }
 .pl-colhead-star b { font-size: 11.5px; font-weight: 600; }
@@ -9699,9 +9704,11 @@ button.pl-badge { cursor: pointer; }
    （天权两度门禁那一列的分界留在下面单独一条，那是链路分界，不是斑马纹。） */
 /* 格子底色一律无（设计稿：泳道是白卡 + 发丝线）。这条把上面可能残留的
    列底统一压平，别再出现「某一列莫名一片灰」。 */
-.pl-lane-grid > :nth-child(2n+1),
-.pl-lane-grid > :nth-child(2n),
-.pl-lane-grid > :nth-child(6) { background: none; }
+/* 只针对泳道行：列头行本身也是 .pl-lane-grid，写宽了会把列头卡片的底一起压没
+   （2026-10-17 踩过：截图里列头变成"飘着的字"）。 */
+.pl-lane-row > :nth-child(2n+1),
+.pl-lane-row > :nth-child(2n),
+.pl-lane-row > :nth-child(6) { background: none; }
 /* 天权两度门禁那一列只提亮分隔线，**不刷列底**（设计稿写死 background:none，
    边界靠 ::before 那条更亮的发丝线，不靠底色）。 */
 
