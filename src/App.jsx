@@ -40,7 +40,6 @@ import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, load
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
 import { CaseArchive } from "./CaseArchive.jsx";
-import { DEMO_CASES, DEMO_TELEMETRY, DEMO_LIVE_ACTION, demoLiveStars } from "./demoCases.js";
 import { ledgerRowsToCases, buildLiveActionMap, wakeupFailureText } from "./cockpit.js";
 import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth, stripGestureOwner } from "./windowGeometry";
 import {
@@ -3984,7 +3983,6 @@ function TasksSection({
   onTab,
   onOpenCase,
   focusCaseId,
-  isDemo,
 }) {
   const [state, setState] = useState({ status: "loading", filter: "all", data: null });
   const [busy, setBusy] = useState(false);
@@ -4288,7 +4286,7 @@ function TasksSection({
   const showCases = tab === "cases";
   return (
     <main className="tasks-section tasks-section--flush">
-      {showCases ? <CaseArchive cases={cases ?? []} isDemo={isDemo} onOpenCase={onOpenCase} /> : null}
+      {showCases ? <CaseArchive cases={cases ?? []} onOpenCase={onOpenCase} /> : null}
       {showTasks && feedback && (
         <p className={feedback.tone === "error" ? "tasks-feedback tasks-feedback--error" : "tasks-feedback tasks-feedback--success"}>
           {feedback.message}
@@ -4317,7 +4315,6 @@ function TasksSection({
           activeTab={tab}
           onTab={onTab}
           focusCaseId={focusCaseId}
-          isDemo={isDemo}
         />
       ) : null}
 
@@ -4398,7 +4395,6 @@ function PipelineTelemetry({
   activeTab,
   onTab,
   focusCaseId,
-  isDemo,
 }) {
   // 每颗星的遥测：model 与上下文窗口取快照会话行；"最近一次 run 用时"
   // 取本地 session_run 账本里这颗星最新一条的起止差。两条线互补——
@@ -4444,13 +4440,6 @@ function PipelineTelemetry({
   // 取不到就空着，strip 有「执行中」兜底，不编一句漂亮话。
   const liveAction = useMemo(() => buildLiveActionMap(cases), [cases]);
 
-  // 演示模式（账本 0 行）：遥测/在跑集合/状态条文案全部走设计稿那套演示值，
-  // 连接灯照实显示（网关通就是通，不因为演示而假装断开）。
-  const demoLive = useMemo(() => demoLiveStars(cases), [cases]);
-  const outTelemetry = isDemo ? DEMO_TELEMETRY : telemetry;
-  const outLiveStars = isDemo ? demoLive : (liveActiveIds ?? new Set());
-  const outLiveAction = isDemo ? DEMO_LIVE_ACTION : liveAction;
-
   // 连接灯三态：live = 这一拍快照真下来了；busy = 正在拉；
   // 都不是 = 断了。title 里给一句能照着做的话，别只写"未连接"。
   const conn = useMemo(() => {
@@ -4475,9 +4464,9 @@ function PipelineTelemetry({
       ) : null}
       <PipelineView
         cases={cases}
-        starTelemetry={outTelemetry}
-        liveStars={outLiveStars}
-        liveAction={outLiveAction}
+        starTelemetry={telemetry}
+        liveStars={liveActiveIds ?? new Set()}
+        liveAction={liveAction}
         conn={conn}
         onRetryConn={onRefresh}
         onLaunch={onLaunch}
@@ -4487,7 +4476,6 @@ function PipelineTelemetry({
         activeTab={activeTab}
         onTab={onTab}
         focusCaseId={focusCaseId}
-        isDemo={isDemo}
       />
     </>
   );
@@ -4798,10 +4786,6 @@ export function App() {
   // version 只作"刚发过车，重读一遍"的信号。
   const [beidouCasesVersion, setBeidouCasesVersion] = useState(0);
   const [beidouCases, setBeidouCases] = useState([]);
-  // 演示模式：账本还没有真实案件时，按设计稿那四案渲染（页面上明标「演示数据」）。
-  // 真实案件一到（哪怕一条）整体让位，绝不混排。
-  const beidouIsDemo = beidouCases.length === 0;
-  const beidouDemoCases = beidouIsDemo ? DEMO_CASES : beidouCases;
   useEffect(() => {
     let cancelled = false;
     loadBeidouCases().then((result) => {
@@ -4888,8 +4872,7 @@ export function App() {
             onAppendVideo={handleBeidouAppendVideo}
             launchBusy={beidouBusy}
             toast={beidouToast}
-            cases={beidouDemoCases}
-            isDemo={beidouIsDemo}
+            cases={beidouCases}
             tabs={CONSOLE_TABS}
             onTab={setConsoleTab}
             focusCaseId={focusCaseId}

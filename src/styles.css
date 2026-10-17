@@ -9573,14 +9573,6 @@ button.pl-badge { cursor: pointer; }
   white-space: nowrap;
 }
 .pl-chip--bronze { background: var(--cp-bronze-bg); color: var(--cp-bronze); }
-/* 「演示数据」徽标：账本为空时界面按设计稿四案渲染，必须明标，
-   别让人把演示案当成真跑出来的（数据诚实规则）。 */
-.pl-chip--demo {
-  background: var(--cp-bronze-bg);
-  color: var(--cp-bronze);
-  border-color: color-mix(in srgb, var(--cp-bronze) 35%, transparent);
-  font-weight: 650;
-}
 /* 「待你裁决」：打回满 3 次停着等人改判，用朱砂底（与熔断/打回同一个语义色） */
 .pl-chip--alert { background: var(--cp-cinnabar-bg); color: var(--cp-cinnabar); font-weight: 600; }
 .pl-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -95,7 +95,7 @@ function StarChip({ star, size = 19 }) {
    · 待你裁决 = 打回满 3 次的案数（这种案停着等人改判）
    设计稿里还有「今日接力 12 跳」，产品没有这个数据源（要读 session_run 的当日完成数），
    算不出来就不摆——宁可少一枚，不摆假数字。 */
-function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [], isDemo = false }) {
+function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] }) {
   const tone = conn.state === "ok" ? "jade" : conn.state === "retry" ? "amber" : "cinnabar";
   const pending = cases.filter((item) => (item.secondStrikes ?? 0) >= 3).length;
   const inFlight = cases.filter((item) => !caseClosed(item)).length;
@@ -127,14 +127,6 @@ function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [],
         </nav>
       ) : null}
       <div className="pl-topright">
-        {isDemo ? (
-          <span
-            className="pl-chip pl-chip--demo"
-            title="账本还没有真实案件：这四案是设计稿的演示数据。发一车落账后，自动切回真实账本。"
-          >
-            演示数据
-          </span>
-        ) : null}
         {pending > 0 ? (
           <span className="pl-chip pl-chip--alert" title="打回满 3 次，停着等你改判">
             <span className="pl-dot pl-dot--cinnabar" />待你裁决 {pending}
@@ -737,7 +729,6 @@ export function PipelineView({
   activeTab = "cockpit",
   onTab,
   focusCaseId = null,
-  isDemo = false,
 }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [colFilter, setColFilter] = useState(null);
@@ -808,7 +799,6 @@ export function PipelineView({
         activeTab={activeTab}
         onTab={onTab}
         cases={cases}
-        isDemo={isDemo}
       />
 
       <main className="pl-main" ref={dragRef}>
