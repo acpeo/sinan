@@ -97,7 +97,7 @@ function PipelineTopBar({ conn, onOpenStars }) {
       <div className="pl-brand">
         <StarChip star="tianshu" size={26} />
         <div>
-          <div className="cp-title" style={{ fontSize: 13 }}>北斗 · 星位流水线</div>
+          <div className="cp-title" style={{ fontSize: 13 }}>司南 · 北斗矩阵</div>
           <div className="cp-meta-text" style={{ fontSize: 10, marginTop: 3 }}>Sinan · Zero-Touch</div>
         </div>
       </div>
@@ -190,7 +190,7 @@ function LaunchBar({ onLaunch, busy }) {
 }
 
 /* ═══════════ 星位流水线：一行一案 ═══════════ */
-function LaneGrid({ cases, activeId, onPick, liveStars, colFilter, onColFilter, starTelemetry }) {
+function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, onColFilter, starTelemetry }) {
   const hostRef = useRef(null);
   const list = useMemo(() => {
     if (!colFilter) return cases;
@@ -406,19 +406,29 @@ function LaneGrid({ cases, activeId, onPick, liveStars, colFilter, onColFilter, 
           </div>
         );
       })}
-      {list.length === 0 ? <p className="pl-lane-empty">没有符合条件的案件。</p> : null}
+      {/* 空态分两种，别用同一句话糊过去：
+          ① 账本本来就是空的 → 这里不吭声，让深潜舱那段「在上面输入标题点立即发车」
+             一处说清（原来两块各说一句，一屏两个空态，还互相矛盾）；
+          ② 账本有案但被列筛掉了 → 才说「没有符合条件的案件」。 */}
+      {list.length === 0 && (totalCount ?? cases.length) > 0 ? (
+        <p className="pl-lane-empty">没有符合条件的案件。</p>
+      ) : null}
     </div>
   );
 }
 
 /* ═══════════ 单案深潜舱 ═══════════ */
-function Inspector({ caseItem, liveStars, liveAction }) {
+function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
   if (!caseItem) {
+    // 两种「没内容」不是一回事：账本真空 vs 有案但没选中。
+    // 之前一律写「本地账本还没有案件」—— 有案没选中时这句话就是假话。
     return (
       <div className="pl-insp-empty">
-        <p className="pl-insp-empty-title">本地账本还没有案件</p>
+        <p className="pl-insp-empty-title">{hasCases ? "还没选中案件" : "本地账本还没有案件"}</p>
         <p className="pl-insp-empty-body">
-          在上面输入标题点「立即发车」，第一案会建档并唤醒天枢；之后每一跳的状态都落在这一页。
+          {hasCases
+            ? "点上面泳道里的任意一行（或点案名列），它的五轴、打回次数和产出链接都摊在这里。"
+            : "在上面输入标题点「立即发车」，第一案会建档并唤醒天枢；之后每一跳的状态都落在这一页。"}
         </p>
       </div>
     );
@@ -672,7 +682,10 @@ export function PipelineView({
 }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [colFilter, setColFilter] = useState(null);
-  const [laneHeight, setLaneHeight] = useState(0.46);
+  // 泳道区高度：null = 按内容（0 案时就是一排列头高，不留死空间）；
+  // 拖过之后存**像素**。以前存比例（0.46），等于把「拖那一刻的主区高度」记死，
+  // 换窗口尺寸就多出/少掉一截 —— 0 案的机器上就变成一大片白。
+  const [lanePx, setLanePx] = useState(null);
   const [starsOpen, setStarsOpen] = useState(false);
   const lanesRef = useRef(null);
   const dragRef = useRef(null);
@@ -687,8 +700,23 @@ export function PipelineView({
     const total = host.getBoundingClientRect().height;
     if (total <= 0) return;
     const next = Math.max(140, Math.min(total - 220, event.clientY - host.getBoundingClientRect().top));
-    setLaneHeight(next / total);
+    setLanePx(next);
   }, []);
+
+  // 换窗口尺寸后把记住的像素夹回可用范围，别把深潜舱挤没。
+  useEffect(() => {
+    if (lanePx == null) return undefined;
+    const clamp = () => {
+      const host = dragRef.current;
+      if (!host) return;
+      const total = host.getBoundingClientRect().height;
+      if (total <= 0) return;
+      const max = Math.max(140, total - 220);
+      setLanePx((px) => (px != null && px > max ? max : px));
+    };
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, [lanePx]);
   useEffect(() => {
     const stop = () => {
       window.removeEventListener("mousemove", onDragMove);
@@ -714,10 +742,22 @@ export function PipelineView({
 
       <main className="pl-main" ref={dragRef}>
           <LaunchBar onLaunch={onLaunch} busy={busy} />
-          <section className="pl-lane-section" style={{ flex: `0 0 ${(laneHeight * 100).toFixed(2)}%` }}>
+          <section
+            className="pl-lane-section"
+            style={lanePx == null ? undefined : { flex: `0 0 ${lanePx}px` }}
+          >
             <div className="pl-section-head">
-              <h1>🌌 星位流水线</h1>
+              <h1>星位流水线</h1>
               <span className="pl-section-sub">一行一案 · 横看案件进度 · 竖看星位队列</span>
+              {/* 四态图例：设计稿 mock20 段头就有，落地时漏了 —— 于是「格子颜色
+                  是什么意思」只能靠猜。四态与泳道节点一一对应：
+                  投递中=琥珀虚线 / 执行中=琥珀底 / 已交付=jade 底 / 未开始=白底。 */}
+              <span className="pl-legend" aria-label="动线图例">
+                <span><i className="lg lg--flow" />投递中</span>
+                <span><i className="lg lg--run" />执行中</span>
+                <span><i className="lg lg--done" />已交付</span>
+                <span><i className="lg lg--idle" />未开始</span>
+              </span>
               <span className="pl-chip" style={{ marginLeft: "auto" }}>
                 {colFilter ? `筛选：${starNameOf(colFilter)} 列 · 再点一次取消` : "列头可点 · 点星位列筛选"}
               </span>
@@ -725,6 +765,7 @@ export function PipelineView({
             <div className="pl-lane-scroll" ref={lanesRef}>
               <LaneGrid
                 cases={withActions}
+                totalCount={cases.length}
                 activeId={active?.caseId}
                 onPick={setActiveId}
                 liveStars={liveStars}
@@ -755,7 +796,12 @@ export function PipelineView({
           </button>
 
           <section className="pl-insp">
-            <Inspector caseItem={activeWithActions} liveStars={liveStars} liveAction={liveAction} />
+            <Inspector
+              caseItem={activeWithActions}
+              liveStars={liveStars}
+              liveAction={liveAction}
+              hasCases={cases.length > 0}
+            />
           </section>
       </main>
 

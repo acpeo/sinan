@@ -9564,9 +9564,19 @@ button.pl-badge { cursor: pointer; }
 .pl-section-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 14px 20px 10px; }
 .pl-section-head h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
 .pl-section-sub { font-size: 11px; color: var(--cp-meta); }
+/* 段头四态图例 —— 设计稿 mock20 有、落地时漏了；四态与泳道节点一一对应：
+   投递中=琥珀虚线 / 执行中=琥珀底 / 已交付=jade 底 / 未开始=白底。 */
+.pl-legend { display: inline-flex; align-items: center; gap: 10px; font-size: 10px; color: var(--cp-meta); }
+.pl-legend .lg { display: inline-block; width: 16px; height: 8px; margin-right: 4px; vertical-align: -1px; border-radius: 3px; }
+.pl-legend .lg--flow { background: repeating-linear-gradient(90deg, var(--cp-amber) 0 4px, transparent 4px 7px); }
+.pl-legend .lg--run { background: var(--cp-amber-bg); border: 1px solid color-mix(in srgb, var(--cp-amber) 55%, transparent); }
+.pl-legend .lg--done { background: var(--cp-jade-bg); border: 1px solid color-mix(in srgb, var(--cp-jade) 26%, transparent); }
+.pl-legend .lg--idle { background: var(--cp-surface); border: 1px solid var(--cp-hair); }
 
 /* ---------- 泳道 ---------- */
-.pl-lane-section { display: flex; flex-direction: column; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--cp-hair); background: var(--cp-surface); }
+/* 泳道段：按内容高度（0 案时只占一排列头高），案件多了最多吃 62%，
+   再多的行在 .pl-lane-scroll 里滚。拖过分割条后由内联 flex-basis 接管（像素）。 */
+.pl-lane-section { display: flex; flex-direction: column; flex: 0 1 auto; max-height: 62%; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--cp-hair); background: var(--cp-surface); }
 .pl-lane-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 20px 8px; }
 .pl-lanes { min-width: 760px; }
 
@@ -9679,13 +9689,18 @@ button.pl-badge { cursor: pointer; }
 /* 天权两度门禁那一列是链路分界，分隔线提亮一档（第 6 个 grid 子元素：
    第 1 个是案名列，星位列从第 2 个起数，审稿中=第 6 个子元素）。 */
 .pl-lane-grid > :nth-child(6)::before { background: var(--cp-hair-active); }
-/* 斑马纹：奇偶星位列交替一淡底。nth-child(2n) 落在天璇/天玑/并行/摇光四列
-   （子元素 2 是天枢，4 是天璇，6 是天玑…）。色差刻意压在 2% 以内——
-   要的是"这一列有边界"，不是七条彩色带。 */
-.pl-lane-grid > :nth-child(2n+1) { background: color-mix(in srgb, var(--cp-ink) 2.5%, transparent); }
-.pl-lane-grid > :nth-child(2n) { background: color-mix(in srgb, var(--cp-ink) 1%, transparent); }
-/* 天权两度门禁那一列是链路分界，斑马纹让位给提亮分隔线 */
-.pl-lane-grid > :nth-child(6) { background: color-mix(in srgb, var(--cp-bronze) 4%, transparent); }
+/* 斑马纹：**已按设计稿去掉**。设计稿的泳道格子是白卡 + 发丝线，没有隔列刷底；
+   而且这条规则是 `.pl-lane-grid > :nth-child(...)`，列头那一行的第 1 个子元素
+   是「案件 / CASE」，也跟着被刷成一块灰底 —— 0 案时看起来像个坏掉的输入框。
+   列与列的边界由 .pl-colhead 的卡壳和发丝线负责，不靠底色。
+   （天权两度门禁那一列的分界留在下面单独一条，那是链路分界，不是斑马纹。） */
+/* 格子底色一律无（设计稿：泳道是白卡 + 发丝线）。这条把上面可能残留的
+   列底统一压平，别再出现「某一列莫名一片灰」。 */
+.pl-lane-grid > :nth-child(2n+1),
+.pl-lane-grid > :nth-child(2n),
+.pl-lane-grid > :nth-child(6) { background: none; }
+/* 天权两度门禁那一列只提亮分隔线，**不刷列底**（设计稿写死 background:none，
+   边界靠 ::before 那条更亮的发丝线，不靠底色）。 */
 
 /* 投递线：跨在格子左衬的中点，上一格交付 → 这一格接手的那一段路。
    只有一种态："正在送"的跑马灯（Leo 2026-10-15 第五辈：agent 之间任务流转时
