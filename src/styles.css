@@ -9472,6 +9472,20 @@ html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
   -webkit-backdrop-filter: blur(12px);
 }
 .pl-brand { display: flex; align-items: center; gap: 10px; flex: none; }
+.pl-logo {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: #1d2333;
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  flex: none;
+}
+.pl-brand-name { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+.pl-brand-sub { font-size: 10px; color: var(--cp-meta); margin-top: 2px; }
 .pl-tabs { display: flex; align-items: center; gap: 4px; flex: none; }
 .pl-tabs button {
   height: 28px;
@@ -9549,10 +9563,11 @@ button.pl-badge { cursor: pointer; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 7px;
+  padding: 3px 9px;
   border-radius: 999px;
   background: var(--cp-slot);
-  font-size: 10px;
+  border: 1px solid var(--cp-hair);
+  font-size: 10.5px;
   font-weight: 550;
   color: var(--cp-body);
   white-space: nowrap;
@@ -9565,7 +9580,7 @@ button.pl-badge { cursor: pointer; }
 /* ---------- 主体两段 ---------- */
 .pl-main { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .pl-section-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 14px 20px 10px; }
-.pl-section-head h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
+.pl-section-head h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.02em; }
 .pl-section-sub { font-size: 11px; color: var(--cp-meta); }
 /* 段头四态图例 —— 设计稿 mock20 有、落地时漏了；四态与泳道节点一一对应：
    投递中=琥珀虚线 / 执行中=琥珀底 / 已交付=jade 底 / 未开始=白底。 */
@@ -9655,6 +9670,13 @@ button.pl-badge { cursor: pointer; }
 .pl-lane-row { padding: 4px 0; border-bottom: 1px dashed var(--cp-hair); }
 .pl-lane-row:has(.pl-loop) { padding-bottom: 34px; }
 .pl-lane-row.is-on { background: color-mix(in srgb, var(--cp-bronze) 4%, transparent); }
+/* 账本为空时的占位行：虚线方块，保持"矩阵"的骨架，不摆假数据 */
+/* 空行只保留行高与发丝分隔线：画虚线方块太吵（2026-10-17 试过一版，满天格子），
+   保持"矩阵还在、只是还没案子"的骨架即可。 */
+.pl-lane-row--ghost { pointer-events: none; }
+.pl-lane-ghost-id { margin: 4px 8px; }
+.pl-lane-row--ghost .pl-cell::before { display: none; }   /* 空格子里的列分隔线会变成一根孤零零的竖线 */
+.pl-node.is-ghost { border-color: transparent; background: transparent; min-height: 46px; }
 .pl-lane-id {
   display: flex;
   align-items: center;

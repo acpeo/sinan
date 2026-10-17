@@ -102,10 +102,12 @@ function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] 
   return (
     <header className="pl-topbar">
       <div className="pl-brand">
-        <StarChip star="tianshu" size={26} />
+        {/* 品牌标：设计稿是深色方角块 + 白色星芒，不是一个彩色 emoji 圆点
+            （Leo 2026-10-17：emoji 直接把"标题"整行拉低了一个档次）。 */}
+        <span className="pl-logo" aria-hidden="true">✦</span>
         <div>
-          <div className="cp-title" style={{ fontSize: 13 }}>司南 · 北斗矩阵</div>
-          <div className="cp-meta-text" style={{ fontSize: 10, marginTop: 3 }}>Sinan · Zero-Touch</div>
+          <div className="pl-brand-name">司南 · 北斗矩阵</div>
+          <div className="pl-brand-sub">Sinan · Zero-Touch</div>
         </div>
       </div>
       {tabs?.length ? (
@@ -439,6 +441,21 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
           ① 账本本来就是空的 → 这里不吭声，让深潜舱那段「在上面输入标题点立即发车」
              一处说清（原来两块各说一句，一屏两个空态，还互相矛盾）；
           ② 账本有案但被列筛掉了 → 才说「没有符合条件的案件」。 */}
+      {/* 账本真空：摆几行虚线占位，让矩阵看上去还是"矩阵"，
+          而不是一排列头下面拖一片白（Leo 2026-10-17：排版散）。 */}
+      {list.length === 0 && (totalCount ?? cases.length) === 0
+        ? Array.from({ length: 4 }).map((_, rowIndex) => (
+            <div className="pl-lane-grid pl-lane-row pl-lane-row--ghost" key={`ghost-${rowIndex}`} aria-hidden="true">
+              <div className="pl-lane-ghost-id" />
+              {STAGE_COLS.map((col) => (
+                <div className="pl-cell" key={col.key}>
+                  <div className="pl-node is-ghost" />
+                </div>
+              ))}
+            </div>
+          ))
+        : null}
+
       {list.length === 0 && (totalCount ?? cases.length) > 0 ? (
         <p className="pl-lane-empty">没有符合条件的案件。</p>
       ) : null}
