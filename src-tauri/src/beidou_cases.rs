@@ -1069,9 +1069,11 @@ mod dispatch_helper_tests {
             });
             upsert_case_from_master_row(&db, &row).expect("upsert");
         }
-        // 2601 后写但活动更晚 → 它排第一（倒序），别按插入顺序糊弄
+        // 2601 后写但活动更晚 → 它排第一（倒序），别按插入顺序糊弄。
+        // 注意别写成小数字：另一行的 last_activity_ms 是 upsert 时的真实毫秒
+        // （1.7e12 量级），写成 2 反而把自己排到最后，用例就反了。
         db.execute(
-            "UPDATE beidou_cases SET last_activity_ms = 2 WHERE case_id = 'BM-2601'",
+            "UPDATE beidou_cases SET last_activity_ms = 9999999999999 WHERE case_id = 'BM-2601'",
             [],
         )
         .expect("touch");
