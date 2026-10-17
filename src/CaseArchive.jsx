@@ -27,7 +27,7 @@ function outputLinks(item) {
   ].filter(([, url]) => Boolean(url));
 }
 
-export function CaseArchive({ cases = [], onOpenCase }) {
+export function CaseArchive({ cases = [], onOpenCase, isDemo = false }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState("all"); // all | inflight | closed
 
@@ -52,6 +52,7 @@ export function CaseArchive({ cases = [], onOpenCase }) {
       <header className="ca-head">
         <h2>📁 案件卷宗</h2>
         <span className="ca-sub">Case Ledger · 本地 SQLite 镜像 · 只读</span>
+        {isDemo ? <span className="pl-chip pl-chip--demo" title="账本还没有真实案件，下面是设计稿的演示案；发车落账后自动切回">演示数据</span> : null}
         <div className="ca-badges">
           <span className={`ca-badge${scope === "inflight" ? " is-on" : ""}`} onClick={() => setScope(scope === "inflight" ? "all" : "inflight")} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setScope(scope === "inflight" ? "all" : "inflight"); }}>在途 <b>{inFlight}</b></span>
           <span className={`ca-badge${scope === "closed" ? " is-on" : ""}`} onClick={() => setScope(scope === "closed" ? "all" : "closed")} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setScope(scope === "closed" ? "all" : "closed"); }}>历史 <b>{history}</b></span>
