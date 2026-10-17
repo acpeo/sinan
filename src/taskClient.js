@@ -406,6 +406,69 @@ export async function loadAgentsSnapshot(gateways, { force = false } = {}) {
   }
 }
 
+/// ── 北斗派发三令（指挥舱「立即发车 / 一键追投 / 天枢自愈」）──────────────
+/// 这三个是写动作：真机会经 WS 向 VPS 网关发 sessions.send 唤醒对应星位，
+/// 因此返回值里必须带网关凭据（runId/status），让界面能说"车确实发出去了"。
+/// 浏览器预览不发命令，回一份形状一致的演示凭据。
+export async function beidouDirectLaunch({ title, deliverableMode }, gateways = []) {
+  if (!isTauriRuntime()) {
+    return {
+      demo: true,
+      caseId: "BM-2606",
+      title: String(title ?? "").trim(),
+      deliverableMode: deliverableMode ?? "IMAGE_ONLY",
+      entryMode: "命题直通",
+      mirroredRows: 1,
+      sent: false,
+      runId: null,
+      sendError: "浏览器预览：未连接网关，只在本地算了一遍派发参数",
+    };
+  }
+  try {
+    const result = await invoke("beidou_direct_launch", {
+      params: { title, deliverableMode, gateways },
+    });
+    return result;
+  } catch (error) {
+    return { sent: false, runId: null, sendError: String(error) };
+  }
+}
+
+export async function beidouAppendVideo(caseId, gateways = []) {
+  if (!isTauriRuntime()) {
+    return { demo: true, caseId, deliverableMode: "DUAL", sent: false, runId: null, sendError: "浏览器预览：未连接网关" };
+  }
+  try {
+    return await invoke("beidou_append_video", { params: { caseId, gateways } });
+  } catch (error) {
+    return { sent: false, runId: null, sendError: String(error) };
+  }
+}
+
+export async function beidouAutoHeal(caseId, sessionKey, gateways = []) {
+  if (!isTauriRuntime()) {
+    return { demo: true, caseId, action: "RESET", session: sessionKey, sent: false, runId: null, sendError: "浏览器预览：未连接网关" };
+  }
+  try {
+    return await invoke("beidou_auto_heal", { params: { caseId, sessionKey, gateways } });
+  } catch (error) {
+    return { sent: false, runId: null, sendError: String(error) };
+  }
+}
+
+/// 指挥舱卷宗列表：本地账本里的全部案件（按最后活动倒序）。
+/// 断链的历史成因：App.jsx 只传了三个空回调，从来没读过这个表——
+/// CockpitView 因此永远拿 DEMO_CASES 兜底。现在补上真读。
+export async function loadBeidouCases() {
+  if (!isTauriRuntime()) return { demo: true, cases: [] };
+  try {
+    const cases = await invoke("beidou_case_list", { limit: 200 });
+    return { demo: false, cases: Array.isArray(cases) ? cases : [] };
+  } catch (error) {
+    return { demo: false, cases: [], loadError: String(error) };
+  }
+}
+
 /// 监控参数（任务页刷新间隔 / 无活动判定阈值）：存本机 localStorage，
 /// 修改后下一拍即生效，无需重装。
 const MONITOR_KEY = "metrik-monitor-cfg";

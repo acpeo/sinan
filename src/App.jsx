@@ -36,9 +36,10 @@ import qwenAppIcon from "./assets/qwen-app-icon.png";
 import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
-import { isTauriRuntime, loadAgentsSnapshot, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig } from "./taskClient.js";
+import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
-import { CockpitView } from "./CockpitView.jsx";
+import { PipelineView } from "./PipelineView.jsx";
+import { ledgerRowsToCases, buildLiveActionMap, wakeupFailureText } from "./cockpit.js";
 import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth, stripGestureOwner } from "./windowGeometry";
 import {
   applyStartupUiScale,
@@ -3967,7 +3968,18 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   );
 }
 
-function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) {  const [state, setState] = useState({ status: "loading", filter: "all", data: null });
+function TasksSection({
+  gateways,
+  onGatewaysChanged,
+  tab = "tasks",
+  onStatus,
+  onLaunch,
+  onAppendVideo,
+  launchBusy,
+  toast,
+  cases,
+}) {
+  const [state, setState] = useState({ status: "loading", filter: "all", data: null });
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [lastSync, setLastSync] = useState(null);
@@ -4263,6 +4275,9 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
 
   const showTasks = tab === "tasks";
   const showCron = tab === "cron";
+  // 指挥舱（星位流水线）与任务/定时两页共用 TasksSection 的轮询产物——
+  // 遥测、定时镜像、活跃星集都是同一份快照，各页各渲染，不重复握手。
+  const showPipeline = tab === "cockpit";
   return (
     <main className="tasks-section tasks-section--flush">
       {showTasks && feedback && (
@@ -4274,6 +4289,23 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
         <p className="tasks-feedback">浏览器预览：展示演示数据；Tauri 桌面端读取真实任务账本。</p>
       )}
       {showTasks && data?.loadError && <p className="tasks-feedback tasks-feedback--error">{data.loadError}</p>}
+
+      {/* 指挥舱的星位遥测源：与任务页同一份快照（不另起轮询）。 */}
+      {showPipeline ? (
+        <PipelineTelemetry
+          agentsSnap={boardAgentsFresh}
+          sessionRuns={sessionRuns}
+          liveActiveIds={boardLiveActiveIds}
+          live={live}
+          onRefresh={handleRefresh}
+          busy={busy}
+          onLaunch={onLaunch}
+          onAppendVideo={onAppendVideo}
+          launchBusy={launchBusy}
+          toast={toast}
+          cases={cases}
+        />
+      ) : null}
 
       {showTasks && (
         <TasksBoard
@@ -4329,10 +4361,111 @@ function TasksSection({ gateways, onGatewaysChanged, tab = "tasks", onStatus }) 
   );
 }
 
+/// 指挥舱（星位流水线）的遥测适配：把 TasksSection 的同一份快照折成
+/// PipelineView 要的四样东西——每颗星的模型/上下文/最近一次 run 用时、
+/// 此刻哪些星在跑、连接灯三态、定时镜像。
+///
+/// 单独一个组件而不是塞进 TasksSection 的返回里：TasksSection 的钩子顺序
+/// 是硬约束（loading 早退时少跑钩子 React 就崩），往里塞条件渲染容易踩雷；
+/// 而且指挥舱与任务页是互斥的两个 tab，拆开各自读同一份 props 更清楚。
+function PipelineTelemetry({
+  agentsSnap,
+  sessionRuns,
+  liveActiveIds,
+  live,
+  onRefresh,
+  busy,
+  onLaunch,
+  onAppendVideo,
+  launchBusy,
+  toast,
+  cases,
+}) {
+  // 每颗星的遥测：model 与上下文窗口取快照会话行；"最近一次 run 用时"
+  // 取本地 session_run 账本里这颗星最新一条的起止差。两条线互补——
+  // 快照是"现在什么型号、窗口多大"，账本是"上一回干了多久"。
+  const telemetry = useMemo(() => {
+    const out = {};
+    const sessions = agentsSnap?.sessions ?? [];
+    for (const session of sessions) {
+      const id = canonicalAgentId(session.agentId ?? "");
+      if (!id) continue;
+      const budget = Number(session.contextTokenBudget ?? 0);
+      const ctx = budget > 0 ? `${Math.round(budget / 1000)}k` : "—";
+      // 同一颗星可能有多条会话（main / group / cron），窗口取最大那条——
+      // 群会话才是干活的，但 main 的窗口也可能更大，取大的是保守读法。
+      const current = out[id];
+      if (!current || ctx !== "—" && ctx > current.ctx) {
+        out[id] = { ...(current ?? {}), model: session.model ?? current?.model ?? "—", ctx };
+      } else if (current && !current.model && session.model) {
+        current.model = session.model;
+      }
+    }
+    // 最近一次 run 用时：账本里这颗星最新一条非空起止。
+    for (const run of sessionRuns) {
+      const id = canonicalAgentId(run.agentId ?? "");
+      if (!id) continue;
+      const start = Number(run.startedAtMs ?? 0);
+      const end = Number(run.endedAtMs ?? run.lastSeenMs ?? 0);
+      if (!(start > 0) || !(end > start)) continue;
+      const secs = Math.round((end - start) / 1000);
+      const text = secs >= 60 ? `${Math.round(secs / 60)}m` : `${secs}s`;
+      const at = run.lastSeenMs ?? end;
+      const current = out[id];
+      if (!current || !current.lastAt || at > current.lastAt) {
+        out[id] = { ...(current ?? {}), lastRun: text, lastAt: at };
+      }
+    }
+    return out;
+  }, [agentsSnap, sessionRuns]);
+
+  // 深潜舱状态条的文案（P-3：此前 App.jsx 根本不传 liveAction，strip 恒显示
+  // 「执行中」；老 CockpitView 还在用账本 live_action，新 PipelineView 把线丢了）。
+  // 源 = 账本 live_action 列，按属主星归并（同星多条案留最新更新的那条）；
+  // 取不到就空着，strip 有「执行中」兜底，不编一句漂亮话。
+  const liveAction = useMemo(() => buildLiveActionMap(cases), [cases]);
+
+  // 连接灯三态：live = 这一拍快照真下来了；busy = 正在拉；
+  // 都不是 = 断了。title 里给一句能照着做的话，别只写"未连接"。
+  const conn = useMemo(() => {
+    if (busy) return { state: "retry", text: "同步中…", title: "正在拉网关快照" };
+    if (live && agentsSnap) {
+      const n = liveActiveIds?.size ?? 0;
+      return {
+        state: "ok",
+        text: n > 0 ? `已连接 · ${n} 星在跑` : "已连接",
+        title: `网关快照正常${n > 0 ? `，${n} 颗星有活跃 run` : "，舰队当前空闲"}`,
+      };
+    }
+    return { state: "error", text: "未连接", title: "快照没下来：检查网关配置、token 与 Tailscale 连通性，或点此重试" };
+  }, [busy, live, agentsSnap, liveActiveIds]);
+
+  return (
+    <>
+      {toast ? (
+        <p className={`console-beidou-toast console-beidou-toast--${toast.tone}`} role="status">
+          {toast.text}
+        </p>
+      ) : null}
+      <PipelineView
+        cases={cases}
+        starTelemetry={telemetry}
+        liveStars={liveActiveIds ?? new Set()}
+        liveAction={liveAction}
+        conn={conn}
+        onRetryConn={onRefresh}
+        onLaunch={onLaunch}
+        onAppendVideo={onAppendVideo}
+        busy={launchBusy}
+      />
+    </>
+  );
+}
+
 const CONSOLE_TABS = [
   { id: "cockpit", label: "指挥舱" },
   { id: "tasks", label: "任务" },
-  { id: "cron", label: "定时" },
+  { id: "cron", label: "定时任务" },
   { id: "settings", label: "设置" },
 ];
 
@@ -4573,6 +4706,79 @@ export function App() {
     );
   }
 
+  // 北斗派发三令：真发到网关（Rust 侧 sessions.send），失败如实回传。
+  // 此前这三个回调是空函数——指挥舱看着能点，点完什么都没发生。
+  const [beidouBusy, setBeidouBusy] = useState(false);
+  const [beidouToast, setBeidouToast] = useState(null);
+  const handleBeidouLaunch = useCallback(
+    async ({ title, deliverableMode }) => {
+      setBeidouBusy(true);
+      try {
+        const result = await beidouDirectLaunch({ title, deliverableMode }, gateways);
+        setBeidouToast(
+          result?.sent
+            ? { tone: "ok", text: `${result.caseId} 已发车：${result.title}` }
+            : { tone: "warn", text: `${result?.caseId ?? "新案"} 只落了本地流水——${wakeupFailureText(result?.sendError)}` },
+        );
+        setBeidouCasesVersion((v) => v + 1);
+      } finally {
+        setBeidouBusy(false);
+      }
+    },
+    [gateways],
+  );
+  const handleBeidouAppendVideo = useCallback(
+    async ({ caseId }) => {
+      setBeidouBusy(true);
+      try {
+        const result = await beidouAppendVideo(caseId, gateways);
+        setBeidouToast(
+          result?.sent
+            ? { tone: "ok", text: `${caseId} 追投视频包已派给开阳` }
+            : { tone: "warn", text: `${caseId} 追投没发出去——${wakeupFailureText(result?.sendError)}` },
+        );
+      } finally {
+        setBeidouBusy(false);
+      }
+    },
+    [gateways],
+  );
+  const handleBeidouAutoHeal = useCallback(
+    async ({ caseId, sessionKey }) => {
+      setBeidouBusy(true);
+      try {
+        const result = await beidouAutoHeal(caseId, sessionKey, gateways);
+        setBeidouToast(
+          result?.sent
+            ? { tone: "ok", text: `${caseId} 已派局部重修给天玑` }
+            : { tone: "warn", text: `${caseId} 自愈没发出去——${wakeupFailureText(result?.sendError)}` },
+        );
+      } finally {
+        setBeidouBusy(false);
+      }
+    },
+    [gateways],
+  );
+  // 指挥舱卷宗：本地账本真读（此前没人调过，看板永远兜底演示数据）。
+  // version 只作"刚发过车，重读一遍"的信号。
+  const [beidouCasesVersion, setBeidouCasesVersion] = useState(0);
+  const [beidouCases, setBeidouCases] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    loadBeidouCases().then((result) => {
+      if (!cancelled) setBeidouCases(ledgerRowsToCases(result.cases));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [beidouCasesVersion]);
+  // 提示条 6 秒自消：不自动消就要手动关，多一步操作。
+  useEffect(() => {
+    if (!beidouToast) return undefined;
+    const timer = window.setTimeout(() => setBeidouToast(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [beidouToast]);
+
   return (
     <div className="console-root">
       <div className="expanded-drag-region" data-tauri-drag-region aria-hidden="true" />
@@ -4627,21 +4833,17 @@ export function App() {
         ))}
       </nav>
       <div className="console-scroll">
-        {consoleTab === "cockpit" && (
-          <CockpitView
-            agentNameMap={buildAgentNameMap(null)}
-            busy={consoleStatus?.busy}
-            onLaunch={() => {}}
-            onAppendVideo={() => {}}
-            onOverrideTitle={() => {}}
-          />
-        )}
         <div className={consoleTab === "settings" ? "console-hidden" : ""}>
           <TasksSection
             gateways={gateways}
             onGatewaysChanged={reloadGateways}
             tab={consoleTab}
             onStatus={setConsoleStatus}
+            onLaunch={handleBeidouLaunch}
+            onAppendVideo={handleBeidouAppendVideo}
+            launchBusy={beidouBusy}
+            toast={beidouToast}
+            cases={beidouCases}
           />
         </div>
         <div className={consoleTab === "settings" ? "console-settings" : "console-settings console-hidden"}>

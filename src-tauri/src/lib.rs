@@ -596,6 +596,29 @@ struct DirectLaunchResult {
     mirrored_rows: usize,
     /// 主表行预览（写飞书前的 payload，出问题能照着查）
     master_row: serde_json::Value,
+    /// 是否真发到了网关（false = 只落了本地流水，前端要如实说"没发出去"）
+    sent: bool,
+    /// 网关回执的 runId：出了问题照这个查是哪一次唤醒。
+    run_id: Option<String>,
+    /// 发送失败的原因（sent=false 时非空）。
+    send_error: Option<String>,
+}
+
+/// direct-launch 入参。deliverable_mode 缺省按仅图文（前端三态胶囊的默认态）。
+#[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DirectLaunchParams {
+    title: String,
+    deliverable_mode: Option<String>,
+    /// 目标平台（小红书/公众号…）。现在只作主表留痕不参与路由，但字段要
+    /// 收着——前端已经发了，后端悄悄丢掉会让"我明明选了平台"变成幻觉。
+    #[serde(default)]
+    #[allow(dead_code)]
+    target_platforms: Vec<String>,
+    /// 要连的网关（设置面板那份配置原样下发）。缺省 = 不真发，
+    /// 只落本地流水——浏览器/无配置时不能假装车发出去了。
+    #[serde(default)]
+    gateways: Vec<GatewayTargetConfig>,
 }
 
 /// 命题直通发车：标题 + 交付模式 → 本地镜像 + 唤醒天枢。
@@ -640,12 +663,23 @@ fn beidou_direct_launch(
         "bot".to_owned(),
     ])
     .map_err(|error| error.to_string())?;
-    // 落一条派发流水（本地可见的"已唤醒"凭据；真发送在北斗侧网关）。
+    // 落一条派发流水（本地可见的"已唤醒"凭据；真发送在下一段）。
     {
         let connection = open_database(&state.database_path).map_err(|error| error.to_string())?;
         beidou_cases::record_wakeup(&connection, &case_id, &wakeup)
             .map_err(|error| error.to_string())?;
     }
+    // 真发送：向天枢的群会话发 sessions.send（2026-10-15 实测真形）。
+    // 失败不回滚本地流水——账本留痕 + 如实上报，让主理人知道要重试。
+    let (sent, run_id, send_error) = send_wakeup_to_star(
+        &params.gateways,
+        "tianshu",
+        &case_id,
+        wakeup
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
+    );
     Ok(DirectLaunchResult {
         case_id,
         title: plan.title.clone(),
@@ -653,7 +687,71 @@ fn beidou_direct_launch(
         entry_mode: plan.entry_mode.as_str().to_owned(),
         mirrored_rows: mirrored,
         master_row,
+        sent,
+        run_id,
+        send_error,
     })
+}
+
+/// 把一条唤醒真正发到某颗星位的群会话。
+///
+/// 返回 (是否发出, runId, 失败原因)。三类"没发"都如实区分：
+/// - 没配网关 → 前端显示"未连接网关"，别让人以为车发出去了；
+/// - 该星位在网关上找不到群会话 → 键解析失败，报出星位名；
+/// - 网关真拒 → 原样透传它的错误文案（那是唯一的线索）。
+///
+/// 多网关时取第一个配了的——北斗只有一套，配多个是 Metrik 多机追踪的形态，
+/// 唤醒不能群发（一发就是全舰队同时开工）。
+fn send_wakeup_to_star(
+    gateways: &[GatewayTargetConfig],
+    agent_id: &str,
+    case_id: &str,
+    instruction: &str,
+) -> (bool, Option<String>, Option<String>) {
+    let Some(target) = gateways.iter().find(|entry| !entry.url.trim().is_empty()) else {
+        return (
+            false,
+            None,
+            Some("未配置网关：只在本地落了派发流水，没有真发出去".to_owned()),
+        );
+    };
+    let gw = gateway_target(target);
+    let message = format!("[CASE_ID: {case_id}]\n{instruction}");
+    let sent = (|| -> Result<String, String> {
+        let identity_dir = gw
+            .identity_dir
+            .clone()
+            .unwrap_or_else(gateway_tasks::default_state_dir_for_probe);
+        let identity = gateway_tasks::load_probe_identity(&identity_dir)
+            .map_err(|error| error.to_string())?;
+        let mut client = gateway_tasks::GatewayClient::connect(&gw, &identity)
+            .map_err(|error| error.to_string())?;
+        let sessions = client
+            .call("sessions.list", serde_json::json!({}))
+            .map_err(|error| error.to_string())?;
+        let list = sessions
+            .get("sessions")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "sessions.list 没回 sessions 数组".to_owned())?;
+        let key = beidou_dispatch::group_session_key_of(list, agent_id)
+            .ok_or_else(|| {
+                format!("网关上看不到 {agent_id} 的群会话（sessions.list 里没有 :group: 键）")
+            })?
+            .to_owned();
+        let params = beidou_dispatch::sessions_send_params(&key, &message)
+            .map_err(|error| error.to_string())?;
+        client
+            .call("sessions.send", params)
+            .map_err(|error| error.to_string())?
+            .get("runId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "网关没回 runId：不知道这一发算没算".to_owned())
+    })();
+    match sent {
+        Ok(run_id) => (true, Some(run_id), None),
+        Err(error) => (false, None, Some(error)),
+    }
 }
 
 /// append-video 入参：只给案件号，母稿链接从本地账本读（不让前端传链接，
@@ -662,6 +760,9 @@ fn beidou_direct_launch(
 #[serde(rename_all = "camelCase")]
 struct AppendVideoParams {
     case_id: String,
+    /// 同 direct-launch：要连的网关。缺省 = 只落本地流水。
+    #[serde(default)]
+    gateways: Vec<GatewayTargetConfig>,
 }
 
 /// auto-heal 入参：案件号 + 要重置的会话键。
@@ -672,6 +773,8 @@ struct AppendVideoParams {
 struct AutoHealParams {
     case_id: String,
     session_key: String,
+    #[serde(default)]
+    gateways: Vec<GatewayTargetConfig>,
 }
 
 /// 一键追投视频：仅图文案 + 母稿已冻结 → 模式升 DUAL → 唤醒开阳。
@@ -711,10 +814,22 @@ fn beidou_append_video(
         beidou_cases::set_deliverable_mode(&connection, &params.case_id, "DUAL")
             .map_err(|error| error.to_string())?;
     }
+    let (sent, run_id, send_error) = send_wakeup_to_star(
+        &params.gateways,
+        "kaiyang",
+        &params.case_id,
+        wakeup
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
+    );
     Ok(serde_json::json!({
         "caseId": params.case_id,
         "deliverableMode": "DUAL",
         "wakeup": wakeup,
+        "sent": sent,
+        "runId": run_id,
+        "sendError": send_error,
     }))
 }
 
@@ -756,12 +871,38 @@ fn beidou_auto_heal(
         beidou_cases::record_wakeup(&connection, &params.case_id, &wakeup)
             .map_err(|error| error.to_string())?;
     }
+    // 真发送：局部重修是给天玑的活计，发到天玑的群会话。注意：这里发的是
+    // 「按原结论重修」而不是「reset 会话」——reset 本身是网关侧会话管理，
+    // 铁律三只管"要清就 reset 别 compact"，清的时机由北斗 watchdog 定。
+    let (sent, run_id, send_error) = send_wakeup_to_star(
+        &params.gateways,
+        "tianji",
+        &params.case_id,
+        wakeup
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
+    );
     Ok(serde_json::json!({
         "caseId": params.case_id,
         "action": "RESET",
         "session": params.session_key,
         "wakeup": wakeup,
+        "sent": sent,
+        "runId": run_id,
+        "sendError": send_error,
     }))
+}
+
+/// 指挥舱卷宗列表（本地账本全量案件）：App.jsx 此前只传三个空回调、
+/// 从来没读过这张表，看板因此永远兜底在 DEMO_CASES。现在补真读入口。
+#[tauri::command]
+fn beidou_case_list(
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<beidou_cases::CaseListRow>, String> {
+    let connection = open_database_read_only(&state.database_path)?;
+    beidou_cases::list_cases(&connection, limit).map_err(|error| error.to_string())
 }
 
 /// 读本地定时任务镜像（不联网）：任务台"定时任务"看板数据源。
@@ -1179,6 +1320,7 @@ pub fn run() {
             beidou_direct_launch,
             beidou_append_video,
             beidou_auto_heal,
+            beidou_case_list,
             set_tasks_widget_window,
             set_notification_window,
             expand_round_details,

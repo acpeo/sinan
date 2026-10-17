@@ -771,6 +771,9 @@ function ArchiveRail({ cases, activeId, onPick, watchdogEvents }) {
 export function CockpitView({ cases = DEMO_CASES, watchdogEvents = DEMO_WATCHDOG, agentNameMap, onLaunch, onAppendVideo, onOverrideTitle, busy, onlineCount = 7, totalStars = 7, todayHops = 12, tokens = "1.28M" }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [zeroTouch, setZeroTouch] = useState(true);
+  // 真机首发：本地账本一行都没有（飞书主表还没回填）。此时深潜舱渲染一个
+  // 空案的 7 步星轨 + 一排 0 分，看着像"这一案坏掉了"——那是撒谎。
+  // 改成明说"还没有案件，上面输入标题就能发第一车"，深潜舱整块让位。
   const active = cases.find((item) => item.caseId === activeId) ?? cases[0];
   const nameMap = agentNameMap ?? buildAgentNameMap([]);
   const healing = isAutoHealing(active);
@@ -802,12 +805,24 @@ export function CockpitView({ cases = DEMO_CASES, watchdogEvents = DEMO_WATCHDOG
           watchdogEvents={watchdogEvents}
         />
         <main className="cp-main">
-          <OrbitTrack caseItem={active} healing={healing} onAppendVideo={appendVideo} />
-          <div className="cp-bento">
-            <AutoTitlePanel caseItem={active} onOverride={() => onOverrideTitle?.(active.caseId)} />
-            <GateEnginePanel caseItem={active} />
-          </div>
-          <AssetStrip caseItem={active} onAppendVideo={appendVideo} />
+          {active ? (
+            <>
+              <OrbitTrack caseItem={active} healing={healing} onAppendVideo={appendVideo} />
+              <div className="cp-bento">
+                <AutoTitlePanel caseItem={active} onOverride={() => onOverrideTitle?.(active.caseId)} />
+                <GateEnginePanel caseItem={active} />
+              </div>
+              <AssetStrip caseItem={active} onAppendVideo={appendVideo} />
+            </>
+          ) : (
+            <div className="cp-empty">
+              <p className="cp-empty-title">本地账本还没有案件</p>
+              <p className="cp-empty-body">
+                在上面输入标题点「立即发车」，第一案会建档并唤醒天枢；之后每一跳的状态都落在这一页。
+                卷宗列表、星位流水、定时任务都读同一份账本，不需要额外配置。
+              </p>
+            </div>
+          )}
         </main>
       </div>
     </div>

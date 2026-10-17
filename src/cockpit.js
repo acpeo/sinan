@@ -209,12 +209,18 @@ export const SEVEN_AXES = [
   { key: "readability", label: "可读性" },
 ];
 
-/// 天权初审五轴（自动定题用，与二审七轴不是一套）。
+/// 天权五轴（初审选标题与二审门禁同一套，Leo 2026-10-15 按 SOP 校准）：
+/// 准确性 / 可读性 / 逻辑性 / 合规性 / 传播性。
+///
+/// 这里纠正过一次错：旧代码的五轴是 准确性/合规性/人味/人设一致性/传播性
+/// ——「人味」「人设一致性」不是 SOP 的门禁轴，是去 AI 味探针的细项（见
+/// HUMANITY_PROBES）。按旧的渲染，SOP 的真五轴里可读性与逻辑性永远显示 0，
+/// 而人味/人设一致性又拿不到门禁分——Leo 一眼看出"这两行为什么是 0"。
 export const FIVE_AXES = [
   { key: "accuracy", label: "准确性" },
+  { key: "readability", label: "可读性" },
+  { key: "logic", label: "逻辑性" },
   { key: "compliance", label: "合规性" },
-  { key: "humanity", label: "人味" },
-  { key: "persona", label: "人设一致性" },
   { key: "spread", label: "传播性" },
 ];
 
@@ -396,4 +402,164 @@ export function assetSlotState(caseLike, slot) {
   if (mode === "VIDEO_ONLY") return branch.yuheng === "standby" ? "standby" : step > 5 ? "ready" : step === 5 ? "active" : "empty";
   if (step > 5) return "ready";
   return step === 5 ? "active" : "empty";
+}
+
+// ---------------------------------------------------------------------------
+// 跨星位唤醒：sessions.send 的参数形态（Rust 侧 beidou_dispatch.rs 同口径）
+//
+// 真形是 2026-10-15 在 Leo 的 VPS 实测出来的，试过六种参数名只有这一组成：
+//   `{ key: <会话键>, message: <文本> }` → `{"runId":"…","status":"started"}`
+// 两个坑（Rust 侧注释里有第三条授权坑）：
+//   1) 会话键传 `key`，不是 `sessionKey`/`to`/`agent`——传错网关回的是
+//      "session mutation target is unavailable"，一句看不出是参数名错。
+//   2) 消息字段是 `message`，不是 `text`/`content`——那两个会拿到
+//      "must have required property 'message'" 的参数校验错。
+// 前端这两份只用于形状自检与错误提示文案；真发送在 Rust 侧，别在这儿发。
+// ---------------------------------------------------------------------------
+
+/// 会话键必须是 `agent:<star>:...` 形态（干活的群会话形如
+/// `agent:tianji:feishu:group:oc_xxx`——`:main` 是舵，`:cron:` 是锚）。
+export function isAgentSessionKey(raw) {
+  const key = String(raw ?? "").trim();
+  return key.startsWith("agent:") && key.length > "agent:".length;
+}
+
+/// 群会话键判定：唤醒只能发给群会话。SOP 里各星位在群里收发流转卡，
+/// `:main` / `:cron:` 都不是干活的那一个。
+export function isGroupSessionKey(raw) {
+  return isAgentSessionKey(raw) && String(raw).includes(":group:");
+}
+
+/// 从 sessions.list 的快照里挑一颗星位的群会话键（唤醒目标）。
+/// 认不出的返回 null——前端据此显示"网关上看不到这一星位"，别硬发。
+export function groupSessionKeyOf(sessions, agentId) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const found = list.find(
+    (session) => session?.agentId === agentId && isGroupSessionKey(session?.key),
+  );
+  return found?.key ?? null;
+}
+
+/// 派发失败原因的人话版：Rust 侧回的是网关原话或自译文案，前端统一过一遍，
+/// 让 Leo 看到的是"该怎么办"而不是一句英文错。
+export function wakeupFailureText(error) {
+  const text = String(error ?? "");
+  if (!text) return "发送失败：没有原因回传";
+  if (text.includes("未配置网关")) return "还没配网关：去设置页填上 ws://地址与 token";
+  if (text.includes("群会话")) return "网关上找不到这颗星位的群会话：先让它在群里跑过一次";
+  if (text.includes("unavailable")) {
+    return "网关拒收：多半是设备没授 operator.write（openclaw devices approve）";
+  }
+  if (text.includes("must have required property")) {
+    return "网关参数校验失败：这是代码 bug，把这句话原文记下来报给我";
+  }
+  return text;
+}
+
+// ---------------------------------------------------------------------------
+// 本地账本行 → 指挥舱案件形态（Rust CaseListRow 是 snake_case，看板要 camelCase）
+//
+// 这一层必须显式：账本里存的是主表原话（stage 可能是 "01_建档" 这种自编号，
+// 也可能是 SOP 规范名），看板只认 0..6 的下标。映射规则集中在这里，
+// 别在组件里就地猜——猜错的后果是案子挂到错的星位格上。
+// ---------------------------------------------------------------------------
+
+/// 主表/账本的阶段文本 → DAG 下标（0..6）。认不出的落 0（建档）：
+/// 宁可显示"刚起步"也别把跑到一半的案子挪到已完成。
+///
+/// 顺序即优先级：一条文本可能同时命中多个词（"等待确认选题"既有"选题"
+/// 又有"确认"），先命中先返回。所以"定题/待确认"排在"研究/选题"前面——
+/// 天权接过手了就不再算天璇在研究。
+const STAGE_TO_STEP = [
+  { match: /建档|接单|intake/i, step: 0 },
+  { match: /二审|审稿|冻结|second|review/i, step: 4 },
+  { match: /审题|定题|五轴|待确认|confirm/i, step: 2 },
+  { match: /研究|选题|趋势|research/i, step: 1 },
+  { match: /母稿|创作|草稿|draft/i, step: 3 },
+  { match: /视觉|配图|视频|生图|分镜|并行|visual|video/i, step: 5 },
+  { match: /分发|运营|关单|复盘|ops|close/i, step: 6 },
+];
+
+export function stageToStep(rawStage) {
+  const text = String(rawStage ?? "").trim();
+  if (!text) return 0;
+  // 自编号前缀（"01_建档"/"05_母稿"）剥掉再匹配——编号本身就是顺序，
+  // 但语义匹配更抗新增阶段名。
+  const body = text.replace(/^\d{1,2}[_\-.\s]*/, "");
+  const hit = STAGE_TO_STEP.find((entry) => entry.match.test(body));
+  return hit ? hit.step : 0;
+}
+
+/// 这一行是不是「已关单」——口径照 Rust CaseStage::Closed（beidou_cases.rs：
+/// "已关单" | "关单完成" => CaseStage::Closed，Closed 无列、移出泳道进案卷）。
+/// 注意 "07_关单" 是 Distribution（分发运营与关单），不是 Closed：
+/// 账本没写 Closed 就照实显示运营关单，不替它猜（前端无从知道它办完没办完）。
+export function stageIsClosed(rawStage) {
+  const body = String(rawStage ?? "").trim().replace(/^\d{1,2}[_\-.\s]*/, "");
+  return body === "已关单" || body === "关单完成";
+}
+
+/// Rust CaseListRow → 看板案件。字段名换一遍 + 阶段翻成下标 + 打回次数取
+/// 二审那份（SOP：打回计数挂在二审上，初审不过是退回天璇重选题，不算打回）。
+export function ledgerRowToCase(row) {
+  if (!row) return null;
+  const secondStrikes = Math.max(0, Number(row.secondStrikes ?? 0));
+  return {
+    caseId: String(row.caseId ?? ""),
+    name: String(row.title ?? "").trim() || "未命名案件",
+    title: String(row.title ?? "").trim(),
+    step: stageToStep(row.stage),
+    // 已关单标记：账本 stage 文本的口径（Rust CaseStage::Closed）。
+    // PipelineView 据此把末格画成「已关单」而不是「运营关单在办」——
+    // 否则摇光在跑别案时，关完的案会被画成 is-live + strip（Leo 2026-10-16 第 3 问）。
+    closed: stageIsClosed(row.stage),
+    deliverableMode: normalizeDeliverableMode(row.deliverableMode),
+    ownerStar: row.ownerStar ?? null,
+    residencyNote: row.liveAction ?? "",
+    masterFrozen: Boolean(row.masterFrozen),
+    // 二审打回次数：3/3 熔断时看板走自愈态（masterDocBadge 的口径）
+    secondStrikes,
+    masterDocUrl: row.masterDocUrl ?? "",
+    folderUrl: row.folderUrl ?? "",
+    researchDocUrl: row.researchDocUrl ?? "",
+    reviewDocUrl: row.reviewDocUrl ?? "",
+    visualUrl: row.visualUrl ?? "",
+    videoUrl: row.videoUrl ?? "",
+    opsDocUrl: row.opsDocUrl ?? "",
+    lastActivityMs: row.lastActivityMs ?? null,
+    updatedAtMs: row.updatedAtMs ?? null,
+    // 从本地账本来的行：没有候选标题/判词/探针这些只在二审时产生的字段，
+    // 留空让组件走各自的兜底分支，别拿演示数据填。
+    candidates: null,
+    // 五轴分/打回链只在飞书主表，账本镜像不带：必须是 null 而不是 {}。
+    // 给 {} 的话 PipelineView 会渲染出五条 0 分的假门禁（Leo 一眼看出"这两行为什么是 0"）。
+    reviewAxes: null,
+    strikeList: null,
+    timeline: null,
+    criteria: null,
+    verdictText: "",
+  };
+}
+
+export function ledgerRowsToCases(rows) {
+  return (Array.isArray(rows) ? rows : []).map(ledgerRowToCase).filter(Boolean);
+}
+
+/// 深潜舱状态条文案（PipelineView 的 liveAction prop）：账本 live_action 列
+/// （Rust 从飞书主表镜像下来，ledgerRowToCase 映射为 residencyNote）按属主星
+/// 归并成 { star: 文案 }。同星多条案留 updatedAtMs 最新那条 —— 两条同星案互相
+/// 覆盖时，旧文案会冒充正在跑的那条。并行列（ownerStar="par"）不进表：
+/// strip 对并行列有「并行生产中」兜底，一条文案挂到玉衡/开阳两颗上只会显示两遍。
+/// 取不到的星不出项 —— PipelineView 的 strip 有「执行中」兜底，不在这里编话。
+export function buildLiveActionMap(cases) {
+  const best = {};
+  for (const c of Array.isArray(cases) ? cases : []) {
+    const text = String(c?.residencyNote ?? "").trim();
+    const star = c?.ownerStar;
+    if (!text || !star || star === "par") continue;
+    const at = Number(c?.updatedAtMs ?? 0);
+    const prev = best[star];
+    if (!prev || at >= prev.at) best[star] = { text, at };
+  }
+  return Object.fromEntries(Object.entries(best).map(([star, v]) => [star, v.text]));
 }

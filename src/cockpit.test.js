@@ -295,10 +295,13 @@ test("七轴分数归一与色阶", () => {
 });
 
 test("候选标题排名：总分第一自动钦定", () => {
+  // 分数键必须落在 SOP 真五轴上：准确性/可读性/逻辑性/合规性/传播性。
+  // 旧测试写成 人味/人设一致性（去 AI 味探针细项，不是门禁轴），
+  // 改对 FIVE_AXES 后这两项不计分，总分从 450 掉到 270。
   const ranked = rankCandidateTitles([
-    { title: "候选二", scores: { accuracy: 80, compliance: 80, humanity: 80, persona: 80, spread: 80 } },
-    { title: "候选一", scores: { accuracy: 90, compliance: 90, humanity: 90, persona: 90, spread: 90 } },
-    { title: "候选三", scores: { accuracy: 60, compliance: 60, humanity: 60, persona: 60, spread: 60 } },
+    { title: "候选二", scores: { accuracy: 80, compliance: 80, readability: 80, logic: 80, spread: 80 } },
+    { title: "候选一", scores: { accuracy: 90, compliance: 90, readability: 90, logic: 90, spread: 90 } },
+    { title: "候选三", scores: { accuracy: 60, compliance: 60, readability: 60, logic: 60, spread: 60 } },
   ]);
   assert.equal(ranked[0].title, "候选一");
   assert.equal(ranked[0].champion, true);
@@ -454,4 +457,175 @@ test("标记词自动升 DUAL 的口径：picked 是什么就顶掉什么", () =
   assert.equal(cleanVideo.deliverableMode, "VIDEO_ONLY");
   assert.equal(cleanVideo.modeOverridden, false);
   assert.equal(cleanVideo.title, "视频拍摄入门");
+});
+
+// ── 跨星位唤醒的会话键与失败文案（Rust 侧 beidou_dispatch.rs 同口径）─────
+// 2026-10-15 实测：sessions.send 真形是 { key, message }，且要 operator.write。
+// 这三条测试钉住"键认不认得出群会话"与"失败原因怎么讲人话"——
+// 唤醒发错会话（发到 main/cron）等于对着舵喊活，比不发更糟。
+import {
+  isAgentSessionKey,
+  isGroupSessionKey,
+  groupSessionKeyOf,
+  wakeupFailureText,
+} from "./cockpit.js";
+
+test("群会话键判定：只有 :group: 才是唤醒目标", () => {
+  assert.equal(isGroupSessionKey("agent:tianji:feishu:group:oc_b15d1b"), true);
+  // :main 是舵、:cron: 是锚——唤醒发到这两个等于对着舵喊活
+  assert.equal(isGroupSessionKey("agent:tianji:main"), false);
+  assert.equal(isGroupSessionKey("agent:tianji:cron:j1"), false);
+  assert.equal(isGroupSessionKey(""), false);
+  assert.equal(isGroupSessionKey(null), false);
+  assert.equal(isAgentSessionKey("agent:tianji:main"), true);
+  assert.equal(isAgentSessionKey("tianji"), false);
+});
+
+test("群会话键解析：按星位挑，挑不到返回 null（不硬发）", () => {
+  const sessions = [
+    { agentId: "tianshu", key: "agent:tianshu:main" },
+    { agentId: "tianji", key: "agent:tianji:cron:j9" },
+    { agentId: "tianji", key: "agent:tianji:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a" },
+    { agentId: "kaiyang", key: "agent:kaiyang:feishu:group:oc_other" },
+  ];
+  assert.equal(
+    groupSessionKeyOf(sessions, "tianji"),
+    "agent:tianji:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a",
+  );
+  // 天枢只有 :main，没有群会话 → null（前端要显示"找不到群会话"，不是发到 main）
+  assert.equal(groupSessionKeyOf(sessions, "tianshu"), null);
+  assert.equal(groupSessionKeyOf(sessions, "yaoguang"), null);
+  assert.equal(groupSessionKeyOf([], "tianji"), null);
+  assert.equal(groupSessionKeyOf(null, "tianji"), null);
+});
+
+test("唤醒失败原因讲人话：未配网关/没群会话/授权不足各一句", () => {
+  assert.match(wakeupFailureText("未配置网关：只在本地落了派发流水"), /设置页/);
+  assert.match(wakeupFailureText("网关上看不到 tianji 的群会话"), /群里跑过一次/);
+  // 网关这句原文看不出是授权问题，必须翻成"去 approve"
+  assert.match(
+    wakeupFailureText("rpc sessions.send failed: session mutation target is unavailable"),
+    /operator\.write/,
+  );
+  // 参数校验错是代码 bug：文案要留住原文，方便照原话报障
+  assert.match(wakeupFailureText("must have required property 'message'"), /代码 bug/);
+  assert.match(wakeupFailureText("rpc sessions.send failed: boom"), /boom/);
+  assert.match(wakeupFailureText(""), /没有原因回传/);
+});
+
+// ── 本地账本行 → 看板案件（Rust CaseListRow → cockpit 形态）────────────────
+import { stageToStep, stageIsClosed, ledgerRowToCase, ledgerRowsToCases, buildLiveActionMap } from "./cockpit.js";
+
+test("阶段文本翻 DAG 下标：自编号与 SOP 规范名都认，认不出落建档", () => {
+  // 自编号（dispatch 层现在写的形态）
+  assert.equal(stageToStep("01_建档"), 0);
+  assert.equal(stageToStep("05_母稿"), 3);
+  assert.equal(stageToStep("07_关单"), 6);
+  // SOP 规范名（mock10 用的那套）
+  assert.equal(stageToStep("天璇研究中"), 1);
+  assert.equal(stageToStep("等待确认选题"), 2);
+  assert.equal(stageToStep("天权审题中"), 2);
+  assert.equal(stageToStep("天权审稿中"), 4);
+  assert.equal(stageToStep("玉衡生图中"), 5);
+  assert.equal(stageToStep("开阳视频中"), 5);
+  assert.equal(stageToStep("摇光运营中"), 6);
+  // 认不出/空 → 建档（宁可显示刚起步，别把半程案挪到已完成）
+  assert.equal(stageToStep(""), 0);
+  assert.equal(stageToStep(null), 0);
+  assert.equal(stageToStep("天枢在想什么"), 0);
+});
+
+test("已关单标记：只认 Rust CaseStage::Closed 的两个文本，Distribution 不算", () => {
+  // Closed：移出泳道进案卷，前端据此把末格画成「已关单」而不是「运营关单在办」
+  assert.equal(stageIsClosed("已关单"), true);
+  assert.equal(stageIsClosed("关单完成"), true);
+  assert.equal(stageIsClosed("08_已关单"), true);
+  // Distribution：「07_关单」是分发运营与关单（BM-2601 真机账本实存的就是这个），
+  // 账本没写 Closed 就照实显示运营关单，不替它猜办完没办完
+  assert.equal(stageIsClosed("07_关单"), false);
+  assert.equal(stageIsClosed("摇光运营中"), false);
+  assert.equal(stageIsClosed(""), false);
+  assert.equal(stageIsClosed(null), false);
+});
+
+test("账本行转看板案件：字段名换手 + 阶段翻下标 + 空字段不拿演示数据填", () => {
+  const row = {
+    caseId: "BM-2601",
+    title: "客厅沙发摆放",
+    stage: "07_关单",
+    deliverableMode: "DUAL",
+    ownerStar: "yaoguang",
+    liveAction: "分发中",
+    secondStrikes: 1,
+    masterFrozen: true,
+    masterDocUrl: "https://my.feishu.cn/docx/ABC",
+    folderUrl: "https://my.feishu.cn/drive/folder/XYZ",
+  };
+  const item = ledgerRowToCase(row);
+  assert.equal(item.caseId, "BM-2601");
+  assert.equal(item.name, "客厅沙发摆放");
+  assert.equal(item.step, 6);
+  assert.equal(item.deliverableMode, "DUAL");
+  assert.equal(item.masterFrozen, true);
+  assert.equal(item.secondStrikes, 1);
+  assert.equal(item.masterDocUrl, "https://my.feishu.cn/docx/ABC");
+  assert.equal(item.residencyNote, "分发中");
+  // 「07_关单」是 Distribution 不是 Closed：closed 必须是 false，
+  // 否则真机账本里每一行运营期案件都会被画成已关单（P-8 修复的口径边界）
+  assert.equal(item.closed, false);
+  assert.equal(ledgerRowToCase({ ...row, stage: "已关单" }).closed, true);
+  assert.equal(ledgerRowToCase({ ...row, stage: "08_关单完成" }).closed, true);
+  assert.equal(ledgerRowToCase({ ...row, stage: "01_建档" }).closed, false);
+  // 账本里没有的字段留空——别拿 DEMO_CASES 的候选标题/判词糊上去。
+  // null 而不是 []：组件据此显示"天璇回填后这里显示钦定标题"，
+  // 而不是画一个空列表让人以为真的没有候选。
+  assert.equal(item.candidates, null);
+  assert.equal(item.verdictText, "");
+  // 五轴分/打回链只在飞书主表，账本镜像不带：必须是 null 而不是 {}。
+  // 给 {} 的话 PipelineView 会渲染出五条 0 分的假门禁（Leo 一眼看出"这两行为什么是 0"）。
+  assert.equal(item.reviewAxes, null);
+  assert.equal(item.strikeList, null);
+  assert.equal(item.timeline, null);
+  assert.equal(item.criteria, null);
+  // 打回次数出现脏数据（负数/字符串）时夹到 0
+  assert.equal(ledgerRowToCase({ ...row, secondStrikes: -3 }).secondStrikes, 0);
+  assert.equal(ledgerRowToCase({ ...row, secondStrikes: "2" }).secondStrikes, 2);
+  // 无标题 → 占位名，别渲染一个空行
+  assert.equal(ledgerRowToCase({ ...row, title: "" }).name, "未命名案件");
+  assert.equal(ledgerRowToCase(null), null);
+});
+
+test("批量转换滤掉空行：账本脏数据不能让看板崩", () => {
+  const rows = [
+    { caseId: "BM-2601", title: "甲", stage: "01_建档" },
+    null,
+    { caseId: "BM-2602", title: "乙", stage: "05_母稿" },
+  ];
+  const cases = ledgerRowsToCases(rows);
+  assert.equal(cases.length, 2);
+  assert.deepEqual(cases.map((c) => c.caseId), ["BM-2601", "BM-2602"]);
+  assert.deepEqual(ledgerRowsToCases(null), []);
+});
+
+// ── 深潜舱状态条文案表：账本 live_action 按属主星归并 ─────────────────────
+test("状态条文案表：live_action 按属主星归并，同星留最新，并行列不进表", () => {
+  const cases = [
+    // 两条同星案：留 updatedAtMs 最新的那条，别让旧文案冒充在跑的那条
+    { ownerStar: "yaoguang", residencyNote: "摇光运营中 · 旧", updatedAtMs: 100 },
+    { ownerStar: "yaoguang", residencyNote: "摇光运营中 · 新", updatedAtMs: 200 },
+    { ownerStar: "tianxuan", residencyNote: "天璇呈题 · 3 个候选标题", updatedAtMs: 150 },
+    // 并行列：strip 有「并行生产中」兜底，一条文案挂两颗星只会显示两遍
+    { ownerStar: "par", residencyNote: "玉衡/开阳产出后摇光关单", updatedAtMs: 300 },
+    // 空文案 / 无属主星：不进表，strip 落「执行中」兜底，不编话
+    { ownerStar: "tianji", residencyNote: "   ", updatedAtMs: 300 },
+    { ownerStar: "", residencyNote: "没属主星", updatedAtMs: 300 },
+  ];
+  assert.deepEqual(buildLiveActionMap(cases), {
+    yaoguang: "摇光运营中 · 新",
+    tianxuan: "天璇呈题 · 3 个候选标题",
+  });
+  // 账本空 / 脏数据 → 空表（strip 走「执行中」兜底，诚实）
+  assert.deepEqual(buildLiveActionMap([]), {});
+  assert.deepEqual(buildLiveActionMap(null), {});
+  assert.deepEqual(buildLiveActionMap(undefined), {});
 });

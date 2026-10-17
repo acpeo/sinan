@@ -8448,6 +8448,11 @@ html[data-theme="dark"] .console-root {
 .console-tabs { position: relative; z-index: 8; }
 .console-tabs button { user-select: none; }
 .console-root .console-scroll { top: 88px; }
+/* 北斗派发回执条：发车/追投/自愈的真回执（含"没发出去"的原因）。
+   6 秒自消，但存在期间要显眼——这是主理人唯一能确认"车动没动"的地方。 */
+.console-beidou-toast { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; border: 1px solid rgba(127, 127, 127, 0.3); background: rgba(127, 127, 127, 0.1); }
+.console-beidou-toast--ok { border-color: rgba(61, 156, 80, 0.5); background: rgba(61, 156, 80, 0.12); }
+.console-beidou-toast--warn { border-color: rgba(217, 168, 96, 0.55); background: rgba(217, 168, 96, 0.14); }
 .tasks-section--flush { margin: 0; padding: 0; }
 .tasks-standby { color: var(--fg-faint, #6a6b73); font-size: 13px; text-align: center; padding: 28px 12px; }
 .starrail { margin: 0 0 12px; }
@@ -8816,6 +8821,11 @@ html:has(.hopcard-stage) #root {
    引发的布局抖动。只服务指挥舱页（.cp-root），不碰任务台既有样式。
    =========================================================================== */
 
+/* 指挥舱设计令牌：--cp-* 全部变量。
+   挂在 .pl-root 与 .cp-root 两个选择器上——v6 版式（PipelineView）渲染 .pl-root，
+   旧版式（CockpitView，现已不挂载）渲染 .cp-root。变量定义只在这一处，
+   两边共用，别在各自规则里再写一遍色值。 */
+.pl-root,
 .cp-root {
   /* ---- 画布与容器 ---- */
   --cp-canvas: #f7f6f2;                 /* 温润宣纸白 */
@@ -8844,11 +8854,12 @@ html:has(.hopcard-stage) #root {
   --cp-shadow-card: 0 1px 2px rgba(20, 20, 19, 0.04), 0 8px 24px -6px rgba(20, 20, 19, 0.06);
   --cp-shadow-pop: 0 12px 40px -8px rgba(20, 20, 19, 0.16);
   --cp-motion: cubic-bezier(0.22, 1, 0.36, 1);
+}
 
+.pl-root {
+  position: relative;
   display: flex;
   flex-direction: column;
-  /* 撑满宿主而不是 100dvh：指挥舱挂在任务台的 console-scroll 里，
-     自己再开一屏高会出现双层滚动条（外壳滚一层、里面再滚一层）。 */
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -9397,6 +9408,9 @@ html[data-theme="dark"] .cp-star--tianshu { background: #f2f0ea; color: #1a1917;
 }
 
 /* 深色主题覆写（沿用现有 data-theme 机制）*/
+/* 选择器同时挂 .pl-root 与 .cp-root：v6 版式渲染前者，旧版式（已不挂载）渲染后者。
+   漏掉 .pl-root 的后果是深色下整页还是浅色——变量全部继承不到。 */
+html[data-theme="dark"] .pl-root,
 html[data-theme="dark"] .cp-root {
   --cp-canvas: #1a1917;
   --cp-surface: #221f1c;
@@ -9428,3 +9442,576 @@ html[data-theme="dark"] .cp-btn--primary:hover { background: #fff; border-color:
 html[data-theme="dark"] .cp-node,
 html[data-theme="dark"] .cp-par-node { background: var(--cp-surface); }
 html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
+
+/* ===========================================================================
+   v6 · 北斗 · 星位流水线（Leo 2026-10-15 mock10 定稿的产品落地）
+   上半=一行一案的泳道（横看进度/竖看队列），下半=单案深潜舱（三栏）。
+   与上面旧指挥舱共用 --cp-* 设计令牌，不另起一套色。
+   =========================================================================== */
+
+.console-scroll:has(> .pl-root) { padding: 0; overflow: hidden; }
+
+/* 版式预览页（preview.html）的宿主：styles.css 的 #root 是 place-items:center
+   的 grid，会把 .pl-root 按内容宽（泳道 min-width 760px）撑开，窄屏截图量不到
+   真实降栏。桌面真机由 .console-scroll 定宽，这条只服务预览页。 */
+#root.pl-preview-host { display: block; width: 100%; height: 100%; }
+#root.pl-preview-host .pl-root { width: 100%; }
+
+/* ---------- 顶栏 ---------- */
+.pl-topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 56px;
+  flex: none;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--cp-hair);
+  background: color-mix(in srgb, var(--cp-canvas) 86%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.pl-brand { display: flex; align-items: center; gap: 10px; flex: none; }
+.pl-tabs { display: flex; align-items: center; gap: 4px; flex: none; }
+.pl-tabs button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cp-meta);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.18s var(--cp-motion), color 0.18s var(--cp-motion);
+}
+.pl-tabs button:hover { background: rgba(20, 20, 19, 0.05); color: var(--cp-body); }
+.pl-tabs button.is-on { background: var(--cp-ink); color: var(--cp-canvas); }
+.pl-topright { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
+
+/* ---------- 徽章 / 点 / 呼吸 ---------- */
+.pl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--cp-hair);
+  background: var(--cp-surface);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--cp-body);
+  white-space: nowrap;
+}
+.pl-badge--bronze { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 40%, transparent); color: var(--cp-bronze); }
+.pl-badge--jade { background: var(--cp-jade-bg); border-color: color-mix(in srgb, var(--cp-jade) 40%, transparent); color: var(--cp-jade); }
+.pl-badge--amber { background: var(--cp-amber-bg); border-color: color-mix(in srgb, var(--cp-amber) 40%, transparent); color: var(--cp-amber); }
+.pl-badge--cinnabar { background: var(--cp-cinnabar-bg); border-color: color-mix(in srgb, var(--cp-cinnabar) 40%, transparent); color: var(--cp-cinnabar); }
+.pl-badge--indigo { background: var(--cp-indigo-bg); border-color: color-mix(in srgb, var(--cp-indigo) 40%, transparent); color: var(--cp-indigo); }
+.pl-badge--slate { background: var(--cp-slate-bg); border-color: color-mix(in srgb, var(--cp-slate) 34%, transparent); color: var(--cp-slate); }
+button.pl-badge { cursor: pointer; }
+
+.pl-dot { width: 6px; height: 6px; border-radius: 999px; flex: none; }
+.pl-dot--jade { background: var(--cp-jade); }
+.pl-dot--amber { background: var(--cp-amber); }
+.pl-dot--cinnabar { background: var(--cp-cinnabar); }
+@keyframes pl-breathe { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.pl-breathe { animation: pl-breathe 1.6s ease-in-out infinite; }
+@keyframes pl-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.pl-pulse { animation: pl-pulse 1.6s ease-in-out infinite; }
+
+/* ---------- 按钮 / 片 ---------- */
+.pl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 8px;
+  background: var(--cp-surface);
+  color: var(--cp-body);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 0.18s var(--cp-motion), background 0.18s var(--cp-motion);
+}
+.pl-btn:hover { border-color: var(--cp-hair-strong); }
+.pl-btn--sm { height: 22px; padding: 0 8px; font-size: 10.5px; }
+.pl-btn--primary { background: var(--cp-ink); border-color: var(--cp-ink); color: var(--cp-canvas); }
+.pl-btn--primary:hover { background: var(--cp-bronze); border-color: var(--cp-bronze); color: #fff; }
+.pl-btn--ghost { background: transparent; border-color: transparent; color: var(--cp-meta); }
+
+.pl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--cp-slot);
+  font-size: 10px;
+  font-weight: 550;
+  color: var(--cp-body);
+  white-space: nowrap;
+}
+.pl-chip--bronze { background: var(--cp-bronze-bg); color: var(--cp-bronze); }
+.pl-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---------- 主体两段 ---------- */
+.pl-main { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.pl-section-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 14px 20px 10px; }
+.pl-section-head h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
+.pl-section-sub { font-size: 11px; color: var(--cp-meta); }
+
+/* ---------- 泳道 ---------- */
+.pl-lane-section { display: flex; flex-direction: column; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--cp-hair); background: var(--cp-surface); }
+.pl-lane-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 20px 8px; }
+.pl-lanes { min-width: 760px; }
+
+/* 列头 + 行共用一套栅格：案名列 + 7 个星位列。改这一行就能整体对齐。
+   Leo 2026-10-15 第二轮：案名列吃到 197px，星位列被压成 141px——
+   投递线只剩 13px，几乎看不见。案名列 132px 起（案号+标题两行够用），
+   星位列 88px 起，剩下的空间按 1.4 : 7 分。 */
+.pl-lane-grid {
+  display: grid;
+  grid-template-columns: minmax(132px, 1.4fr) repeat(7, minmax(88px, 1fr));
+  gap: 6px;
+  align-items: stretch;
+}
+/* 泳道行是回环 SVG 的定位基准（行内还有 pl-loop-tag 要绝对定位） */
+.pl-lane-row { position: relative; }
+/* 打回回环：从审稿门禁底部向下扎、绕到创作中正下方再向上收进去
+   （mock8 有、产品落地时丢过一次；Leo 2026-10-15 第二轮要求标签贴目标格）。
+   朱砂色 + 虚线，与正向的投递跑线一眼分得开。 */
+.pl-loop { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 3; }
+.pl-loop-path { fill: none; stroke: var(--cp-cinnabar); stroke-width: 1.6; stroke-dasharray: 5 4; stroke-linecap: round; opacity: 0.85; }
+.pl-loop-dot { fill: var(--cp-cinnabar); }
+.pl-loop-tag {
+  position: absolute;
+  z-index: 4;
+  transform: translate(-50%, -50%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--cp-cinnabar);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.3);
+}
+.pl-colhead-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--cp-hair);
+  background: var(--cp-surface);
+}
+.pl-colhead-lead { align-self: end; padding-bottom: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; color: var(--cp-meta); }
+.pl-colhead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.18s var(--cp-motion), border-color 0.18s var(--cp-motion);
+}
+.pl-colhead:hover { background: var(--cp-slot); }
+.pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
+.pl-colhead-star { display: flex; align-items: center; gap: 6px; }
+.pl-colhead-star b { font-size: 11.5px; font-weight: 600; }
+.pl-colhead-role { font-size: 9.5px; color: var(--cp-meta); }
+.pl-colhead-model { font-size: 9px; color: var(--cp-meta); opacity: 0.85; }
+
+/* 有回环的行多留 30px 底部：弧线向下扎 + 标签都占这块，
+   不挤到下一行头上（Leo 2026-10-15：标签要贴目标格，弧线就得往下走）。 */
+.pl-lane-row { padding: 4px 0; border-bottom: 1px dashed var(--cp-hair); }
+.pl-lane-row:has(.pl-loop) { padding-bottom: 34px; }
+.pl-lane-row.is-on { background: color-mix(in srgb, var(--cp-bronze) 4%, transparent); }
+.pl-lane-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 2px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.pl-lane-bar { width: 3px; height: 26px; border-radius: 2px; background: transparent; flex: none; }
+.pl-lane-bar.is-on { background: var(--cp-bronze); }
+.pl-lane-text { min-width: 0; flex: 1; }
+.pl-lane-code { display: block; font-size: 10px; font-weight: 700; color: var(--cp-meta); }
+.pl-lane-name { display: block; font-size: 11.5px; font-weight: 550; color: var(--cp-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-lane-row.is-on .pl-lane-code { color: var(--cp-bronze); }
+.pl-lane-row.is-on .pl-lane-name { color: var(--cp-bronze); }
+.pl-lane-empty { margin: 0; padding: 18px 2px; font-size: 11.5px; color: var(--cp-meta); text-align: center; }
+
+/* ---------- 星位列格 ---------- */
+/* 竖向分区。Leo 2026-10-15 第三轮："各 agent 看上去都在一个区域，以前我记得
+   是分了区域的"。第一轮我只加了 1px 发丝线——太弱，62px 高的格子里几乎看不见。
+   现在双管齐下：
+   ① 发丝线加长到跨满格高（不再只 12%~88%），并把并行列前那条提亮；
+   ② 奇偶列一淡一更淡的底（斑马纹），让"列"成为一个视觉单元。
+   这不是七条色带：色差只有 2% 不到，作用是定界不是上色。 */
+.pl-cell { position: relative; min-width: 0; overflow: hidden; padding-left: 26px; }
+.pl-cell::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--cp-hair);
+}
+/* 天权两度门禁那一列是链路分界，分隔线提亮一档（第 6 个 grid 子元素：
+   第 1 个是案名列，星位列从第 2 个起数，审稿中=第 6 个子元素）。 */
+.pl-lane-grid > :nth-child(6)::before { background: var(--cp-hair-active); }
+/* 斑马纹：奇偶星位列交替一淡底。nth-child(2n) 落在天璇/天玑/并行/摇光四列
+   （子元素 2 是天枢，4 是天璇，6 是天玑…）。色差刻意压在 2% 以内——
+   要的是"这一列有边界"，不是七条彩色带。 */
+.pl-lane-grid > :nth-child(2n+1) { background: color-mix(in srgb, var(--cp-ink) 2.5%, transparent); }
+.pl-lane-grid > :nth-child(2n) { background: color-mix(in srgb, var(--cp-ink) 1%, transparent); }
+/* 天权两度门禁那一列是链路分界，斑马纹让位给提亮分隔线 */
+.pl-lane-grid > :nth-child(6) { background: color-mix(in srgb, var(--cp-bronze) 4%, transparent); }
+
+/* 投递线：跨在格子左衬的中点，上一格交付 → 这一格接手的那一段路。
+   只有一种态："正在送"的跑马灯（Leo 2026-10-15 第五辈：agent 之间任务流转时
+   要有跑马灯动画）。已经走完的段落不画线，还没走到的地方本来就没有。
+   细节：虚线段用 12px 周期的重复渐变（6px 实 + 6px 空），动画把 background-position
+   往前推一个周期——看起来就是一组短档持续往前跑。
+   4px阴影段防止虚线端点在组件边缘被副本端切断。 */
+.pl-link {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 26px;
+  height: 2px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  pointer-events: none;
+}
+.pl-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+}
+/* 只有流动一种态：上一格交付、这一格正在干活。已走完的段不画线
+   （Leo 2026-10-15 第二轮："已经完成的两个 agent 中间就不要再有横线了"）。 */
+.has-link.is-flowing > .pl-link::after {
+  background: repeating-linear-gradient(90deg, var(--cp-amber) 0 6px, transparent 6px 12px);
+  background-size: 12px 2px;
+  animation: pl-linkmove 0.5s linear infinite;
+}
+@keyframes pl-linkmove { to { background-position: 12px 0; } }
+/* 并列入线的两股竖肩也要跑：一股进来、两股分给玉衡/开阳，
+   三段都是同一趟走在路上的活儿——只有横线在跑、竖肩静着，
+   看起来就像分流到一半卡住了。 */
+.has-link > .pl-link--fork .pl-fork-arm { animation: pl-armmove 0.6s linear infinite; }
+@keyframes pl-armmove { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* 并列入线：一股进、两股出——母稿冻结后图文与视频同时投产（SOP 那一刀）。
+   两股竖线分别对准玉衡/开阳两颗节点，不是戳在中间的一根死线。 */
+.pl-link--fork { left: 0; top: 50%; width: 26px; height: 2px; }
+.pl-link--fork::before,
+.pl-link--fork::after { content: none; }
+.has-link > .pl-link--fork .pl-fork-arm { position: absolute; top: 50%; width: 2px; height: 13px; border-radius: 999px; background: var(--cp-amber); }
+.has-link > .pl-link--fork .pl-fork-arm--up { left: 3px; transform: translateY(-100%); }
+.has-link > .pl-link--fork .pl-fork-arm--down { left: 3px; transform: translateY(0); }
+
+.pl-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 100%;
+  min-height: 46px;
+  padding: 4px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 10px;
+  background: var(--cp-slot);
+  transition: border-color 0.2s var(--cp-motion), background 0.2s var(--cp-motion);
+}
+.pl-node-label { font-size: 10px; font-weight: 600; }
+.pl-node.is-done { background: var(--cp-jade-bg); border-color: color-mix(in srgb, var(--cp-jade) 26%, transparent); }
+.pl-node.is-cur { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
+.pl-node.is-idle { opacity: 0.72; }
+/* 实时三态（Leo 2026-10-15：agent 一活动就动）。
+   玻璃底（amber-bg）只归"this 案的当前步正在跑的那一根" —— 别的案子在跑（is-busy）
+   只改边框不改底，否则一颗星开工，全池子案子的同一列都会亮成黄色
+   （Leo 2026-10-15 四问："玉衡都没进行任务怎么会有黄色的点点）。 */
+.pl-node.is-live { background: var(--cp-amber-bg); border-color: color-mix(in srgb, var(--cp-amber) 55%, transparent); }
+.pl-node.is-busy { border-color: color-mix(in srgb, var(--cp-amber) 30%, transparent); }
+.pl-live-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--cp-amber); flex: none; }
+.pl-live-dot--corner { position: absolute; top: 4px; right: 5px; animation: pl-pulse 1.2s ease-in-out infinite; }
+
+.pl-gate-mark, .pl-strike-mark {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--cp-surface);
+  font-size: 8px;
+}
+.pl-gate-mark { background: var(--cp-indigo); color: #fff; }
+.pl-strike-mark { background: var(--cp-cinnabar); color: #fff; font-weight: 800; min-width: 16px; padding: 0 4px; }
+
+/* 并行位：玉衡 // 开阳各占一半，各自判活跃 */
+.pl-par-slot { display: flex; flex-direction: column; gap: 4px; height: 100%; min-height: 46px; }
+.pl-par-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  padding: 3px 6px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 8px;
+  background: var(--cp-slot);
+  font-size: 10px;
+  overflow: hidden;
+}
+.pl-par-node b { font-weight: 600; }
+.pl-par-node.is-standby { background: var(--cp-standby-bg); color: var(--cp-standby-fg); }
+.pl-par-tail { margin-left: auto; font-size: 9.5px; color: var(--cp-meta); }
+/* 本案当前步在并列列（is-active）/已经过了并列列（is-done）的底色。
+   这两条必须写在 is-live 之前："is-live 覆盖它们"才是要的效果。
+   早先 is-live 写在前面，结果已完成的任务仍然挂着玻璃底——
+   Leo 2026-10-15 四问里的"运营关单那已经完成的任务还有黄色的底色"就是这样来的。 */
+.pl-par-slot.is-done .pl-par-node:not(.is-standby) { background: var(--cp-jade-bg); border-color: color-mix(in srgb, var(--cp-jade) 26%, transparent); }
+.pl-par-slot.is-active .pl-par-node:not(.is-standby) { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
+/* is-live 置后（覆盖上面两条）：只有"本案当前步正在跑的那一颗"才配玻璃底。
+   yuLive/kaLive 本就是双条件（星真在跑 + 案子当前步就在这一列），
+   另一颗该是铜底还是玉底由上面两条决定。 */
+.pl-par-node.is-live { background: var(--cp-amber-bg); border-color: color-mix(in srgb, var(--cp-amber) 55%, transparent); }
+/* 并行节点"在跑"的标记只有一个：琥珀底 + 呼吸点。
+   原先节点内侧还画了一条跑动虚线，与跨格的投递线是同一件事说两遍，
+   而且位置贴在节点底部，看着像投递线少了一截（Leo 2026-10-15 第三轮：
+   "玉衡怎么还有条跑动的线"）。 */
+
+/* ---------- 拖拽把手 ---------- */
+.pl-drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 7px;
+  flex: none;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  /* button 元素的默认 color 是 CanvasText（纯黑），不设就会带进
+     audit 里的 rgb(0,0,0)——虽然这条把手里没有文字，还是显式写清。 */
+  color: var(--cp-meta);
+  font: inherit;
+  cursor: row-resize;
+}
+.pl-drag-grip { width: 44px; height: 3px; border-radius: 999px; background: var(--cp-hair-strong); transition: background 0.18s var(--cp-motion); }
+.pl-drag:hover .pl-drag-grip { background: var(--cp-bronze); }
+
+/* ---------- 深潜舱 ---------- */
+.pl-insp { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.pl-insp-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 12px 20px 10px; border-bottom: 1px solid var(--cp-hair); }
+.pl-insp-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; color: var(--cp-meta); }
+.pl-insp-id { font-size: 11px; font-weight: 700; color: var(--cp-bronze); }
+.pl-insp-name { font-size: 12.5px; font-weight: 600; }
+.pl-insp-badges { display: flex; align-items: center; gap: 6px; flex: none; }
+.pl-insp-stage { margin-left: auto; }
+.pl-insp-body { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 14px; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; }
+.pl-insp-col { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 14px; }
+.pl-insp-colhead { display: flex; align-items: flex-start; gap: 10px; }
+.pl-insp-coltitle { flex: 1; min-width: 0; }
+.pl-insp-coltitle h3 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.pl-insp-coltitle p { margin: 2px 0 0; font-size: 10.5px; color: var(--cp-meta); }
+/* 展开的尾块（飞书云盘 / 产出时间线）：跟在上面内容后面，不要吸底。
+   旧写法 margin-top:auto 把它拉到卡片最底端——左右两栏内容少时，中间空出一大块白，
+   看起来像两个模块各占一屏（Leo 2026-10-15 六、七两问）。 */
+.pl-insp-foot { margin-top: 0; }
+.pl-insp-empty { margin: auto; max-width: 420px; padding: 32px 24px; text-align: center; }
+.pl-insp-empty-title { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.pl-insp-empty-body { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--cp-meta); }
+
+/* 槽位 / 小标题 / 说明 */
+.pl-slot { padding: 10px 11px; border-radius: 10px; background: var(--cp-slot); border: 1px solid var(--cp-hair); }
+.pl-slot-head { display: flex; align-items: center; gap: 8px; }
+.pl-slot-head b { font-size: 12px; }
+.pl-slot-head .pl-badge { margin-left: auto; font-size: 10px; }
+.pl-standby { padding: 11px; border-radius: 10px; background: var(--cp-standby-bg); border: 1px dashed var(--cp-hair-standby); }
+.pl-standby .pl-slot-head b { font-size: 12px; }
+.pl-standby .pl-slot-head .pl-badge { margin-left: auto; font-size: 10px; }
+.pl-kicker { font-size: 9.5px; font-weight: 600; letter-spacing: 0.1em; color: var(--cp-meta); }
+.pl-note { margin: 5px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--cp-body); }
+.pl-note + .pl-btn, .pl-slot .pl-btn { margin-top: 8px; }
+
+/* ---------- 五轴横条（初审 3px / 二审 6px）---------- */
+.pl-axis-list { display: flex; flex-direction: column; gap: 5px; }
+.pl-axis { display: flex; align-items: center; gap: 8px; }
+.pl-axis--slim { gap: 7px; }
+.pl-axis-label { width: 56px; flex: none; font-size: 11px; color: var(--cp-body); }
+.pl-axis--slim .pl-axis-label { font-size: 10.5px; }
+.pl-axis-track { flex: 1; height: 6px; border-radius: 999px; background: var(--cp-slot); overflow: hidden; }
+.pl-axis--slim .pl-axis-track { height: 3px; }
+.pl-axis-fill { display: block; height: 100%; border-radius: 999px; }
+.pl-axis-fill--jade { background: var(--cp-jade); }
+.pl-axis-fill--bronze { background: var(--cp-bronze); }
+.pl-axis-fill--cinnabar { background: var(--cp-cinnabar); }
+.pl-axis-val { width: 22px; flex: none; font-size: 10.5px; text-align: right; font-weight: 600; }
+.pl-axis--slim .pl-axis-val { font-size: 10px; }
+.pl-axis-val--jade { color: var(--cp-jade); }
+.pl-axis-val--bronze { color: var(--cp-bronze); }
+.pl-axis-val--cinnabar { color: var(--cp-cinnabar); }
+.pl-axis-foot { margin-top: 6px; }
+
+/* ---------- 打回链 / 判词 / 验收 ---------- */
+.pl-strike { display: flex; gap: 8px; margin-top: 7px; padding: 8px 9px; border-radius: 9px; border: 1px solid color-mix(in srgb, var(--cp-cinnabar) 22%, transparent); background: var(--cp-cinnabar-bg); }
+.pl-strike-no { flex: none; width: 18px; height: 18px; border-radius: 999px; display: grid; place-items: center; font-size: 9.5px; font-weight: 800; background: var(--cp-cinnabar); color: #fff; }
+.pl-strike-body { min-width: 0; flex: 1; }
+.pl-strike-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pl-strike-meta .pl-badge { font-size: 10px; height: 20px; padding: 0 7px; }
+.pl-strike-at { margin-left: auto; font-size: 9.5px; color: var(--cp-meta); }
+.pl-strike-note { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--cp-body); }
+.pl-strike-next { margin: 4px 0 0; font-size: 10px; line-height: 1.5; color: var(--cp-meta); }
+.pl-strike-none { margin: 6px 0 0; font-size: 11px; color: var(--cp-meta); }
+.pl-quote { margin: 0; padding: 11px 12px; border: 1px solid var(--cp-hair); border-left: 2px solid var(--cp-cinnabar); border-radius: 0 10px 10px 0; background: var(--cp-slot); font-size: 12px; line-height: 1.65; color: var(--cp-body); }
+.pl-quote-by { margin-top: 6px; font-size: 10.5px; color: var(--cp-meta); }
+.pl-crit { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; font-size: 11.5px; line-height: 1.5; border-bottom: 1px dashed var(--cp-hair); }
+.pl-crit:last-child { border-bottom: 0; }
+.pl-crit-mark { flex: none; width: 15px; height: 15px; border-radius: 5px; display: grid; place-items: center; font-size: 9px; font-weight: 800; margin-top: 1px; }
+.pl-crit-mark--pass { background: var(--cp-jade-bg); color: var(--cp-jade); }
+.pl-crit-mark--fail { background: var(--cp-cinnabar-bg); color: var(--cp-cinnabar); }
+.pl-crit-mark--wait { background: var(--cp-slate-bg); color: var(--cp-slate); }
+
+/* 定题结论：天璇呈上的候选标题 + 被五轴钦定的那个。
+   左栏原来画的是"初审五轴"，与中栏"二审五轴"读同一个字段——同一组数字
+   画两遍（Leo 2026-10-15 抓的）。改成结论列表后，左栏中栏各说一件事。 */
+.pl-cand-list { display: flex; flex-direction: column; gap: 4px; }
+.pl-cand { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 8px; background: var(--cp-slot); border: 1px solid var(--cp-hair); font-size: 11.5px; }
+.pl-cand-no { flex: none; width: 15px; height: 15px; border-radius: 999px; display: grid; place-items: center; background: var(--cp-surface); border: 1px solid var(--cp-hair); font-size: 9px; font-weight: 700; color: var(--cp-meta); font-variant-numeric: tabular-nums; }
+.pl-cand-title { flex: 1; min-width: 0; color: var(--cp-body); }
+.pl-cand.is-champion { border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); background: var(--cp-bronze-bg); }
+.pl-cand.is-champion .pl-cand-no { background: var(--cp-bronze); border-color: var(--cp-bronze); color: #fff; }
+.pl-cand.is-champion .pl-cand-title { color: var(--cp-ink); font-weight: 600; }
+
+/* 自愈终端 */
+.pl-term { margin-top: 5px; padding: 10px 11px; border-radius: 10px; background: var(--cp-slot); border: 1px solid var(--cp-hair); font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-size: 10.5px; line-height: 1.75; color: var(--cp-body); white-space: pre-wrap; word-break: break-all; }
+.pl-term-prompt { color: var(--cp-bronze); font-weight: 700; }
+.pl-term-ok { color: var(--cp-jade); }
+.pl-term-warn { color: var(--cp-amber); }
+
+/* 时间线 */
+.pl-tl-row { display: flex; gap: 7px; align-items: baseline; font-size: 10.5px; line-height: 1.8; }
+.pl-tl-at { flex: none; width: 62px; font-size: 9.5px; color: var(--cp-meta); }
+.pl-tl-icon { flex: none; width: 15px; }
+.pl-tl-what { flex: 1; min-width: 0; color: var(--cp-body); }
+.pl-tl-dur { flex: none; font-size: 9.5px; color: var(--cp-meta); }
+
+/* 列头实时遥测条：这一列此刻在干什么（没有就整条不渲染）*/
+.pl-live-strip { display: flex; align-items: center; gap: 5px; flex: none; max-width: 220px; padding: 3px 6px; border-radius: 7px; background: var(--cp-amber-bg); border: 1px solid color-mix(in srgb, var(--cp-amber) 24%, transparent); font-size: 9.5px; color: var(--cp-amber); font-weight: 600; }
+.pl-live-strip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 星位明细浮层 ---------- */
+.pl-stardetail { position: absolute; top: 60px; right: 20px; z-index: 60; width: 520px; max-width: calc(100% - 40px); border-radius: 14px; border: 1px solid var(--cp-hair); background: var(--cp-surface); box-shadow: var(--cp-shadow-pop); }
+.pl-stardetail-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--cp-hair); }
+.pl-stardetail-head b { font-size: 12.5px; }
+.pl-stardetail-body { max-height: 420px; overflow-y: auto; padding: 8px 10px; }
+.pl-stardetail-row { display: flex; align-items: center; gap: 9px; padding: 8px 4px; border-bottom: 1px dashed var(--cp-hair); }
+.pl-stardetail-row:last-child { border-bottom: 0; }
+.pl-stardetail-name { min-width: 0; flex: 1; }
+.pl-stardetail-line { display: flex; align-items: center; gap: 6px; }
+.pl-stardetail-line b { font-size: 12px; }
+.pl-stardetail-note { display: block; margin-top: 3px; font-size: 10px; color: var(--cp-meta); }
+.pl-stardetail-right { flex: none; text-align: right; }
+.pl-stardetail-ctx { display: block; font-size: 10px; color: var(--cp-body); }
+.pl-stardetail-last { display: block; margin-top: 2px; font-size: 9.5px; color: var(--cp-meta); }
+.pl-stardetail-foot { padding: 9px 14px; border-top: 1px solid var(--cp-hair); font-size: 10.5px; line-height: 1.6; color: var(--cp-meta); }
+
+/* ---------- 定时面板 ---------- */
+.pl-cron { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 20px 20px; }
+/* 五列定宽：同类数据竖着对齐，宽屏扫下来不会串行（Leo 2026-10-15）*/
+.pl-cron-headrow, .pl-cron-row { display: flex; align-items: center; }
+.pl-cron-headrow { padding: 8px 13px; margin-bottom: 8px; background: var(--cp-slot); }
+.pl-cron-head-lead { width: 32px; flex: none; }
+.pl-cron-head { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--cp-meta); }
+.pl-cron-head:nth-of-type(1), .pl-cron-name { width: 190px; min-width: 0; flex: none; margin-right: 14px; }
+.pl-cron-head:nth-of-type(2), .pl-cron-starcol { width: 58px; flex: none; margin-right: 14px; }
+.pl-cron-head:nth-of-type(3), .pl-cron-cycle { width: 70px; flex: none; margin-right: 14px; }
+.pl-cron-head--right, .pl-cron-next { flex: 1; min-width: 0; text-align: right; }
+.pl-cron-row { padding: 10px 13px; margin-bottom: 8px; border-radius: 14px; }
+.pl-cron-star { width: 22px; height: 22px; font-size: 12px; flex: none; margin-right: 10px; }
+.pl-cron-cn { display: block; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-cron-raw { display: block; margin-top: 2px; font-size: 9px; color: var(--cp-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 派发中提示 ---------- */
+.pl-busy { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 70; padding: 5px 12px; border-radius: 999px; background: var(--cp-ink); color: var(--cp-canvas); font-size: 11px; font-weight: 600; }
+
+/* ---------- 窄屏：深潜舱三栏降两栏再降一栏 ---------- */
+@media (max-width: 1180px) {
+  .pl-insp-body { grid-template-columns: 1fr 1.2fr; }
+  .pl-insp-body > :last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 860px) {
+  .pl-insp-body { grid-template-columns: 1fr; }
+  .pl-insp-body > :last-child { grid-column: auto; }
+  .pl-lanes { min-width: 640px; }
+  .pl-stardetail { width: auto; left: 20px; }
+}
+
+/* ---------- 深色主题覆写 ---------- */
+html[data-theme="dark"] .pl-tabs button:hover { background: rgba(240, 238, 232, 0.08); }
+html[data-theme="dark"] .pl-colhead:hover { background: var(--cp-slot); }
+html[data-theme="dark"] .pl-node.is-idle { opacity: 0.6; }
+html[data-theme="dark"] .pl-btn:hover { border-color: var(--cp-hair-strong); }
+html[data-theme="dark"] .pl-btn--primary:hover { background: #fff; border-color: #fff; color: #1a1917; }
+html[data-theme="dark"] .pl-gate-mark, html[data-theme="dark"] .pl-strike-mark { border-color: var(--cp-surface); }
+
+/* ---------- 命题直通发车栏（流水线顶部）---------- */
+.pl-launch { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--cp-hair); background: var(--cp-surface); }
+.pl-launch-bolt { flex: none; font-size: 12px; }
+.pl-launch input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 8px;
+  background: var(--cp-canvas);
+  color: var(--cp-ink);
+  font: inherit;
+  font-size: 12px;
+}
+.pl-launch input:focus { outline: none; border-color: var(--cp-hair-active); }
+.pl-launch input::placeholder { color: var(--cp-meta); }
+.pl-launch-kbd { flex: none; font-size: 9.5px; color: var(--cp-meta); }
+/* 发车这一脚踢给谁：默认藏半透明，悬停/聚焦才显全——
+   不占视觉重量，但想知道的人鼠标一放就能看到完整链路。 */
+.pl-launch-hint { flex: none; max-width: 190px; overflow: hidden; font-size: 9.5px; line-height: 1.35; color: var(--cp-meta); opacity: 0.55; text-overflow: ellipsis; white-space: nowrap; cursor: help; transition: opacity 0.18s var(--cp-motion); }
+.pl-launch:hover .pl-launch-hint { opacity: 0.9; }
+.pl-seg { display: flex; flex: none; gap: 2px; padding: 2px; border-radius: 9px; background: var(--cp-slot); }
+.pl-seg-btn { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--cp-meta); font: inherit; font-size: 10.5px; font-weight: 550; cursor: pointer; transition: background 0.18s var(--cp-motion), color 0.18s var(--cp-motion); }
+.pl-seg-btn:hover { color: var(--cp-body); }
+.pl-seg-btn.is-on { background: var(--cp-surface); color: var(--cp-bronze); box-shadow: 0 1px 2px rgba(20, 20, 19, 0.08); }
+
+/* 指挥舱页：任务台的品牌行让位给流水线自己的品牌（同一个名字出现两遍是冗余），
+   但 console-tabs 保留——那是任务台的四大分区导航（指挥舱/任务/定时/设置），
+   流水线自己的页签只管它内部两块面板。 */
+.console-root:has(.pl-root) .console-head { display: none; }
+.console-root:has(.pl-root) .console-scroll { top: 46px; }

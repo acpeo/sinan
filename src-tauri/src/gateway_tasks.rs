@@ -61,7 +61,7 @@ pub struct GatewayTarget {
 }
 
 #[derive(Clone, Debug)]
-struct DeviceIdentity {
+pub struct DeviceIdentity {
     device_id: String,
     /// PKCS#8 DER：ring 重建 keypair 的直接来源（签名内部用 seed）。
     private_key_der: Vec<u8>,
@@ -283,15 +283,20 @@ fn sign_payload_v3(identity: &DeviceIdentity, ctx: &SignContext) -> Result<Strin
 
 // ---------------------------------------------------------------------------
 // WS 客户端（同步 tungstenite）
+//
+// 这个客户端只在这里与 lib.rs 的北斗派发层之间用：快照三路（agents/cron/tasks）
+// 走上面的 pub fn，唤醒一路走 connect + call 两次。刻意不为唤醒单写一个
+// pub fn——它要先 sessions.list 解析群会话键再发，流程比单发一次长，
+// 而且将来「派给谁」会变成按 SOP 阶段选星位，不如把客户端交出来。
 // ---------------------------------------------------------------------------
 
-struct GatewayClient {
+pub struct GatewayClient {
     socket: tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     next_id: u32,
 }
 
 impl GatewayClient {
-    fn connect(target: &GatewayTarget, identity: &DeviceIdentity) -> Result<Self> {
+    pub fn connect(target: &GatewayTarget, identity: &DeviceIdentity) -> Result<Self> {
         let start = Instant::now();
         let request = target
             .url
@@ -305,9 +310,11 @@ impl GatewayClient {
         let nonce = Self::wait_challenge(&mut socket, start)?;
         let signed_at_ms = chrono::Utc::now().timestamp_millis();
         // admin 会话：chat.history（会话工作台账的标题/进度源）需要 operator.admin。
+        // write：sessions.send 的跨星位唤醒（北斗铁律一）实测必需——缺它网关
+        // 只回一句 "session mutation target is unavailable"，看不出是授权问题。
         // 网关按设备授权取交集；仅授 read 时本握手仍成功，chat.history 调用会
         // FORBIDDEN → record_session_runs 静默降级（标题空，前端显示兜底标签）。
-        let scopes = ["operator.read", "operator.admin"];
+        let scopes = ["operator.read", "operator.admin", "operator.write"];
         let signature = sign_payload_v3(
             identity,
             &SignContext {
@@ -456,7 +463,7 @@ impl GatewayClient {
         }
     }
 
-    fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+    pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         let request_id = format!("m-{}", self.next_id);
         self.next_id += 1;
         let start = Instant::now();
@@ -1526,7 +1533,23 @@ pub fn snapshot_gateway_crons_throttled(
     Ok(written)
 }
 
-/// 读本地定时任务镜像：名称字母序，可选行数上限。
+/// 默认 state 目录（本机探测身份）。导出给 lib.rs 的派发层用——
+/// 它要知道"没配 identity_dir 时该去哪找设备身份"。
+pub fn default_state_dir_for_probe() -> PathBuf {
+    default_state_dir()
+}
+
+/// 载入（必要时新建）设备身份。同上：派发层要自己握手。
+pub fn load_probe_identity(identity_dir: &Path) -> Result<DeviceIdentity> {
+    load_or_create_identity(identity_dir)
+}
+
+/// WS 客户端开放给派发层：一次唤醒 = 一次握手 + sessions.list（解析群会话键）
+/// + sessions.send（GatewayClient 自身与 connect/call 都已 pub）。刻意不复用
+/// fetch_agents_snapshot 那条路——那是快照，带全局节流与账本写入；唤醒是
+/// 即时动作，不该排队。
+
+/// 列本地定时任务镜像：名称字母序，可选行数上限。
 pub fn list_crons(connection: &Connection, limit: Option<u32>) -> Result<Vec<GatewayCronRow>> {
     ensure_gateway_cron_table(connection)?;
     let limit = limit.unwrap_or(200).min(2000);

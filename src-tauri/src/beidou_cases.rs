@@ -870,6 +870,73 @@ pub fn set_deliverable_mode(
     )
 }
 
+/// 一案在卷宗列表里的一行（指挥舱左侧名册 + 泳道的唯一数据源）。
+/// 与 CaseLedgerRow 分开：那个是追投门槛的判据（只取三个字段），这个是
+/// 前端要渲染的全部列——标题、阶段、打回次数、产物链接、唤醒时间。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaseListRow {
+    pub case_id: String,
+    pub title: Option<String>,
+    pub deliverable_mode: String,
+    pub stage: String,
+    pub owner_star: Option<String>,
+    pub live_action: Option<String>,
+    pub first_strikes: i64,
+    pub second_strikes: i64,
+    pub master_frozen: bool,
+    pub master_doc_url: String,
+    pub folder_url: String,
+    pub research_doc_url: String,
+    pub review_doc_url: String,
+    pub visual_url: String,
+    pub video_url: String,
+    pub ops_doc_url: String,
+    pub last_activity_ms: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
+/// 列全部案件：按最后活动倒序（新案在上）。limit 缺省 200，上限 500。
+/// 这就是指挥舱卷宗的真读入口——此前只有 load_case（按 ID 单取），
+/// 前端没有任何一处在调，所以看板永远兜底在 DEMO_CASES 上。
+pub fn list_cases(connection: &Connection, limit: Option<u32>) -> rusqlite::Result<Vec<CaseListRow>> {
+    let limit = limit.unwrap_or(200).min(500);
+    let sql = format!(
+        "SELECT case_id, title, task_type, stage, owner_star, live_action,
+                first_strike, second_strike, master_frozen,
+                folder_url, research_doc_url, master_doc_url, review_doc_url,
+                visual_url, video_url, ops_doc_url, last_activity_ms, updated_at_ms
+         FROM beidou_cases
+         ORDER BY COALESCE(last_activity_ms, updated_at_ms) DESC, updated_at_ms DESC
+         LIMIT {limit}"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([], |row| {
+        let text = |index: usize| row.get::<_, Option<String>>(index).unwrap_or_default();
+        Ok(CaseListRow {
+            case_id: row.get::<_, String>(0)?,
+            title: row.get::<_, Option<String>>(1)?,
+            deliverable_mode: text(2).unwrap_or_else(|| "IMAGE_ONLY".to_owned()),
+            stage: row.get::<_, String>(3)?,
+            owner_star: text(4),
+            live_action: text(5),
+            first_strikes: row.get::<_, i64>(6)?,
+            second_strikes: row.get::<_, i64>(7)?,
+            master_frozen: row.get::<_, i64>(8)? == 1,
+            folder_url: text(9).unwrap_or_default(),
+            research_doc_url: text(10).unwrap_or_default(),
+            master_doc_url: text(11).unwrap_or_default(),
+            review_doc_url: text(12).unwrap_or_default(),
+            visual_url: text(13).unwrap_or_default(),
+            video_url: text(14).unwrap_or_default(),
+            ops_doc_url: text(15).unwrap_or_default(),
+            last_activity_ms: row.get::<_, Option<i64>>(16)?,
+            updated_at_ms: row.get::<_, i64>(17)?,
+        })
+    })?;
+    rows.collect()
+}
+
 #[cfg(test)]
 mod dispatch_helper_tests {
     use super::*;
@@ -990,5 +1057,39 @@ mod dispatch_helper_tests {
     fn missing_case_loads_as_none() {
         let db = memory_db();
         assert!(load_case(&db, "BM-9999").expect("load").is_none());
+    }
+
+    #[test]
+    fn list_cases_orders_by_activity_and_carries_links() {
+        let db = memory_db();
+        for (id, title) in [("BM-2601", "甲案"), ("BM-2602", "乙案")] {
+            let row = serde_json::json!({
+                "record_id": id, "title": title, "deliverable_mode": "DUAL",
+                "stage": "05_母稿", "master_doc_id": format!("https://my.feishu.cn/docx/{title}")
+            });
+            upsert_case_from_master_row(&db, &row).expect("upsert");
+        }
+        // 2601 后写但活动更晚 → 它排第一（倒序），别按插入顺序糊弄
+        db.execute(
+            "UPDATE beidou_cases SET last_activity_ms = 2 WHERE case_id = 'BM-2601'",
+            [],
+        )
+        .expect("touch");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].case_id, "BM-2601");
+        assert_eq!(list[0].title.as_deref(), Some("甲案"));
+        assert_eq!(list[0].deliverable_mode, "DUAL");
+        assert_eq!(list[0].stage, "05_母稿");
+        assert!(list[0].master_doc_url.contains("docx"));
+        assert!(!list[0].master_frozen);
+        assert_eq!(list[1].case_id, "BM-2602");
+    }
+
+    #[test]
+    fn list_cases_on_empty_ledger_is_empty_not_error() {
+        // 真机现状：账本还没落过一行。前端不能因为空表就崩，要显示"还没有案件"。
+        let db = memory_db();
+        assert!(list_cases(&db, None).expect("list").is_empty());
     }
 }

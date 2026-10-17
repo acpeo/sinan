@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>司南 · 星位流水线 · 版式预览</title>
+  <!--
+    版式预览页：不连网关、不读账本，直接把 PipelineView 挂上来喂一份
+    真数据形态（BM-2601 是 Leo 真机账本那一行；另两条演示案给泳道看多案并发）。
+    用途：改版式时不用装 exe、不用配网关就能看效果。
+    真机数据仍然只在桌面端读（loadBeidouCases → invoke），这一页与产品代码
+    共用同一个组件，区别只在喂进去的 cases 数组。
+  -->
+  <style>
+    html, body { margin: 0; height: 100%; background: #1a1917; }
+    html[data-theme="light"] body { background: #f7f6f2; }
+  </style>
+  <script type="module">
+    // 深/浅由 URL 参数切（?theme=light），截图脚本用。
+    const theme = new URLSearchParams(location.search).get("theme");
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    else document.documentElement.dataset.theme = "dark";
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/preview-main.jsx"></script>
+</body>
+</html>

@@ -322,6 +322,55 @@ pub fn append_video_payload(case_id: &str, master_doc_url: &str) -> Result<Value
 }
 
 // ---------------------------------------------------------------------------
+// 真发送：sessions.send（铁律一的落点）
+// ---------------------------------------------------------------------------
+
+/// 唤醒 payload → 网关 sessions.send 的入参。
+///
+/// 真形是 2026-10-15 在 Leo 自己的 VPS 上实测出来的（试过六种参数名，
+/// 只有这一组成：
+///   `{ key: <会话键>, message: <文本> }` → `{"runId":"…","status":"started"}`
+///
+/// 三个坑都记在这里，下次改别再踩：
+/// 1) 会话键必须传 `key`，不是 `sessionKey`——传 sessionKey 网关回的是
+///    "session mutation target is unavailable"，一句看不出是参数名错。
+/// 2) 消息字段是 `message`，不是 `text`/`content`——那两个会拿到
+///    "must have required property 'message'" 的参数校验错。
+/// 3) 授权要 `operator.write`。只授 read+admin 时报的同样是
+///    "session mutation target is unavailable"，和参数名错一个文案。
+///    所以握手 scopes 必须带 write（gateway_tasks.rs 已加上）。
+///
+/// 会话键形如 `agent:tianji:feishu:group:oc_b15d1b…`——真干活的是群会话，
+/// 不是 `:main`。键从 sessions.list 按 agentId 筛 `:group:` 拿。
+pub fn sessions_send_params(session_key: &str, message: &str) -> Result<Value> {
+    let key = session_key.trim();
+    if key.is_empty() {
+        bail!("sessions.send requires a session key (form: agent:<star>:feishu:group:oc_xxx)");
+    }
+    if !key.starts_with("agent:") {
+        bail!("session key must start with \"agent:\", got {key:?}");
+    }
+    let text = message.trim();
+    if text.is_empty() {
+        bail!("sessions.send requires a non-empty message");
+    }
+    Ok(json!({ "key": key, "message": text }))
+}
+
+/// 从 sessions.list 的快照里挑一颗星位的群会话键（唤醒的目标）。
+/// 群会话是北斗真干活的surface（SOP：各星位在群里收发流转卡）；
+/// `:main` 与 `:cron:` 都不对——前者是舵，后者是定时任务的隔离会话。
+pub fn group_session_key_of<'a>(sessions: &'a [Value], agent_id: &str) -> Option<&'a str> {
+    sessions.iter().find_map(|session| {
+        if session.get("agentId").and_then(Value::as_str) != Some(agent_id) {
+            return None;
+        }
+        let key = session.get("key").and_then(Value::as_str)?;
+        key.contains(":group:").then_some(key)
+    })
+}
+
+// ---------------------------------------------------------------------------
 // 单元测试（node 侧已复算一份；这里保 Rust 侧同口径）
 // ---------------------------------------------------------------------------
 
@@ -468,6 +517,62 @@ mod tests {
             Some("DUAL")
         );
         assert!(append_video_payload("BM-2605", "").is_err());
+    }
+
+    #[test]
+    fn sessions_send_params_use_the_real_gateway_shape() {
+        // 2026-10-15 在 Leo 的 VPS 实测出来的唯一可用形态：key + message
+        let params = sessions_send_params(
+            "agent:tianji:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a",
+            "[CASE_ID: BM-2604] 局部重修",
+        )
+        .expect("params");
+        assert_eq!(
+            params.get("key").and_then(Value::as_str),
+            Some("agent:tianji:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a")
+        );
+        assert_eq!(
+            params.get("message").and_then(Value::as_str),
+            Some("[CASE_ID: BM-2604] 局部重修")
+        );
+        // 别写上 text/content——网关只认 message，多一个字段直接参数校验失败
+        assert!(params.get("text").is_none());
+        assert!(params.get("content").is_none());
+        assert!(params.get("sessionKey").is_none());
+    }
+
+    #[test]
+    fn sessions_send_rejects_bad_keys_and_empty_messages() {
+        assert!(sessions_send_params("", "hi").is_err());
+        assert!(sessions_send_params("   ", "hi").is_err());
+        // 非 agent: 前缀的键（比如裸 agentId）不发给网关
+        assert!(sessions_send_params("tianji", "hi").is_err());
+        assert!(sessions_send_params("agent:tianji:main", "hi").is_ok());
+        // 空消息发出去等于让星位空转一轮
+        assert!(sessions_send_params("agent:tianji:main", "   ").is_err());
+    }
+
+    #[test]
+    fn group_session_key_picks_the_group_not_main_or_cron() {
+        let sessions = vec![
+            json!({ "agentId": "tianji", "key": "agent:tianji:main" }),
+            json!({ "agentId": "tianji", "key": "agent:tianji:cron:a764a0f8-68e7-4bfe" }),
+            json!({ "agentId": "tianji", "key": "agent:tianji:feishu:group:oc_b15d1b" }),
+            json!({ "agentId": "yuheng", "key": "agent:yuheng:feishu:group:oc_b15d1b" }),
+        ];
+        // 真干活的是群会话；main 是舵、cron 是隔离会话，都不能唤醒
+        assert_eq!(
+            group_session_key_of(&sessions, "tianji"),
+            Some("agent:tianji:feishu:group:oc_b15d1b")
+        );
+        assert_eq!(
+            group_session_key_of(&sessions, "yuheng"),
+            Some("agent:yuheng:feishu:group:oc_b15d1b")
+        );
+        // 没群会话的星位（如只有 main）返回 None——调用方据此报错，
+        // 不能退而求其次去唤醒 :main（那是舵）
+        assert_eq!(group_session_key_of(&sessions, "tianshu"), None);
+        assert_eq!(group_session_key_of(&[], "tianji"), None);
     }
 
     #[test]
