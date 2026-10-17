@@ -571,19 +571,6 @@ fn session_run_list(
 // 真机 sessions_send 走 gateway_tasks 的 WS 客户端，群消息仅作留痕。
 // ---------------------------------------------------------------------------
 
-/// direct-launch 入参。deliverable_mode 缺省按仅图文（前端三态胶囊的默认态）。
-#[derive(serde::Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct DirectLaunchParams {
-    title: String,
-    deliverable_mode: Option<String>,
-    /// 目标平台（小红书/公众号…）。现在只作主表留痕不参与路由，但字段要
-    /// 收着——前端已经发了，后端悄悄丢掉会让"我明明选了平台"变成幻觉。
-    #[serde(default)]
-    #[allow(dead_code)]
-    target_platforms: Vec<String>,
-}
-
 /// direct-launch 回包：主理人要看到「车发出去了」的凭据，不是一个空 200。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]

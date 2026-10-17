@@ -1544,10 +1544,10 @@ pub fn load_probe_identity(identity_dir: &Path) -> Result<DeviceIdentity> {
     load_or_create_identity(identity_dir)
 }
 
-/// WS 客户端开放给派发层：一次唤醒 = 一次握手 + sessions.list（解析群会话键）
-/// + sessions.send（GatewayClient 自身与 connect/call 都已 pub）。刻意不复用
-/// fetch_agents_snapshot 那条路——那是快照，带全局节流与账本写入；唤醒是
-/// 即时动作，不该排队。
+// WS 客户端开放给派发层：一次唤醒 = 一次握手 + sessions.list（解析群会话键）
+// + sessions.send（GatewayClient 自身与 connect/call 都已 pub）。刻意不复用
+// fetch_agents_snapshot 那条路——那是快照，带全局节流与账本写入；唤醒是
+// 即时动作，不该排队。
 
 /// 列本地定时任务镜像：名称字母序，可选行数上限。
 pub fn list_crons(connection: &Connection, limit: Option<u32>) -> Result<Vec<GatewayCronRow>> {
