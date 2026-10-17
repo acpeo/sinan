@@ -39,6 +39,7 @@ import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAp
 import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
+import { CaseArchive } from "./CaseArchive.jsx";
 import { ledgerRowsToCases, buildLiveActionMap, wakeupFailureText } from "./cockpit.js";
 import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth, stripGestureOwner } from "./windowGeometry";
 import {
@@ -3980,6 +3981,8 @@ function TasksSection({
   cases,
   tabs,
   onTab,
+  onOpenCase,
+  focusCaseId,
 }) {
   const [state, setState] = useState({ status: "loading", filter: "all", data: null });
   const [busy, setBusy] = useState(false);
@@ -4280,8 +4283,10 @@ function TasksSection({
   // 指挥舱（星位流水线）与任务/定时两页共用 TasksSection 的轮询产物——
   // 遥测、定时镜像、活跃星集都是同一份快照，各页各渲染，不重复握手。
   const showPipeline = tab === "cockpit";
+  const showCases = tab === "cases";
   return (
     <main className="tasks-section tasks-section--flush">
+      {showCases ? <CaseArchive cases={cases ?? []} onOpenCase={onOpenCase} /> : null}
       {showTasks && feedback && (
         <p className={feedback.tone === "error" ? "tasks-feedback tasks-feedback--error" : "tasks-feedback tasks-feedback--success"}>
           {feedback.message}
@@ -4309,6 +4314,7 @@ function TasksSection({
           tabs={tabs}
           activeTab={tab}
           onTab={onTab}
+          focusCaseId={focusCaseId}
         />
       ) : null}
 
@@ -4388,6 +4394,7 @@ function PipelineTelemetry({
   tabs,
   activeTab,
   onTab,
+  focusCaseId,
 }) {
   // 每颗星的遥测：model 与上下文窗口取快照会话行；"最近一次 run 用时"
   // 取本地 session_run 账本里这颗星最新一条的起止差。两条线互补——
@@ -4468,6 +4475,7 @@ function PipelineTelemetry({
         tabs={tabs}
         activeTab={activeTab}
         onTab={onTab}
+        focusCaseId={focusCaseId}
       />
     </>
   );
@@ -4475,6 +4483,8 @@ function PipelineTelemetry({
 
 const CONSOLE_TABS = [
   { id: "cockpit", label: "指挥舱" },
+  // 案件卷宗：查历史案件用（泳道只看当前在办，翻旧账得靠这张表）
+  { id: "cases", label: "案件卷宗" },
   { id: "tasks", label: "任务" },
   { id: "cron", label: "定时任务" },
   { id: "settings", label: "设置" },
@@ -4494,6 +4504,8 @@ export function App() {
   const [gateways, setGateways] = useState(() => loadGatewayConfig());
   const reloadGateways = useCallback(() => setGateways(loadGatewayConfig()), []);
   const [consoleTab, setConsoleTab] = useState("cockpit");
+  // 卷宗里点一行 → 回指挥舱并选中那一案（不然点了没反应，"查看过往案件"就断在这）。
+  const [focusCaseId, setFocusCaseId] = useState(null);
   const [consoleStatus, setConsoleStatus] = useState(null);
   const [tasksWidgetEnabled, setTasksWidgetEnabled] = useState(
     () => localStorage.getItem("metrik:tasksWidget") !== "off",
@@ -4863,6 +4875,11 @@ export function App() {
             cases={beidouCases}
             tabs={CONSOLE_TABS}
             onTab={setConsoleTab}
+            focusCaseId={focusCaseId}
+            onOpenCase={(id) => {
+              setFocusCaseId(id);
+              setConsoleTab("cockpit");
+            }}
           />
         </div>
         <div className={consoleTab === "settings" ? "console-settings" : "console-settings console-hidden"}>

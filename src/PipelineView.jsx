@@ -25,14 +25,14 @@ import {
   textWantsDual,
 } from "./cockpit.js";
 
-const STAR_ICON = {
+export const STAR_ICON = {
   tianshu: "🧭", tianxuan: "🔭", tianquan: "⚖️", tianji: "🖋️",
   yuheng: "🎨", kaiyang: "🎬", yaoguang: "🚀", main: "✨",
 };
 
 /// SOP「当前阶段映射表」的规范阶段名。天权出现两次（审题 / 审稿）——
 /// 它是链路上唯一的两度门禁，所以给它两列，列头各自标清楚。
-const STAGE_COLS = [
+export const STAGE_COLS = [
   { key: "tianshu", star: "tianshu", label: "建档", role: "建档 · 巡检" },
   { key: "tianxuan", star: "tianxuan", label: "研究中", role: "趋势 · 选题" },
   { key: "tianquan", star: "tianquan", label: "审题中", role: "审题门禁" },
@@ -711,6 +711,7 @@ export function PipelineView({
   tabs = null,
   activeTab = "cockpit",
   onTab,
+  focusCaseId = null,
 }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [colFilter, setColFilter] = useState(null);
@@ -723,6 +724,13 @@ export function PipelineView({
   const dragRef = useRef(null);
 
   const active = cases.find((item) => item.caseId === activeId) ?? cases[0];
+
+  // 从「案件卷宗」点一行跳过来时，要选中那一案，而不是默认第一个。
+  // 依赖里放 cases.length：账本是异步读的，先跳后到货也要能选中。
+  useEffect(() => {
+    if (!focusCaseId) return;
+    if (cases.some((item) => item.caseId === focusCaseId)) setActiveId(focusCaseId);
+  }, [focusCaseId, cases.length]);
 
   // 泳道行/深潜舱的分割比拖动：140px 保底（泳道至少看得下一行），
   // 上限留 220px 给深潜舱（三栏各至少一个标题加两行）。
