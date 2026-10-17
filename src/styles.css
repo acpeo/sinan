@@ -8871,6 +8871,11 @@ html:has(.hopcard-stage) #root {
 }
 /* 指挥舱独占一屏时把宿主的内边距与滚动让出来。 */
 .console-scroll:has(> .cp-root) { padding: 0; overflow: hidden; }
+/* 指挥舱把 console-head / console-tabs 收进自己的顶栏后（Leo 2026-10-17），
+   滚动区不再预留那 88px——只留窗口按钮一排（44px），顶栏立刻跟上。
+   不然顶上多出一条 44px 的空带，指挥舱看着"高出一截"。
+   注意不能用 > .pl-root：PipelineView 外面还包着一层 TasksSection。 */
+.console-scroll:has(.pl-root) { top: 44px; padding: 0; overflow: hidden; }
 
 /* 全栈遥测等宽字体（强制规范）：案件编号、七轴得分、倒计时、Watchdog 周期、
    Token 消耗、document_id 一律等宽 + tabular-nums。 */
