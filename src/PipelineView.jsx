@@ -512,7 +512,11 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
   // 与泳道同口径：关完的案徽标写「已关单」，不写「运营关单」。
   const stageLabel = caseClosed(c) ? "已关单" : col.label;
   const modeMeta = DELIVERABLE_MODE_LABEL[normalizeDeliverableMode(c.deliverableMode)];
-  const frozen = c.masterFrozen && c.secondStrikes === 0;
+  // 冻结只看母稿冻结这一个事实，不与打回次数挂钩：BM-2601 真机就是
+  // 「打过一回 → 复审 PASS → 母稿 FROZEN（rev 7）」——旧逻辑
+  // （frozen && secondStrikes === 0）让这种案显示「母稿未冻结」，
+  // 还憋回追投按钮（真机截图实锤，Leo 2026-10-21 批的 mock21 同口径）。
+  const frozen = Boolean(c.masterFrozen);
   // 已关单的案不亮 strip：strip 说的是「这一步正在办」，关完的案没有正在办的步
   // （在跑的是别的案的摇光）。Leo 2026-10-16 第 3 问前半句问的就是这个歧义。
   const liveWho = caseClosed(c)
@@ -557,15 +561,17 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
               <h3>定题与背调依据</h3>
               <p>Auto-Title &amp; Research · 天璇</p>
             </div>
+            <span className="pl-badge pl-badge--slate">🧭 自主寻题</span>
           </div>
           <div className="pl-slot">
             <div className="pl-kicker">天璇研究文档</div>
-            <p className="pl-note">
-              对标账号样本与同题互动均分，人设卡九字纲领「留白 / 界定 / 尺度」，典故线取《长物志》居止篇。
-            </p>
+            {/* 没链接时给研究编号注（看门狗摘录里天璇产出的截断编号——
+                完整链接没回传时的诚实注），连注都没有才写「未回填」。
+                原来这里四个案共用一句写死样板句（Leo 2026-10-16 抓出：
+                它是 fixture 漏进了渲染层）。 */}
             {c.researchDocUrl
               ? <a className="pl-btn pl-btn--sm" href={c.researchDocUrl} target="_blank" rel="noreferrer">📄 打开 docx ↗</a>
-              : <span className="pl-kicker">飞书主表未回填研究文档链接</span>}
+              : <p className="pl-strike-none">{c.researchIdNote || "主表未回填研究文档链接。"}</p>}
           </div>
           <div>
             <div className="pl-kicker">定题结论 · 天璇呈题</div>
@@ -596,12 +602,15 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
                 候选标题与五轴定题分都存在飞书主表，本地账本只镜像链接；天璇回填后这里显示被钦定的那个标题。
               </p>
             )}
+            {c.candidateNote
+              ? <p className="pl-strike-none" style={{ marginTop: 6 }}>{c.candidateNote}</p>
+              : null}
           </div>
           <div className="pl-slot pl-insp-foot">
             <div className="pl-kicker">飞书云盘</div>
             {c.folderUrl
               ? <a className="pl-btn pl-btn--sm" href={c.folderUrl} target="_blank" rel="noreferrer">📁 本案文件夹 ↗</a>
-              : <span className="pl-kicker">主表未回填文件夹链接</span>}
+              : <p className="pl-strike-none">主表未回填文件夹链接。</p>}
           </div>
         </article>
 
@@ -646,13 +655,26 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
             )}
           </div>
           {c.verdictText ? (
-            <blockquote className="pl-quote">
-              {c.verdictText}
-              <div className="pl-quote-by">—— 天权 · 审稿判词</div>
-            </blockquote>
+            <div>
+              <div className="pl-kicker">天权原话 · 本地接力账本</div>
+              {/* verdictBy 带归属：复审 PASS 与二审 FAIL 是两句不同的话，
+                  复审判词挂「天权 · 复审判词」——真机 BM-2601 末次结论就是
+                  复审（同跳贴了【复审报告】），Rust 从接力文本判的。 */}
+              <blockquote className="pl-quote">
+                {c.verdictText}
+                <div className="pl-quote-by">—— {c.verdictBy || "天权 · 审稿判词"}</div>
+              </blockquote>
+            </div>
           ) : (
             <p className="pl-strike-none">判词还没落到本地账本：飞书主表回填后这里显示天权原话。</p>
           )}
+          <div>
+            <div className="pl-kicker">审稿文档 · 按产出星位归槽</div>
+            <div className="pl-chip-row">
+              {c.reviewDocUrl ? <a className="pl-btn pl-btn--sm" href={c.reviewDocUrl} target="_blank" rel="noreferrer">📄 二审报告 ↗</a> : null}
+              {c.reReviewDocUrl ? <a className="pl-btn pl-btn--sm" href={c.reReviewDocUrl} target="_blank" rel="noreferrer">📄 复审报告 ↗</a> : null}
+            </div>
+          </div>
           <div>
             <div className="pl-kicker">验收标准 · ACCEPTANCE CRITERIA</div>
             {(c.criteria ?? []).length > 0
@@ -697,7 +719,13 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
             <div className="pl-chip-row">
               <span className="pl-chip">配图锚点</span><span className="pl-chip">小红书 3:4</span><span className="pl-chip">公众号 1:1</span>
             </div>
-            {c.masterDocUrl ? <a className="pl-btn pl-btn--sm" href={c.masterDocUrl} target="_blank" rel="noreferrer">📄 母稿 docx ↗</a> : null}
+            {/* 账本里真有链接的产出才摆按钮（母稿 / 图文包 / 运营方案）——
+                缺的短一截，不摆空按钮。mock21 同版式。 */}
+            <div className="pl-chip-row">
+              {c.masterDocUrl ? <a className="pl-btn pl-btn--sm" href={c.masterDocUrl} target="_blank" rel="noreferrer">📄 母稿 docx ↗</a> : null}
+              {c.visualUrl ? <a className="pl-btn pl-btn--sm" href={c.visualUrl} target="_blank" rel="noreferrer">🖼 图文包 docx ↗</a> : null}
+              {c.opsDocUrl ? <a className="pl-btn pl-btn--sm" href={c.opsDocUrl} target="_blank" rel="noreferrer">📣 运营方案 ↗</a> : null}
+            </div>
           </div>
           {c.deliverableMode === "IMAGE_ONLY" ? (
             <div className="pl-standby">
@@ -705,19 +733,30 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
                 <StarChip star="kaiyang" /><b>开阳 · 视频发布包</b>
                 <span className="pl-badge pl-badge--slate">未启用</span>
               </div>
-              <p className="pl-note">{frozen ? "母稿已冻结，可从冻结母稿追投视频，无需重跑前序节点。" : "母稿未冻结，追投前先过审稿门禁。"}</p>
+              <p className="pl-note">
+                {frozen
+                  ? "母稿已冻结，可从冻结母稿追投视频，无需重跑前序节点。"
+                  : "母稿未冻结，追投前先过审稿门禁。"}
+              </p>
               {frozen ? <button type="button" className="pl-btn pl-btn--primary pl-btn--sm" onClick={() => c.onAppendVideo?.()}>⚡ 一键追投视频</button> : null}
             </div>
           ) : (
             <div className="pl-slot">
               <div className="pl-slot-head">
                 <StarChip star="kaiyang" /><b>开阳 · 视频发布包</b>
-                <span className={`pl-badge pl-badge--${c.step > 5 ? "jade" : "bronze"}`}>{c.step > 5 ? "已就绪" : "制作中"}</span>
+                {/* 与玉衡同口径三态：没过审稿门禁就是「待启动」——产品原来
+                    只有「已就绪 / 制作中」两态，没过门禁的双出案会显示
+                    「玉衡 待启动、开阳 制作中」，同一个 step 两个说法
+                    （Leo 2026-10-16 抓出，mock21 同口径修法）。 */}
+                <span className={`pl-badge pl-badge--${c.step > 5 ? "jade" : c.step === 5 ? "bronze" : "slate"}`}>
+                  {c.step > 5 ? "已就绪" : c.step === 5 ? "制作中" : "待启动"}
+                </span>
               </div>
               <div className="pl-chip-row">
                 <span className="pl-chip">黄金钩子口播 3s</span><span className="pl-chip">分镜表 12 镜头</span>
                 <span className="pl-chip">视频号 16:9</span><span className="pl-chip">抖音 9:16</span>
               </div>
+              {c.step <= 4 ? <p className="pl-note">视频支线要等审稿门禁 PASS、母稿冻结之后才起，现在还没派给开阳。</p> : null}
             </div>
           )}
           <div className="pl-slot pl-insp-foot">

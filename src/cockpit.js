@@ -499,15 +499,56 @@ export function stageIsClosed(rawStage) {
   return body === "已关单" || body === "关单完成";
 }
 
+/// Rust beidou_cases.content_json 列：harvest_episode_content 从 session_run
+/// 接力文本里提炼的真内容（正式标题 / 天权判词 / 打回链 / 研究编号注 /
+/// 产出时间线）。老库没有这一列时 Rust 给空串；解析失败一律按空处理——
+/// 一列脏 JSON 不许把整张看板炸掉（真机账本是本地文件，什么都有可能）。
+function parseContentJson(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/// 时间线行只留渲染要的四列（at / star / what / dur）：Rust 的 atMs 是合并
+/// 排序键，深潜舱不显示它。形状不对的行剔掉——PipelineView 直接 map 渲染，
+/// 塞个 null 进去会整栏崩。
+function cleanTimelineRows(rows) {
+  if (!Array.isArray(rows)) return null;
+  const out = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    const at = String(r.at ?? "").trim();
+    const what = String(r.what ?? "").trim();
+    if (!at || !what) continue;
+    out.push({
+      at,
+      star: String(r.star ?? "").trim(),
+      what,
+      dur: String(r.dur ?? "").trim(),
+    });
+  }
+  return out.length > 0 ? out : null;
+}
+
 /// Rust CaseListRow → 看板案件。字段名换一遍 + 阶段翻成下标 + 打回次数取
 /// 二审那份（SOP：打回计数挂在二审上，初审不过是退回天璇重选题，不算打回）。
 export function ledgerRowToCase(row) {
   if (!row) return null;
   const secondStrikes = Math.max(0, Number(row.secondStrikes ?? 0));
+  const content = parseContentJson(row.contentJson);
+  const title = String(row.title ?? "").trim();
+  // 正式标题（《》多跳一致的那一个）优先于账本占位标题：真机 BM-2601 的
+  // title 列只有「室内设计」三个字，正式标题在接力文本里（天权定题后每一跳
+  // 交接卡都带）。提炼不出来就照实落账本标题，不编。
+  const formalTitle = String(content?.formalTitle ?? "").trim();
   return {
     caseId: String(row.caseId ?? ""),
-    name: String(row.title ?? "").trim() || "未命名案件",
-    title: String(row.title ?? "").trim(),
+    name: formalTitle || title || "未命名案件",
+    title,
     step: stageToStep(row.stage),
     // 已关单标记：账本 stage 文本的口径（Rust CaseStage::Closed）。
     // PipelineView 据此把末格画成「已关单」而不是「运营关单在办」——
@@ -523,21 +564,29 @@ export function ledgerRowToCase(row) {
     folderUrl: row.folderUrl ?? "",
     researchDocUrl: row.researchDocUrl ?? "",
     reviewDocUrl: row.reviewDocUrl ?? "",
+    // 复审报告链接：Rust 标签归槽写进的新槽（recheck_doc_url）。打回后的
+    // 复审是真机里唯一带链接却没处摆的东西（mock21 左中栏都认这个字段）。
+    reReviewDocUrl: row.recheckDocUrl ?? "",
     visualUrl: row.visualUrl ?? "",
     videoUrl: row.videoUrl ?? "",
     opsDocUrl: row.opsDocUrl ?? "",
     lastActivityMs: row.lastActivityMs ?? null,
     updatedAtMs: row.updatedAtMs ?? null,
-    // 从本地账本来的行：没有候选标题/判词/探针这些只在二审时产生的字段，
-    // 留空让组件走各自的兜底分支，别拿演示数据填。
-    candidates: null,
-    // 五轴分/打回链只在飞书主表，账本镜像不带：必须是 null 而不是 {}。
+    // 以下字段来自 content_json（Rust 从 session_run 接力文本提炼）：
+    // 账本没提炼出东西时保持 null / ""，组件走各自的诚实空态——
+    // 「判词还没落到本地账本」「这一案还没有跑过的记录」，
+    // 别拿演示数据填，也别摆空列表让人以为真的没有。
+    candidates: Array.isArray(content?.candidates) ? content.candidates : null,
+    candidateNote: String(content?.candidateNote ?? ""),
+    // 五轴分只在飞书主表，账本镜像不带：必须是 null 而不是 {}。
     // 给 {} 的话 PipelineView 会渲染出五条 0 分的假门禁（Leo 一眼看出"这两行为什么是 0"）。
     reviewAxes: null,
-    strikeList: null,
-    timeline: null,
+    strikeList: Array.isArray(content?.strikes) ? content.strikes : null,
+    timeline: cleanTimelineRows(content?.timeline),
     criteria: null,
-    verdictText: "",
+    verdictText: String(content?.verdictText ?? ""),
+    verdictBy: String(content?.verdictBy ?? ""),
+    researchIdNote: String(content?.researchIdNote ?? ""),
   };
 }
 

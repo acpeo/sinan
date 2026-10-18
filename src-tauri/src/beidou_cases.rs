@@ -262,7 +262,26 @@ pub fn ensure_case_tables(connection: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_beidou_case_tasks_case
             ON beidou_case_tasks(case_id);",
-    )
+    )?;
+    // 增量列（老库迁移）：episode 内容提取的产物。CREATE TABLE IF NOT EXISTS 对
+    // 已存在的库不生效，老库（真机 10-18 之前建的）缺这两列 —— 按 pragma 补齐。
+    // content_json 一个 JSON 列装全部内容产物：以后加内容字段不用再改表。
+    for (name, ddl) in [
+        ("content_json", "content_json TEXT"),
+        ("recheck_doc_url", "recheck_doc_url TEXT"),
+    ] {
+        let exists: Option<i64> = connection
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('beidou_cases') WHERE name = ?1",
+                rusqlite::params![name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            connection.execute(&format!("ALTER TABLE beidou_cases ADD COLUMN {ddl}"), [])?;
+        }
+    }
+    Ok(())
 }
 
 /// 从一段自由文本里提取 CASE_ID（北斗侧派单/交接卡的强制注入位）。
@@ -637,6 +656,97 @@ type SessionHarvestRow = (
     Option<i64>,    // ended_at_ms
 );
 
+/// 一跳的三段文本（标题 / 收尾摘要 / 进度摘要）按序展开——段名和链接
+/// 经常跨字段（标签在标题、链接在摘要，真机「二审报告」跳就是这个形态），
+/// 所以切段前先把它们拼成一跳全文。空串段跳过：真机有整跳三字段全空的
+/// 占位行（rebound 会话），拼进去会污染切段。
+fn hop_texts(row: &SessionHarvestRow) -> impl Iterator<Item = &str> {
+    [row.2.as_deref(), row.3.as_deref(), row.4.as_deref()]
+        .into_iter()
+        .flatten()
+}
+
+/// 一跳全文：标题 + 收尾摘要 + 进度摘要，按序换行拼接。
+fn hop_blob(row: &SessionHarvestRow) -> String {
+    let mut out = String::new();
+    for text in hop_texts(row) {
+        if text.trim().is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(text);
+    }
+    out
+}
+
+/// 交接卡的【段名】正文切段：`【母稿】https://…` 里的链接归属于段名「母稿」。
+/// 没有【】的跳整段算一个无名段（段名空串）——段内照样找标签关键词，
+/// 只是没有任何段名锚定（真机 watchdog 空转轮、Leo 的提问都是这个形态）。
+/// 按 char 走不按 byte：书名号/方头括号都是多字节字符。
+fn label_segments(blob: &str) -> Vec<(String, String)> {
+    let chars: Vec<char> = blob.chars().collect();
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut label = String::new();
+    let mut body = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '【' {
+            out.push((std::mem::take(&mut label), std::mem::take(&mut body)));
+            let mut j = i + 1;
+            let mut name = String::new();
+            while j < chars.len() && chars[j] != '】' {
+                name.push(chars[j]);
+                j += 1;
+            }
+            label = name.trim().to_owned();
+            i = (j + 1).min(chars.len());
+            continue;
+        }
+        body.push(chars[i]);
+        i += 1;
+    }
+    out.push((label, body));
+    out
+}
+
+/// 段归属案号：先认带 [CASE_ID] 标签的跳（北斗派单规范，第一个命中的赢）。
+/// 标签缺失时（派单卡那一跳没落进本地账本——app 当时没开）退一步认
+/// 「段里有交接卡 + 全段只有一个裸 BM 编号」。Leo 2026-10-18 明确 VPS 侧
+/// 不会注入 [CASE_ID]，但交接卡是 SOP 刚性格式，每一跳都有；多编号或没
+/// 交接卡都不猜（猜错是把别人的活计挂到本案名下，比拢不上更糟）。
+fn episode_case_id(hops: &[&SessionHarvestRow]) -> Option<String> {
+    for row in hops {
+        for text in hop_texts(row) {
+            if let Some(found) = extract_case_id(text) {
+                return Some(found);
+            }
+        }
+    }
+    let has_handoff = hops
+        .iter()
+        .any(|row| hop_texts(row).any(|text| text.contains("【交接卡】")));
+    if !has_handoff {
+        return None;
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for row in hops {
+        for text in hop_texts(row) {
+            for id in extract_bm_case_ids(text) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    if ids.len() == 1 {
+        ids.into_iter().next()
+    } else {
+        None
+    }
+}
+
 pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<usize> {
     let rows: Vec<SessionHarvestRow> = {
         let mut stmt = connection.prepare(
@@ -694,36 +804,35 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
         for episode in episodes {
             let mut hops = episode;
             hops.sort_by(|a, b| a.5.unwrap_or(0).cmp(&b.5.unwrap_or(0)));
-            // 段内逐跳找带标签的案号——第一个命中的赢。同群聊同一轮就是
-            // 同一案（跨案必然沉默超限被切段），多个命中取最早一跳的。
-            let case_id = hops.iter().find_map(|row| {
-                for text in [row.2.as_deref(), row.3.as_deref(), row.4.as_deref()]
-                    .into_iter()
-                    .flatten()
-                {
-                    if let Some(found) = extract_case_id(text) {
-                        return Some(found);
-                    }
-                }
-                None
-            });
-            let Some(case_id) = case_id else { continue };
+            let Some(case_id) = episode_case_id(&hops) else {
+                continue;
+            };
             let now = chrono::Utc::now().timestamp_millis();
             // 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）。
             ensure_case_row(connection, &case_id)?;
+            // ① 标签归槽：交接卡段名（【母稿】【二审报告】【复审报告】…）就是
+            //    语义，比按 URL 出现顺序猜槽位硬得多。标签认领直接覆盖旧值——
+            //    旧值可能是老版本盲猜塞错的（真机 BM-2601：二审报告的链接占着
+            //    「研究文档」槽，母稿槽里是 25 位截断死链，复审报告无家可归）。
+            let claims = labeled_link_claims(&hops);
+            harvested += apply_labeled_claims(connection, &case_id, &claims)?;
+            // ② 修复错槽：某槽里的链接若被别的标签认领，说明它是被 URL 顺序
+            //    瞎猜塞进来的——清掉，等标签/盲填重来。没被任何标签认领的值
+            //    不动（发车 payload、看门狗反引号 ID 填的那些有别的出处）。
+            repair_mis_slots(connection, &case_id, &claims)?;
+            // ③ 剩余链接盲填空位（SOP 产出顺序）。已经躺在任何槽里的链接不
+            //    重复占槽——二审报告的链接归了 review，就不该再以"第一个空槽"
+            //    的身份落进 research（旧版错位就是这么来的）。
             let mut links: Vec<String> = Vec::new();
             for row in &hops {
-                for text in [row.2.as_deref(), row.3.as_deref(), row.4.as_deref()]
-                    .into_iter()
-                    .flatten()
-                {
+                for text in hop_texts(row) {
                     links.extend(extract_feishu_links(text));
                 }
             }
             // 段级去重：同一链接在同段多跳里重复贴是常态（母稿链接在二审跳和
             // 母稿跳各一次），逐跳 attach 会连锁占槽（见 dedupe_links 注释）。
             for link in dedupe_links(links) {
-                harvested += attach_link(connection, &case_id, &link)?;
+                harvested += attach_link_unclaimed(connection, &case_id, &link)?;
             }
             // 关单传播：看门狗关单分支的摘要明写「已关单」——案实际跑完，
             // 本地 stage 还停在 01_建档（launch 时建的初值）。窄规则：同段
@@ -748,6 +857,10 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
                  WHERE case_id = ?1",
                 rusqlite::params![case_id, now],
             )?;
+            // ④ episode 内容提取：正式标题 / 天权判词 / 打回链 / 研究编号注 /
+            //    产出时间线，写进 content_json（深潜舱三栏的真内容，
+            //    Leo 2026-10-21 批准——那三栏原来各摆一句假话）。
+            harvest_episode_content(connection, &case_id, &hops)?;
         }
     }
     Ok(harvested)
@@ -836,6 +949,806 @@ fn attach_link(connection: &Connection, case_id: &str, link: &str) -> rusqlite::
     Ok(0)
 }
 
+/// 标签 → 账本槽位。键是交接卡段名里出现的关键词——段名经常带修饰
+/// （真机复审跳写「母稿（已 FROZEN 冻结，只读，严禁修改正文）」），所以用
+/// 包含匹配而不是全等。星位名同义：天玑产出=母稿、天璇产出=研究、
+/// 玉衡产出=图文包、摇光产出=运营。列名来自本文件固定数组，不是用户输入。
+const LABEL_SLOTS: &[(&str, &str)] = &[
+    ("母稿", "master_doc_url"),
+    ("天玑产出", "master_doc_url"),
+    ("二审报告", "review_doc_url"),
+    ("复审报告", "recheck_doc_url"),
+    ("天璇产出", "research_doc_url"),
+    ("研究文档", "research_doc_url"),
+    ("图文包", "visual_url"),
+    ("玉衡产出", "visual_url"),
+    ("视频包", "video_url"),
+    ("开阳产出", "video_url"),
+    ("运营方案", "ops_doc_url"),
+    ("摇光产出", "ops_doc_url"),
+    ("任务文件夹", "folder_url"),
+    ("文件夹", "folder_url"),
+];
+
+/// 全部产物槽位（错槽修复遍历用）。
+const CASE_LINK_SLOTS: &[&str] = &[
+    "folder_url",
+    "research_doc_url",
+    "master_doc_url",
+    "review_doc_url",
+    "recheck_doc_url",
+    "visual_url",
+    "video_url",
+    "ops_doc_url",
+];
+
+/// 标签归槽：按【段名】认槽，不再按 URL 出现顺序猜。段内找关键词，取关键
+/// 词之后、段内的第一条合法链接（段界即搜索窗——不会跨段把下一份文档的
+/// 链接揽进来）。同一标签多次出现取最早那一跳的（母稿链接在二审跳和母稿
+/// 跳各贴一次，取早不取晚：同一文档的两次引用，不是两个版本）。
+/// 一条链接不占两个槽（段里同时出现「母稿」和「图文包」时各归各）。
+fn labeled_link_claims(hops: &[&SessionHarvestRow]) -> Vec<(&'static str, String)> {
+    let mut claims: Vec<(&'static str, String)> = Vec::new();
+    for row in hops {
+        let blob = hop_blob(row);
+        if blob.is_empty() {
+            continue;
+        }
+        for (label, body) in label_segments(&blob) {
+            let segment = if label.is_empty() {
+                body
+            } else {
+                format!("{label}{body}")
+            };
+            // 段内关键词按出现位置排序：最早出现的关键词先认领
+            let mut hits: Vec<(usize, &'static str, &'static str)> = Vec::new();
+            for &(key, slot) in LABEL_SLOTS {
+                if let Some(at) = segment.find(key) {
+                    hits.push((at, key, slot));
+                }
+            }
+            hits.sort_by_key(|(at, _, _)| *at);
+            for (at, key, slot) in hits {
+                // 一槽一主：这个槽已经有主了就不换（首跳优先）
+                if claims.iter().any(|(s, _)| *s == slot) {
+                    continue;
+                }
+                let tail = &segment[at + key.len()..];
+                let Some(link) = extract_feishu_links(tail).into_iter().next() else {
+                    continue;
+                };
+                if claims.iter().any(|(_, l)| *l == link) {
+                    continue;
+                }
+                claims.push((slot, link));
+            }
+        }
+    }
+    claims
+}
+
+/// 标签认领写进账本：标签是硬证据（文档自己的段名），直接覆盖旧值。
+/// 返回写中的条数（只作计数用，重复收割同一案也会重写——值不变）。
+fn apply_labeled_claims(
+    connection: &Connection,
+    case_id: &str,
+    claims: &[(&'static str, String)],
+) -> rusqlite::Result<usize> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut applied = 0usize;
+    for (slot, link) in claims {
+        let sql =
+            format!("UPDATE beidou_cases SET {slot} = ?2, updated_at_ms = ?3 WHERE case_id = ?1");
+        applied += connection.execute(&sql, rusqlite::params![case_id, link, now])?;
+    }
+    Ok(applied)
+}
+
+/// 修复旧版盲填的错槽：某槽里的链接若被某个标签认领、而那个标签的槽不是
+/// 这一槽，说明这链接是被 URL 顺序瞎猜塞进来的——清掉。没被任何标签认领的
+/// 值不动（发车 payload、看门狗反引号 ID 填的那些有别的出处，动了就是毁数据）。
+fn repair_mis_slots(
+    connection: &Connection,
+    case_id: &str,
+    claims: &[(&'static str, String)],
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().timestamp_millis();
+    for slot in CASE_LINK_SLOTS {
+        let current: String = connection
+            .query_row(
+                &format!("SELECT COALESCE({slot}, '') FROM beidou_cases WHERE case_id = ?1"),
+                rusqlite::params![case_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        if current.is_empty() {
+            continue;
+        }
+        // 这个链接归哪个标签？归的槽不是本槽 → 它是被顺序猜塞进来的
+        let owner = claims
+            .iter()
+            .find(|(_, link)| link.as_str() == current)
+            .map(|(s, _)| *s);
+        if let Some(owner) = owner {
+            if owner != *slot {
+                let sql = format!(
+                    "UPDATE beidou_cases SET {slot} = '', updated_at_ms = ?2 WHERE case_id = ?1"
+                );
+                connection.execute(&sql, rusqlite::params![case_id, now])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 盲填（没有标签的链接兜底）：按 SOP 产出顺序填空位链。与 attach_link 的
+/// 唯一区别：已经躺在任何槽里的链接不再重复占槽——二审报告的链接归了
+/// review 槽，就不该再以"第一个空槽"的身份落进 research（旧版实锤错位）。
+fn attach_link_unclaimed(
+    connection: &Connection,
+    case_id: &str,
+    link: &str,
+) -> rusqlite::Result<usize> {
+    let taken: Option<i64> = connection
+        .query_row(
+            &format!(
+                "SELECT 1 FROM beidou_cases WHERE case_id = ?1 AND ({})",
+                CASE_LINK_SLOTS
+                    .iter()
+                    .map(|s| format!("COALESCE({s}, '') = ?2"))
+                    .collect::<Vec<_>>()
+                    .join(" OR ")
+            ),
+            rusqlite::params![case_id, link],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if taken.is_some() {
+        return Ok(0);
+    }
+    attach_link(connection, case_id, link)
+}
+
+// ---------------------------------------------------------------------------
+// episode 内容提取（Leo 2026-10-21 批准；mock21 预览过的那几样真东西）
+//
+// 深潜舱三栏原来各摆一句假话：「这一案还没有跑过的记录」「判词还没落到
+// 本地账本」，研究注是写死的样板句——而 session_run 里正式标题、天权判词、
+// 打回记录、时间线全都在（真机 BM-2601 逐跳实锤）。这一函数把它们提炼进
+// content_json 一个 JSON 列（老库按 pragma 迁移补齐，见 ensure_case_tables）：
+//   formalTitle    多跳一致的《》正式标题（天权五轴定题后每一跳交接卡都带）
+//   verdictText    末次【天权二审结论】原话；verdictBy 归属（复审/二审 + 时刻）
+//   strikes        结论里写「打回」的跳 → 打回记录（次数回写 second_strike）
+//   researchIdNote 看门狗摘录里天璇产出的截断编号（完整链接没回传时的诚实注）
+//   timeline       接力跳（当前阶段行）+ 看门狗动作行（漏派/超时/关单）
+// 数据只来自 session_run 本段 + gateway_task 里提到本案的行：不连网、不问飞书。
+// ---------------------------------------------------------------------------
+
+/// 看门狗巡检行（gateway_task 里提到本案的 automation 摘要）。真机 9 轮巡检
+/// 都躺在这里；session_run 的 cron 会话只有最后一轮（关单那轮）。
+type WatchRow = (
+    Option<String>, // agent_id
+    Option<String>, // terminal_summary
+    Option<i64>,    // started_at_ms
+    Option<i64>,    // ended_at_ms
+);
+
+/// episode 内容提取：把一跳一跳的自由文本提炼成深潜舱三栏要的那几样。
+/// 幂等：同样的数据再跑一遍，写进去的 JSON 一字不差（合并按 (时刻, 内容)
+/// 去重，空产物不写列——保留上一次提取的值）。
+fn harvest_episode_content(
+    connection: &Connection,
+    case_id: &str,
+    hops: &[&SessionHarvestRow],
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().timestamp_millis();
+    // 看门狗巡检行。表不存在时（网关从没连过）跳过——内容提取不许把
+    // session 收割线带崩（那条线还兼着链接归拢）。
+    let watch_rows: Vec<WatchRow> = {
+        let has_table: Option<i64> = connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gateway_task'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if has_table.is_none() {
+            Vec::new()
+        } else {
+            let mut stmt = connection.prepare(
+                "SELECT agent_id, terminal_summary, started_at_ms, ended_at_ms
+                 FROM gateway_task
+                 WHERE COALESCE(terminal_summary, '') LIKE '%' || ?1 || '%'
+                 ORDER BY COALESCE(started_at_ms, 0)",
+            )?;
+            let mapped = stmt.query_map(rusqlite::params![case_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+            mapped.filter_map(|item| item.ok()).collect()
+        }
+    };
+
+    // ── 正式标题：多跳一致的《》──
+    // 天权五轴定题后，标题以《》形态写进每一跳交接卡的「任务：」行——同一
+    // 标题在接力里重复出现才算数（只出现一次的多是文档名/段名）。
+    fn tally_title(counts: &mut Vec<(String, usize)>, inner: &str) {
+        let t = inner.trim();
+        if t.chars().count() < 6 {
+            return; // 《母稿》《图文包》这种段名不是标题
+        }
+        if let Some(entry) = counts.iter_mut().find(|(k, _)| k == t) {
+            entry.1 += 1;
+        } else {
+            counts.push((t.to_owned(), 1));
+        }
+    }
+    let mut title_counts: Vec<(String, usize)> = Vec::new();
+    for row in hops {
+        for text in hop_texts(row) {
+            for inner in book_titles(text) {
+                tally_title(&mut title_counts, &inner);
+            }
+        }
+    }
+    for row in &watch_rows {
+        if let Some(text) = row.1.as_deref() {
+            for inner in book_titles(text) {
+                tally_title(&mut title_counts, &inner);
+            }
+        }
+    }
+    let mut formal_title = String::new();
+    let mut best_n = 1usize; // 门槛：同一标题至少出现 2 次
+    for (t, n) in &title_counts {
+        if *n >= 2 && *n > best_n {
+            formal_title = t.clone();
+            best_n = *n;
+        }
+    }
+
+    // ── 天权判词 + 打回记录：末次【天权二审结论】赢（打回在前、复审 PASS 在后）──
+    let mut verdict_text = String::new();
+    let mut verdict_by = String::new();
+    let mut strikes: Vec<serde_json::Value> = Vec::new();
+    for row in hops {
+        let blob = hop_blob(row);
+        for (label, body) in label_segments(&blob) {
+            if !label.contains("天权二审结论") {
+                continue;
+            }
+            let line = body
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
+                .to_owned();
+            if line.is_empty() {
+                continue;
+            }
+            let at = hop_verdict_ms(row);
+            // 同一跳里贴了【复审报告】= 这是复审判词；只有【二审报告】= 二审判词
+            let is_recheck = blob.contains("复审报告");
+            verdict_text = line.clone();
+            verdict_by = format!(
+                "天权 · {}判词 · {}",
+                if is_recheck { "复审" } else { "二审" },
+                fmt_ts(at)
+            );
+            if line.contains("打回") {
+                let (level, sev) = strike_level_and_sev(&line);
+                let detail = strike_elaboration(&watch_rows);
+                let note = if detail.is_empty() {
+                    format!("天权二审结论：{line}")
+                } else {
+                    format!("天权二审结论：{line}——{detail}")
+                };
+                strikes.push(serde_json::json!({
+                    "verdict": if level.is_empty() {
+                        "FAIL".to_owned()
+                    } else {
+                        format!("FAIL · {level}")
+                    },
+                    "sev": sev,
+                    "at": fmt_ts(at),
+                    "note": clip(&note, 120),
+                }));
+            }
+        }
+    }
+
+    // ── 天璇研究编号注：看门狗摘录里的截断 ID ──
+    let research_note = research_id_note(&watch_rows);
+
+    // ── 产出时间线：接力跳 + 看门狗动作行 ──
+    let mut timeline: Vec<serde_json::Value> = Vec::new();
+    // ① 接力跳：只收提到本案的跳（同段里别人的闲话不进来），空转轮不收
+    //    （watchdog 自己写 NO_REPLY / 无可执行内容的那种）。
+    for row in hops {
+        let blob = hop_blob(row);
+        if !blob.contains(case_id) {
+            continue;
+        }
+        let trimmed = blob.trim();
+        if trimmed.is_empty() || trimmed == "NO_REPLY" || trimmed.contains("无可执行内容") {
+            continue;
+        }
+        let what = timeline_what(&blob);
+        if what.is_empty() {
+            continue;
+        }
+        let start = row.5.unwrap_or_else(|| row.6.unwrap_or(0));
+        let end = row.6.unwrap_or(start);
+        timeline.push(serde_json::json!({
+            "at": fmt_ts(hop_at_ms(row)),
+            // atMs 只作合并排序的键，前端读 at/star/what/dur 四列
+            "atMs": hop_at_ms(row),
+            "star": row.1.clone().unwrap_or_default(),
+            "what": what,
+            "dur": fmt_dur(end - start),
+        }));
+    }
+    // ② 看门狗动作行：判定分支（关单/漏派/超时/异常）。「无事」轮不记——
+    //    watchdog 自己说没动作。同一分支 30 分钟内连续命中只记一笔
+    //    （真机 17:49/18:09 两轮都命中漏派，时间线不复读）。
+    let mut last_branch: Option<(String, i64)> = None;
+    for row in &watch_rows {
+        let Some(text) = row.1.as_deref() else {
+            continue;
+        };
+        if !text.contains(case_id) {
+            continue;
+        }
+        let Some(branch) = watchdog_branch(text) else {
+            continue;
+        };
+        let at = row.3.unwrap_or_else(|| row.2.unwrap_or(0));
+        if let Some((prev, prev_at)) = &last_branch {
+            if *prev == branch && (at - prev_at).abs() < 30 * 60 * 1000 {
+                continue;
+            }
+        }
+        last_branch = Some((branch.clone(), at));
+        timeline.push(serde_json::json!({
+            "at": fmt_ts(at),
+            "atMs": at,
+            "star": row.0.clone().unwrap_or_default(),
+            "what": format!("看门狗巡检：{branch}"),
+            "dur": "—",
+        }));
+    }
+
+    // ── 母稿冻结：复审跳明写「母稿（已 FROZEN 冻结，只读，严禁修改正文）」，
+    //    看门狗行写 master_doc_status=FROZEN。两种都认，只升不降。──
+    let frozen_text = hops.iter().any(|row| hop_blob(row).contains("FROZEN"))
+        || watch_rows
+            .iter()
+            .any(|row| row.1.as_deref().unwrap_or("").contains("FROZEN"));
+    if frozen_text {
+        connection.execute(
+            "UPDATE beidou_cases SET master_frozen = 1, updated_at_ms = ?2
+             WHERE case_id = ?1 AND master_frozen = 0",
+            rusqlite::params![case_id, now],
+        )?;
+    }
+    // ── 打回次数：以段内数出来的为准，只增不减。──
+    if !strikes.is_empty() {
+        connection.execute(
+            "UPDATE beidou_cases SET second_strike = MAX(second_strike, ?2), updated_at_ms = ?3
+             WHERE case_id = ?1",
+            rusqlite::params![case_id, strikes.len() as i64, now],
+        )?;
+    }
+
+    // ── 合并旧值：同一案可能有多轮 episode（追投视频会再跑一轮），新提取为
+    //    非空的标量字段赢，旧值只补新一遍没看到的部分；打回记录按时刻合并
+    //    （新的替换同时刻的旧记录）；时间线按 (时刻, 内容) 去重合并后排序，
+    //    上限 60 行。空产物不写列。──
+    let existing: String = connection
+        .query_row(
+            "SELECT COALESCE(content_json, '') FROM beidou_cases WHERE case_id = ?1",
+            rusqlite::params![case_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    let old: serde_json::Value = serde_json::from_str(&existing).unwrap_or(serde_json::Value::Null);
+    let pick = |new_val: &str, key: &str| -> String {
+        if !new_val.is_empty() {
+            return new_val.to_owned();
+        }
+        old.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    let formal_title = pick(&formal_title, "formalTitle");
+    let verdict_text = pick(&verdict_text, "verdictText");
+    let verdict_by = pick(&verdict_by, "verdictBy");
+    let research_note = pick(&research_note, "researchIdNote");
+    let mut strike_rows: Vec<Value> = old
+        .get("strikes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for s in strikes {
+        let at = s.get("at").and_then(Value::as_str);
+        strike_rows.retain(|o| o.get("at").and_then(Value::as_str) != at);
+        strike_rows.push(s);
+    }
+    let mut tl_rows: Vec<Value> = old
+        .get("timeline")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for row in timeline {
+        let at = row.get("atMs").and_then(Value::as_i64);
+        let what = row.get("what").and_then(Value::as_str);
+        tl_rows.retain(|o| {
+            o.get("atMs").and_then(Value::as_i64) != at
+                || o.get("what").and_then(Value::as_str) != what
+        });
+        tl_rows.push(row);
+    }
+    tl_rows.sort_by(|a, b| {
+        a.get("atMs")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .cmp(&b.get("atMs").and_then(Value::as_i64).unwrap_or(0))
+    });
+    tl_rows.truncate(60);
+    let mut content = serde_json::Map::new();
+    if !formal_title.is_empty() {
+        content.insert("formalTitle".into(), Value::String(formal_title));
+    }
+    if !verdict_text.is_empty() {
+        content.insert("verdictText".into(), Value::String(verdict_text));
+    }
+    if !verdict_by.is_empty() {
+        content.insert("verdictBy".into(), Value::String(verdict_by));
+    }
+    if !strike_rows.is_empty() {
+        content.insert("strikes".into(), Value::Array(strike_rows));
+    }
+    if !research_note.is_empty() {
+        content.insert("researchIdNote".into(), Value::String(research_note));
+    }
+    if !tl_rows.is_empty() {
+        content.insert("timeline".into(), Value::Array(tl_rows));
+    }
+    if content.is_empty() {
+        return Ok(()); // 没提炼出东西：不动这一列（保留前值）
+    }
+    let payload = Value::Object(content).to_string();
+    if payload == existing {
+        return Ok(()); // 没变：不写
+    }
+    connection.execute(
+        "UPDATE beidou_cases SET content_json = ?2, updated_at_ms = ?3 WHERE case_id = ?1",
+        rusqlite::params![case_id, payload, now],
+    )?;
+    Ok(())
+}
+
+/// 捞出文本里所有 《…》 内容（正式标题的刚性形态）。按 char 走：书名号
+/// 是单码点，字节下标会在中文前导段上错位（regex_lite_capture 的教训）。
+fn book_titles(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '《' {
+            let mut j = i + 1;
+            let mut inner = String::new();
+            while j < chars.len() && chars[j] != '》' {
+                inner.push(chars[j]);
+                j += 1;
+            }
+            if j < chars.len() && !inner.trim().is_empty() {
+                out.push(inner);
+            }
+            i = j + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// 打回结论 → (级别, 必改处数)。真机形如「打回（小改，3 处必改）」：括号
+/// 第一段是级别（小改/中改/重写），「N 处必改」是处数。取不到就空着——
+/// 徽标少一格比假一格好。
+fn strike_level_and_sev(line: &str) -> (String, String) {
+    let mut level = String::new();
+    if let Some(open) = line.find('（') {
+        let rest = &line[open + '（'.len_utf8()..];
+        if let Some(close) = rest.find('）') {
+            for part in rest[..close].split(['，', ',']) {
+                let p = part.trim();
+                if matches!(p, "小改" | "中改" | "重写") {
+                    level = p.to_owned();
+                    break;
+                }
+            }
+        }
+    }
+    let mut sev = String::new();
+    if let Some(at) = line.find("处必改") {
+        // 往前找数字（「处必改」前面只允许空格）
+        let head = line[..at].trim_end();
+        let digits: String = head
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if !digits.is_empty() {
+            sev = format!("{digits} 处必改");
+        }
+    }
+    (level, sev)
+}
+
+/// 打回详述：看门狗巡检摘录里会把三处必改逐条列出来（真机 16:29 那轮：
+/// 「天权二审结论为**打回（小改，3 处必改）**：场景五标题与正文方向相反…」）。
+/// 打回卡上只写结论一行，详述在这——取冒号后到句号那一句。判定行里的
+/// 「打回：未命中」不是详述（以未/不开头的跳过）。
+fn strike_elaboration(watch_rows: &[WatchRow]) -> String {
+    for row in watch_rows {
+        let Some(text) = row.1.as_deref() else {
+            continue;
+        };
+        let mut from = 0;
+        while let Some(rel) = text[from..].find("打回") {
+            let at = from + rel;
+            from = at + "打回".len();
+            let tail = &text[from..];
+            let Some(colon) = tail.find('：') else {
+                continue;
+            };
+            let detail = tail[colon + '：'.len_utf8()..]
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim();
+            if detail.is_empty() || detail.starts_with('未') || detail.starts_with('不') {
+                continue;
+            }
+            let cut = detail.split('。').next().unwrap_or(detail).trim();
+            if !cut.is_empty() {
+                return cut.to_owned();
+            }
+        }
+    }
+    String::new()
+}
+
+/// 天璇研究编号注：完整 docx 链接从来没回传过，本地只留下看门狗摘录里的
+/// 截断编号（真机 16:29 巡检行：「| 天璇产出 | 适我主义与家的能量场（DDyLd0z…） |」）。
+/// 研究槽没有链接时，这条注是唯一诚实的说明——比写死的样板句强。
+fn research_id_note(watch_rows: &[WatchRow]) -> String {
+    for row in watch_rows {
+        let Some(text) = row.1.as_deref() else {
+            continue;
+        };
+        let mut from = 0;
+        while let Some(rel) = text[from..].find("天璇产出") {
+            let at = from + rel;
+            from = at + "天璇产出".len();
+            let window: String = text[from..].chars().take(60).collect();
+            let Some(open) = window.find('（') else {
+                continue;
+            };
+            let after = &window[open + '（'.len_utf8()..];
+            let Some(close) = after.find('）') else {
+                continue;
+            };
+            let id = after[..close].trim();
+            // 截断编号：6 位以上字母数字，以省略号收尾（完整 ID 不带省略号）
+            let base = id.trim_end_matches('…');
+            if base.chars().count() < 6
+                || !base.chars().all(|c| c.is_ascii_alphanumeric())
+                || !id.ends_with('…')
+            {
+                continue;
+            }
+            let title = window[..open]
+                .trim_matches(|c: char| {
+                    c.is_whitespace() || matches!(c, '|' | '：' | ':' | '》' | '《')
+                })
+                .to_owned();
+            if title.is_empty() {
+                continue;
+            }
+            return format!(
+                "天璇产出《{title}》：本地只留下截断编号 {id}（看门狗巡检摘录），完整 docx 链接未随任务回传。"
+            );
+        }
+    }
+    String::new()
+}
+
+/// 时间线的一句话：优先「当前阶段：」行（交接卡的刚性行），其次【…完成
+/// 汇总】段名（星位收尾自报的事件名），最后首行——剥掉【段名】前缀和
+/// 「BM-xxxx 」案号前缀（账本口径不是事件），方括号标记行（[CASE_ID: …]）
+/// 整行跳过。超过 28 字截断：时间线是一行一条的小字，长了把深潜舱撑爆。
+fn timeline_what(blob: &str) -> String {
+    // ① 当前阶段行（「当前阶段：天玑创作中（二审打回修改，小改）」）
+    for line in blob.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("当前阶段").map(|s| {
+            s.trim_start_matches(|c: char| c == '：' || c == ':' || c == '=' || c.is_whitespace())
+        }) else {
+            continue;
+        };
+        if !rest.is_empty() {
+            return clip(rest, 28);
+        }
+    }
+    // ② 汇总段名（「【玉衡阶段完成汇总】BM-2601 家的气场…」→「玉衡阶段完成汇总」）
+    for (label, _) in label_segments(blob) {
+        if !label.is_empty() && label.contains("汇总") {
+            return clip(&label, 28);
+        }
+    }
+    // ③ 首行
+    for line in blob.lines() {
+        let mut t = line.trim().to_owned();
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with('[') && t.ends_with(']') {
+            continue; // [CASE_ID: …] / [DELIVERABLE: …] 这类标记行
+        }
+        while t.starts_with('【') {
+            match t.find('】') {
+                Some(close) => t = t[close + '】'.len_utf8()..].trim().to_owned(),
+                None => break,
+            }
+        }
+        t = strip_case_prefix(&t);
+        if !t.is_empty() {
+            return clip(&t, 28);
+        }
+    }
+    String::new()
+}
+
+/// 行首案号前缀（「BM-2601 xxx」→「xxx」）：时间线每一行都挂着同一个案号
+/// 是噪声——整张深潜舱就在讲这一案。编号后必须跟分隔符，否则这是单词尾巴。
+fn strip_case_prefix(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() >= 4
+        && chars[0].eq_ignore_ascii_case(&'B')
+        && chars[1].eq_ignore_ascii_case(&'M')
+        && chars[2] == '-'
+    {
+        let mut i = 3;
+        let mut digits = 0;
+        while i < chars.len() && chars[i].is_ascii_alphanumeric() && digits < 6 {
+            i += 1;
+            digits += 1;
+        }
+        if digits >= 3 && i < chars.len() && matches!(chars[i], ' ' | '：' | ':' | '|') {
+            return chars[i..].iter().collect::<String>().trim().to_owned();
+        }
+    }
+    s.to_owned()
+}
+
+/// 看门狗巡检行的动作分支：认「命中」二字，在它后面 15 字内找分支名
+/// （关单/漏派/超时/异常/无事），找不到再紧贴它前面 6 字找。分支名必须
+/// "活着"——被未/不否定过的（「关单：未命中」「未关单」「关单分支不成立」）
+/// 不算。命中的是「无事」轮也跳过：watchdog 自己说没动作，时间线不记空转轮。
+/// 真机五轮全中：17:49/18:09 漏派、18:29 超时、19:09 关单（16:29/17:09/
+/// 18:49 三轮无事或未命中，全部正确跳过）。
+fn watchdog_branch(text: &str) -> Option<String> {
+    const BRANCHES: [&str; 5] = ["关单", "漏派", "超时", "异常", "无事"];
+    let chars: Vec<char> = text.chars().collect();
+    // 分支名在 at 处是否"活着"（没被未/不/没否定）
+    let live = |at: usize, len: usize| -> bool {
+        let prev: String = chars[at.saturating_sub(2)..at].iter().collect();
+        if prev.contains('未') || prev.contains('不') || prev.contains('没') {
+            return false;
+        }
+        let after: String = chars[(at + len)..(at + len + 4).min(chars.len())]
+            .iter()
+            .collect();
+        !(after.contains('未') || after.contains('不') || after.contains('没'))
+    };
+    // 窗口 [lo, hi) 里第一个活着的分支名
+    let scan = |lo: usize, hi: usize| -> Option<&'static str> {
+        for b in BRANCHES {
+            let blen = b.chars().count();
+            let mut at = lo;
+            while at + blen <= hi {
+                let window: String = chars[at..at + blen].iter().collect();
+                if window == b && live(at, blen) {
+                    return Some(b);
+                }
+                at += 1;
+            }
+        }
+        None
+    };
+    let mut idx = 0;
+    while idx + 1 < chars.len() {
+        // 找下一个「命中」
+        let hit = (idx..chars.len() - 1).find(|&k| chars[k] == '命' && chars[k + 1] == '中');
+        let Some(hit) = hit else { return None };
+        idx = hit + 2;
+        // 否定的命中（未命中/不命中/没命中）不是动作
+        let prev: String = chars[hit.saturating_sub(2)..hit].iter().collect();
+        if prev.contains('未') || prev.contains('不') || prev.contains('没') {
+            continue;
+        }
+        // 先看命中后面 15 字（「本轮命中分支】漏派分支」「已命中并执行超时分支」），
+        // 再紧贴前面 6 字（「分支 1 关单命中」「无事分支命中」）——贴脸的才是
+        // 这一命中的主语，远处的分支名属于别的句子（真机 18:29 那轮前面
+        // 3 字就是「① 关单不命中」的叙述）。
+        let branch =
+            scan(hit + 2, (hit + 17).min(chars.len())).or_else(|| scan(hit.saturating_sub(6), hit));
+        if let Some(b) = branch {
+            if b == "无事" {
+                continue;
+            }
+            return Some(b.to_owned());
+        }
+    }
+    None
+}
+
+/// 时间线用的一跳时刻：一般是开跑时刻；跨 24 小时的 rebound 会话改用结束
+/// 时刻（真机建档跳的 started_at 是 10-13 建会话那天，晚了 4.85 天才跑）。
+fn hop_at_ms(row: &SessionHarvestRow) -> i64 {
+    let start = row.5.unwrap_or_else(|| row.6.unwrap_or(0));
+    let end = row.6.unwrap_or(start);
+    if end - start > 24 * 3600 * 1000 {
+        end
+    } else {
+        start
+    }
+}
+
+/// 判词/打回用的一跳时刻：交接卡是跑完才贴出来的，结束时刻更接近判词
+/// 落笔（真机打回跳 16:18 开跑、16:42 贴卡，打回记录记 16:42）。
+fn hop_verdict_ms(row: &SessionHarvestRow) -> i64 {
+    row.6.unwrap_or_else(|| row.5.unwrap_or(0))
+}
+
+/// 时长人话：秒→"Ns"、分→"Nm"；超 24 小时或没记结束→"—"（不知道多久
+/// 就不编——rebound 会话的 started_at 是建会话那天，能算出 4.85 天来）。
+fn fmt_dur(ms: i64) -> String {
+    if ms <= 0 || ms > 24 * 3600 * 1000 {
+        return "—".to_owned();
+    }
+    let secs = ms / 1000;
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m", secs / 60)
+    }
+}
+
+/// 时刻格式 MM-DD HH:MM（东八区——账本存 UTC ms，Leo 在东八区）。
+/// 固定 +8 而不是本机时区：CI 跑在 UTC，用本地时间会让断言随机器漂移。
+fn fmt_ts(ms: i64) -> String {
+    let offset = chrono::FixedOffset::east_opt(8 * 3600).expect("东八区是合法固定偏移");
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|dt| dt.with_timezone(&offset).format("%m-%d %H:%M").to_string())
+        .unwrap_or_default()
+}
+
+/// 截到 n 个字符（超出加省略号）。按 char 数不按字节——中文一字 3 字节。
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_owned();
+    }
+    format!("{}…", s.chars().take(n).collect::<String>())
+}
+
 /// 从一段自由文本（terminal_summary / 交接卡）里捞出所有飞书链接。
 /// 真机实测：链接裸奔在 session_run.terminal_summary 里，形如
 /// `https://my.feishu.cn/docx/CDcfd…` 与 `https://my.feishu.cn/drive/folder/Rbpj…`。
@@ -873,6 +1786,11 @@ pub fn extract_feishu_links(text: &str) -> Vec<String> {
                 j += 1;
             }
             let raw = &text[start..j];
+            // 截断的链接不认：真机摘要里的半截链以省略号结尾（「…docx/
+            // GfNndXZsUojtghxtMBCc…」）——URL 扫描到省略号就收，收到的 25 位
+            // 短 ID 点不开。2026-10-21 真机实锤：旧版把这种死链当母稿链接
+            // 存进了 master_doc_url，深潜舱里点进去 404。
+            let truncated = text[j..].starts_with('…') || text[j..].starts_with("...");
             // 只留飞书域（本层只关心飞书产物；别的链接不塞进云盘入口）
             let host = raw
                 .trim_start_matches("https://")
@@ -889,7 +1807,9 @@ pub fn extract_feishu_links(text: &str) -> Vec<String> {
             let has_artifact_path = FEISHU_PATH_MARKERS
                 .iter()
                 .any(|marker| raw.contains(marker));
-            if has_artifact_path && (host.ends_with("feishu.cn") || host.ends_with("larksuite.com"))
+            if has_artifact_path
+                && !truncated
+                && (host.ends_with("feishu.cn") || host.ends_with("larksuite.com"))
             {
                 out.push(clean_link(raw));
             }
@@ -1368,6 +2288,11 @@ pub struct CaseListRow {
     pub ops_doc_url: String,
     pub last_activity_ms: Option<i64>,
     pub updated_at_ms: i64,
+    /// episode 内容提取产物（JSON）：正式标题/天权判词/打回记录/研究编号注/时间线。
+    /// 空串 = 这一案还没提出内容（前端走各自的诚实空态）。
+    pub content_json: String,
+    /// 复审报告链接（天权第二份审稿文档）；二审报告在 review_doc_url。
+    pub recheck_doc_url: String,
 }
 
 /// 列全部案件：按最后活动倒序（新案在上）。limit 缺省 200，上限 500。
@@ -1382,7 +2307,8 @@ pub fn list_cases(
         "SELECT case_id, title, task_type, stage, owner_star, live_action,
                 first_strike, second_strike, master_frozen,
                 folder_url, research_doc_url, master_doc_url, review_doc_url,
-                visual_url, video_url, ops_doc_url, last_activity_ms, updated_at_ms
+                visual_url, video_url, ops_doc_url, last_activity_ms, updated_at_ms,
+                content_json, recheck_doc_url
          FROM beidou_cases
          ORDER BY COALESCE(last_activity_ms, updated_at_ms) DESC, updated_at_ms DESC
          LIMIT {limit}"
@@ -1409,6 +2335,8 @@ pub fn list_cases(
             ops_doc_url: text(15).unwrap_or_default(),
             last_activity_ms: row.get::<_, Option<i64>>(16)?,
             updated_at_ms: row.get::<_, i64>(17)?,
+            content_json: text(18).unwrap_or_default(),
+            recheck_doc_url: text(19).unwrap_or_default(),
         })
     })?;
     rows.collect()
@@ -1574,6 +2502,20 @@ mod dispatch_helper_tests {
 
     fn session_run_db() -> Connection {
         let db = memory_db();
+        // 内容提取要读 gateway_task（看门狗巡检行）；没有它整个 session
+        // 收割线会崩，所以测试库里照真机 schema 建上。
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS gateway_task (
+                task_id TEXT NOT NULL,
+                gateway TEXT NOT NULL,
+                agent_id TEXT,
+                terminal_summary TEXT,
+                started_at_ms INTEGER,
+                ended_at_ms INTEGER,
+                PRIMARY KEY (task_id, gateway)
+            )",
+        )
+        .expect("gateway_task table");
         db.execute_batch(
             "CREATE TABLE session_run (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1612,6 +2554,27 @@ mod dispatch_helper_tests {
         .expect("insert session");
     }
 
+    /// 带 ended_at 的插入（时长/判词时刻断言要用——真机打回跳 16:18 开跑、
+    /// 16:42 贴卡，打回记录记的是贴卡时刻）。
+    fn insert_session_span(
+        db: &Connection,
+        session_key: &str,
+        agent_id: &str,
+        title: &str,
+        terminal: Option<&str>,
+        started_ms: i64,
+        ended_ms: i64,
+    ) {
+        db.execute(
+            "INSERT INTO session_run (gateway, session_key, agent_id, title, status,
+                                     terminal_summary, started_at_ms, ended_at_ms,
+                                     first_seen_ms, last_seen_ms)
+             VALUES ('vps', ?1, ?2, ?3, 'done', ?4, ?5, ?6, ?5, ?6)",
+            rusqlite::params![session_key, agent_id, title, terminal, started_ms, ended_ms],
+        )
+        .expect("insert session span");
+    }
+
     #[test]
     fn session_harvest_spreads_case_id_along_the_relay() {
         // 真机 BM-2601 形态：派单卡（第一跳）标题带标签，后续跳只带裸案号和
@@ -1643,18 +2606,19 @@ mod dispatch_helper_tests {
             Some("母稿已冻结 https://my.feishu.cn/docx/GfNndXZsdef"),
             base + 15 * min,
         );
-        // 2 条链接落槽（案行本身由 ensure_case_row 兜底建出，不计 harvested）。
+        // 2 条链接按段名归槽（案行本身由 ensure_case_row 兜底建出，
+        // 不计 harvested）。
         assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 2);
         let list = list_cases(&db, None).expect("list");
         assert_eq!(list.len(), 1);
         let row = &list[0];
         assert_eq!(row.case_id, "BM-9999");
-        // docx 按产出序填空位链：先研究位、再母稿位，不挤同一个槽。
-        assert_eq!(
-            row.research_doc_url,
-            "https://my.feishu.cn/docx/ZPkVdNh9abc"
-        );
+        // 标签归槽：标题写「二审报告」的落 review 槽，写「母稿」的落 master
+        // 槽——不再按 URL 出现顺序猜（旧版把二审报告的链接塞进研究槽，
+        // 真机 BM-2601 截图实锤）。没有研究文档段名，研究槽留空。
+        assert_eq!(row.review_doc_url, "https://my.feishu.cn/docx/ZPkVdNh9abc");
         assert_eq!(row.master_doc_url, "https://my.feishu.cn/docx/GfNndXZsdef");
+        assert_eq!(row.research_doc_url, "");
         assert!(row.last_activity_ms.unwrap_or(0) > 0, "活动时间要刷新");
     }
 
@@ -1929,8 +2893,327 @@ mod dispatch_helper_tests {
         // 1 个唯一链接落 1 个槽（去重前同一链接会占 research 又占 master）。
         assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 1);
         let list = list_cases(&db, None).expect("list");
-        assert_eq!(list[0].research_doc_url, master);
-        assert_eq!(list[0].master_doc_url, "", "重复链接不连锁占第二槽");
+        // 两跳文本都点名「母稿」：按标签语义归母稿槽，不按 URL 出现顺序
+        // 猜——旧版会把同一个链接先塞 research 再连锁占 master。
+        assert_eq!(list[0].master_doc_url, master);
+        assert_eq!(list[0].research_doc_url, "", "同一链接不占两个槽");
+    }
+
+    #[test]
+    fn repair_clears_mis_slotted_link() {
+        // 旧版盲填的错槽：二审报告的链接躺在"研究文档"槽里（真机 BM-2601
+        // 实锤——深潜舱研究位点进去是二审报告）。标签归槽后必须清掉：
+        // 同一份文档不占两个槽，研究槽留给真正的研究文档。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let review = "https://my.feishu.cn/docx/ZPkVdNh9eoWwyYxN1hScbfCYnhh";
+        upsert_case_from_master_row(
+            &db,
+            &serde_json::json!({
+                "record_id": "BM-7778", "title": "甲案", "deliverable_mode": "IMAGE_ONLY",
+                "stage": "06_二审", "research_doc_id": review
+            }),
+        )
+        .expect("upsert");
+        insert_session(
+            &db,
+            "cli:main:group:oc_repair",
+            "tianshu",
+            "派发 [CASE_ID: BM-7778]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_repair",
+            "tianquan",
+            "",
+            Some(
+                "【交接卡】@天玑\n任务：BM-7778《甲案的正式标题》\n当前阶段：天玑创作中\n\n【天权二审结论】PASS\n【二审报告】https://my.feishu.cn/docx/ZPkVdNh9eoWwyYxN1hScbfCYnhh",
+            ),
+            base + 10 * 60_000,
+        );
+        harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].review_doc_url, review, "二审报告的链接归 review 槽");
+        assert_eq!(list[0].research_doc_url, "", "错槽的研究链接被清掉");
+    }
+
+    #[test]
+    fn truncated_links_are_rejected() {
+        // 真机摘要里的半截链以省略号结尾——25 位短 ID 点不开，旧版把它当
+        // 母稿链接存进了 master_doc_url（深潜舱点进去 404）。
+        assert!(
+            extract_feishu_links("【母稿】https://my.feishu.cn/docx/GfNndXZsUojtghxtMBCc…")
+                .is_empty()
+        );
+        assert!(extract_feishu_links("图文包链接：https://my.fei…").is_empty());
+        assert!(extract_feishu_links(
+            "最终交付链接：`https://www.feishu.cn/docx/LENQdQaiaoBWiTxrzGGcoxT…`"
+        )
+        .is_empty());
+        // 三个点也算截断标记
+        assert!(
+            extract_feishu_links("母稿 https://my.feishu.cn/docx/GfNndXZsUojtghxtMBCc...")
+                .is_empty()
+        );
+        // 完整的照认（省略号规则只治半截链）
+        assert_eq!(
+            extract_feishu_links(
+                "【二审报告】https://my.feishu.cn/docx/ZPkVdNh9eoWwyYxN1hScbfCYnhh"
+            ),
+            vec!["https://my.feishu.cn/docx/ZPkVdNh9eoWwyYxN1hScbfCYnhh"]
+        );
+    }
+
+    #[test]
+    fn episode_content_extracts_title_verdict_strikes_and_timeline() {
+        // 真机 BM-2601 缩比：派单卡（标签）→ 天权交接卡（打回 + 《标题》）→
+        // 天玑交接卡（母稿链接）→ 天权复审交接卡（PASS + FROZEN）。深潜舱
+        // 三栏要的标题/判词/打回/时间线都该从这些跳里提出来。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_content",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7777]",
+            None,
+            base,
+            base + 5 * min,
+        );
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_content",
+            "tianquan",
+            "",
+            Some(
+                "【交接卡】@天玑\n任务：BM-7777《我家的气场是我调出来的》\n当前阶段：天玑创作中（二审打回修改，小改）\n\n【天权二审结论】打回（小改，3 处必改）\n【二审报告】https://my.feishu.cn/docx/ZPkVdNh9eoWwyYxN1hScbfCYnhh",
+            ),
+            base + 10 * min,
+            base + 34 * min,
+        );
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_content",
+            "tianji",
+            "",
+            Some(
+                "【交接卡】@天权\n任务：BM-7777《我家的气场是我调出来的》\n当前阶段：天玑母稿已完成，待二审\n\n【天玑产出】母稿 docx：https://my.feishu.cn/docx/GfNndXZsUojtghxtMBCcwvaZnKd",
+            ),
+            base + 25 * min,
+            base + 32 * min,
+        );
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_content",
+            "tianquan",
+            "",
+            Some(
+                "【交接卡】@玉衡\n任务：BM-7777《我家的气场是我调出来的》\n当前阶段：玉衡出图中\n\n【天权二审结论】PASS（3 处必改项全部落实，无新增问题）\n【复审报告】https://my.feishu.cn/docx/KTuydsjklonilHxFrAGcpqnunob\n【母稿（已 FROZEN 冻结，只读，严禁修改正文）】https://my.feishu.cn/doc…",
+            ),
+            base + 31 * min,
+            base + 47 * min,
+        );
+        assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 3);
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        let row = &list[0];
+        // 链接按段名归槽
+        assert_eq!(
+            row.review_doc_url,
+            "https://my.feishu.cn/docx/ZPkVdNh9eoWwyYxN1hScbfCYnhh"
+        );
+        assert_eq!(
+            row.master_doc_url,
+            "https://my.feishu.cn/docx/GfNndXZsUojtghxtMBCcwvaZnKd"
+        );
+        assert_eq!(
+            row.recheck_doc_url,
+            "https://my.feishu.cn/docx/KTuydsjklonilHxFrAGcpqnunob"
+        );
+        assert_eq!(row.research_doc_url, "", "没有研究文档段名，研究槽留空");
+        assert_eq!(row.second_strikes, 1, "打回一次");
+        assert!(row.master_frozen, "复审跳写明 FROZEN");
+        let content: serde_json::Value =
+            serde_json::from_str(&row.content_json).expect("content json");
+        assert_eq!(content["formalTitle"], "我家的气场是我调出来的");
+        assert_eq!(
+            content["verdictText"],
+            "PASS（3 处必改项全部落实，无新增问题）"
+        );
+        assert!(
+            content["verdictBy"].as_str().unwrap_or("").contains("复审"),
+            "贴了复审报告的跳 = 复审判词"
+        );
+        let strikes = content["strikes"].as_array().expect("strikes");
+        assert_eq!(strikes.len(), 1);
+        assert_eq!(strikes[0]["verdict"], "FAIL · 小改");
+        assert_eq!(strikes[0]["sev"], "3 处必改");
+        assert!(strikes[0]["note"]
+            .as_str()
+            .unwrap_or("")
+            .contains("天权二审结论"));
+        let tl = content["timeline"].as_array().expect("timeline");
+        assert_eq!(tl.len(), 4, "四跳全进时间线");
+        let whats: Vec<&str> = tl
+            .iter()
+            .map(|r| r["what"].as_str().unwrap_or(""))
+            .collect();
+        assert!(
+            whats.iter().any(|w| w.contains("二审打回修改")),
+            "当前阶段行进时间线: {whats:?}"
+        );
+        assert!(
+            whats.iter().any(|w| w.contains("母稿已完成")),
+            "母稿跳: {whats:?}"
+        );
+        assert!(
+            whats.iter().any(|w| w.contains("玉衡出图")),
+            "复审跳: {whats:?}"
+        );
+        // 时间线按时刻升序
+        let keys: Vec<i64> = tl.iter().map(|r| r["atMs"].as_i64().unwrap_or(0)).collect();
+        assert!(keys.windows(2).all(|w| w[0] <= w[1]), "时间线按时刻升序");
+    }
+
+    #[test]
+    fn episode_content_merges_without_losing_previous_round() {
+        // 同一案跑第二轮（追投视频后再接一轮）：新提取非空的字段赢，旧值
+        // 只补新一遍没看到的部分——第一轮的判词/时间线不许被抹掉。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        let handoff = "【交接卡】@下一位\n任务：BM-7779《第二轮的正式标题》\n当前阶段：第二轮进行中\n\n【天权二审结论】PASS（无新问题）";
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_merge",
+            "tianshu",
+            "派发 [CASE_ID: BM-7779]《第二轮的正式标题》",
+            None,
+            base,
+            base + min,
+        );
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_merge",
+            "tianquan",
+            "",
+            Some(handoff),
+            base + 10 * min,
+            base + 20 * min,
+        );
+        harvest_links_from_sessions(&db).expect("first round");
+        let first = list_cases(&db, None).expect("list")[0].content_json.clone();
+        assert!(first.contains("第二轮的正式标题"));
+        assert!(first.contains("PASS（无新问题）"));
+        // 第二轮：沉默超过 60 分钟切成新段，只有派单卡 + 一个空跳
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_merge",
+            "kaiyang",
+            "",
+            Some("【开阳产出】视频包落盘"),
+            base + 200 * min,
+            base + 210 * min,
+        );
+        harvest_links_from_sessions(&db).expect("second round");
+        let row = &list_cases(&db, None).expect("list")[0];
+        // 第二段没有标签也没有交接卡 → 归属不到案，内容列保留第一轮的
+        assert_eq!(row.content_json, first, "没人认领的段不动内容列");
+    }
+
+    #[test]
+    fn episode_attribution_falls_back_to_handoff_card() {
+        // 派单卡那一跳没落进本地账本（app 当时没开）时，段里有交接卡 +
+        // 全段唯一裸案号也要能归属——VPS 侧不会注入 [CASE_ID] 标签
+        // （Leo 2026-10-18 明确）。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_fallback",
+            "tianquan",
+            "",
+            Some("【交接卡】@天玑\n任务：BM-7775《兜底归属的案》\n当前阶段：天玑创作中"),
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_fallback",
+            "tianji",
+            "",
+            Some("【母稿】https://my.feishu.cn/docx/GfNndXZsUojtghxtMBCcwvaZnKd"),
+            base + 10 * 60_000,
+        );
+        assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 1);
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1, "交接卡 + 唯一裸案号 = 归属");
+        assert_eq!(list[0].case_id, "BM-7775");
+        assert_eq!(
+            list[0].master_doc_url,
+            "https://my.feishu.cn/docx/GfNndXZsUojtghxtMBCcwvaZnKd"
+        );
+    }
+
+    #[test]
+    fn episode_without_handoff_card_is_not_attributed() {
+        // 没有标签、也没有交接卡的段（Leo 在群里提问那种）不归属——
+        // 哪怕段里提到案号。猜错是把别人的话挂到本案名下。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_qa",
+            "tianshu",
+            "你看看下午那单跑完了吗",
+            Some("BM-7774 那单已关单了。母稿 https://my.feishu.cn/docx/Whatever123abc"),
+            base,
+        );
+        assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 0);
+        assert!(list_cases(&db, None).expect("list").is_empty());
+    }
+
+    #[test]
+    fn watchdog_branch_picks_action_rounds_only() {
+        // 无事轮/未命中不记；动作轮记分支名。真机五轮全中。
+        assert_eq!(
+            watchdog_branch("判定：无事分支 + 状态纠正。本轮未派发、未重发、未触发自愈。5. **无事**：命中（在完成下述纠正后）。"),
+            None
+        );
+        assert_eq!(
+            watchdog_branch(
+                "本轮巡检完成，判定**无事分支**（未派发、未报群、未 reset）。→ 关单分支不成立。"
+            ),
+            None
+        );
+        assert_eq!(
+            watchdog_branch("巡检完成，本轮无事分支命中。① 关单：任务表「当前阶段」= 摇光发布中，非已关单 → 不命中"),
+            None
+        );
+        assert_eq!(
+            watchdog_branch("【本轮命中分支】漏派分支（SOP 9.2 第 2 分支）").as_deref(),
+            Some("漏派")
+        );
+        assert_eq!(
+            watchdog_branch("本轮巡检命中**漏派分支**（分支 2）").as_deref(),
+            Some("漏派")
+        );
+        assert_eq!(
+            watchdog_branch("本轮已命中并执行超时分支。").as_deref(),
+            Some("超时")
+        );
+        assert_eq!(
+            watchdog_branch("① 关单不命中（非「已关单」）；④ 超时命中。").as_deref(),
+            Some("超时"),
+            "贴脸的才是这一命中的主语，远处的分支名属于别的句子"
+        );
+        assert_eq!(
+            watchdog_branch("分支 1 关单命中，任务全链路收尾。").as_deref(),
+            Some("关单")
+        );
     }
 
     #[test]

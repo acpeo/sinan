@@ -595,6 +595,61 @@ test("账本行转看板案件：字段名换手 + 阶段翻下标 + 空字段�
   assert.equal(ledgerRowToCase(null), null);
 });
 
+test("content_json 映射：正式标题/判词/打回链/时间线/研究注照实进字段，脏数据不崩", () => {
+  // Rust harvest_episode_content 从 session_run 接力文本提炼的真内容
+  // （真机 BM-2601 那一轮逐跳实锤的形状）。
+  const row = {
+    caseId: "BM-2601",
+    title: "室内设计",
+    stage: "07_关单",
+    deliverableMode: "IMAGE_ONLY",
+    secondStrikes: 1,
+    masterFrozen: true,
+    recheckDocUrl: "https://my.feishu.cn/docx/RE",
+    contentJson: JSON.stringify({
+      formalTitle: "《老房翻新预算表》",
+      verdictText: "复审 PASS：尺度已收，可进入图文。",
+      verdictBy: "天权 · 复审判词 · 10-18 16:46",
+      strikes: [{ verdict: "FAIL · 尺度", sev: "P1", at: "10-18 15:02", note: "打回：动线尺度超界" }],
+      researchIdNote: "天璇研究编号（截断）：GfNndXZsUojtghxtMBCc…",
+      timeline: [
+        { at: "10-18 12:34", atMs: 1, star: "tianshu", what: "天枢建档 + 建任务文件夹", dur: "10716s" },
+        { at: "10-18 17:55", atMs: 2, star: "watchdog", what: "看门狗巡检：漏派", dur: "—" },
+      ],
+    }),
+  };
+  const item = ledgerRowToCase(row);
+  // 正式标题（《》多跳一致）优先于账本占位标题
+  assert.equal(item.name, "《老房翻新预算表》");
+  assert.equal(item.title, "室内设计");
+  assert.equal(item.reReviewDocUrl, "https://my.feishu.cn/docx/RE");
+  assert.equal(item.verdictText, "复审 PASS：尺度已收，可进入图文。");
+  assert.equal(item.verdictBy, "天权 · 复审判词 · 10-18 16:46");
+  assert.equal(item.researchIdNote, "天璇研究编号（截断）：GfNndXZsUojtghxtMBCc…");
+  assert.equal(item.strikeList.length, 1);
+  assert.equal(item.strikeList[0].sev, "P1");
+  // 时间线剥掉 atMs（合并排序键），只留渲染四列
+  assert.equal(item.timeline.length, 2);
+  assert.deepEqual(item.timeline[0], {
+    at: "10-18 12:34",
+    star: "tianshu",
+    what: "天枢建档 + 建任务文件夹",
+    dur: "10716s",
+  });
+  // 脏 JSON：整列按空处理，其余字段照常
+  const broken = ledgerRowToCase({ ...row, contentJson: "{不是json" });
+  assert.equal(broken.timeline, null);
+  assert.equal(broken.verdictText, "");
+  assert.equal(broken.name, "室内设计");
+  // 形状不对的时间线行剔掉，不把 null 塞给渲染层
+  const bad = ledgerRowToCase({
+    ...row,
+    contentJson: JSON.stringify({ timeline: [{ at: "", what: "缺时刻" }, null, "字符串", { at: "10-18 19:00", what: "好的行" }] }),
+  });
+  assert.equal(bad.timeline.length, 1);
+  assert.equal(bad.timeline[0].what, "好的行");
+});
+
 test("批量转换滤掉空行：账本脏数据不能让看板崩", () => {
   const rows = [
     { caseId: "BM-2601", title: "甲", stage: "01_建档" },
