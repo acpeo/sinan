@@ -612,6 +612,7 @@ test("content_json 映射：正式标题/判词/打回链/时间线/研究注照
       verdictBy: "天权 · 复审判词 · 10-18 16:46",
       strikes: [{ verdict: "FAIL · 尺度", sev: "P1", at: "10-18 15:02", note: "打回：动线尺度超界" }],
       researchIdNote: "天璇研究编号（截断）：GfNndXZsUojtghxtMBCc…",
+      entryMode: "AUTO_DISCOVERY",
       timeline: [
         { at: "10-18 12:34", atMs: 1, star: "tianshu", what: "天枢建档 + 建任务文件夹", dur: "10716s" },
         { at: "10-18 17:55", atMs: 2, star: "watchdog", what: "看门狗巡检：漏派", dur: "—" },
@@ -626,6 +627,10 @@ test("content_json 映射：正式标题/判词/打回链/时间线/研究注照
   assert.equal(item.verdictText, "复审 PASS：尺度已收，可进入图文。");
   assert.equal(item.verdictBy, "天权 · 复审判词 · 10-18 16:46");
   assert.equal(item.researchIdNote, "天璇研究编号（截断）：GfNndXZsUojtghxtMBCc…");
+  assert.equal(item.entryMode, "AUTO_DISCOVERY");
+  // 没有 entryMode（派单给定题 / 老账本）→ 空串，PipelineView 不挂徽标
+  const noMode = ledgerRowToCase({ ...row, contentJson: JSON.stringify({ formalTitle: "《甲》" }) });
+  assert.equal(noMode.entryMode, "");
   assert.equal(item.strikeList.length, 1);
   assert.equal(item.strikeList[0].sev, "P1");
   // 时间线剥掉 atMs（合并排序键），只留渲染四列

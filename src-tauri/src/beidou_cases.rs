@@ -1260,6 +1260,9 @@ fn harvest_episode_content(
     // ── 天璇研究编号注：看门狗摘录里的截断 ID ──
     let research_note = research_id_note(&watch_rows);
 
+    // ── 入口模式：建档卡写的 task_mode（自主寻题 / 派单定题） ──
+    let entry_mode = entry_mode_of(hops, &watch_rows);
+
     // ── 产出时间线：接力跳 + 看门狗动作行 ──
     let mut timeline: Vec<serde_json::Value> = Vec::new();
     // ① 接力跳：只收提到本案的跳（同段里别人的闲话不进来），空转轮不收
@@ -1413,6 +1416,9 @@ fn harvest_episode_content(
     if !research_note.is_empty() {
         content.insert("researchIdNote".into(), Value::String(research_note));
     }
+    if !entry_mode.is_empty() {
+        content.insert("entryMode".into(), Value::String(entry_mode));
+    }
     if !tl_rows.is_empty() {
         content.insert("timeline".into(), Value::Array(tl_rows));
     }
@@ -1565,6 +1571,55 @@ fn research_id_note(watch_rows: &[WatchRow]) -> String {
             return format!(
                 "天璇产出《{title}》：本地只留下截断编号 {id}（看门狗巡检摘录），完整 docx 链接未随任务回传。"
             );
+        }
+    }
+    String::new()
+}
+
+/// 一段文本里的 task_mode 值。真机天枢建档跳的终态摘要写
+/// 「`task_mode = AUTO_DISCOVERY`（派单未给标题，标题留空待天权五轴定题）」。
+/// 等号后跳过空白和 markdown 记号，收连续标识符字符；等号后不是标识符
+/// （表格里换了行那种）就当没写，继续往前找。只认两个已知值，别的返回空串
+/// ——左栏「🧭 自主寻题」徽标据此显隐，猜错等于把派单给定题的案标成自主寻题。
+fn entry_mode_in(text: &str) -> String {
+    let mut from = 0;
+    while let Some(rel) = text[from..].find("task_mode") {
+        let at = from + rel;
+        from = at + "task_mode".len();
+        let window: String = text[from..].chars().take(48).collect();
+        let Some(eq) = window.find('=') else { continue };
+        let value: String = window[eq + 1..]
+            .chars()
+            .skip_while(|c| c.is_whitespace() || matches!(c, '`' | '*' | '|' | ':' | '：'))
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if value == "AUTO_DISCOVERY" {
+            return value;
+        }
+        if value == "DIRECT_TITLE" || value == "DIRECT" {
+            return "DIRECT_TITLE".to_owned();
+        }
+    }
+    String::new()
+}
+
+/// 本案的入口模式：先看接力跳（建档卡在 session_run），再看看门狗巡检摘录。
+/// 提不出来就空串——徽标不挂，不猜。
+fn entry_mode_of(hops: &[&SessionHarvestRow], watch_rows: &[WatchRow]) -> String {
+    for row in hops {
+        for text in hop_texts(row) {
+            let mode = entry_mode_in(text);
+            if !mode.is_empty() {
+                return mode;
+            }
+        }
+    }
+    for row in watch_rows {
+        if let Some(text) = row.1.as_deref() {
+            let mode = entry_mode_in(text);
+            if !mode.is_empty() {
+                return mode;
+            }
         }
     }
     String::new()
@@ -3084,6 +3139,58 @@ mod dispatch_helper_tests {
         // 时间线按时刻升序
         let keys: Vec<i64> = tl.iter().map(|r| r["atMs"].as_i64().unwrap_or(0)).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "时间线按时刻升序");
+    }
+
+    #[test]
+    fn episode_content_extracts_entry_mode_from_dispatch_card() {
+        // 天枢建档那一跳的终态摘要写「task_mode = AUTO_DISCOVERY」——左栏
+        // 「🧭 自主寻题」徽标只在这个证据存在时才挂。派单给定题的案（摘要写
+        // DIRECT_TITLE，或根本没写）不许挂：没证据不认，猜错是给案贴假标签。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_entry",
+            "tianshu",
+            "建档并派单 [CASE_ID: BM-7779]",
+            Some(
+                "BM-7779 建档与首派已完成。\n- `task_mode = AUTO_DISCOVERY`（派单未给标题，标题留空待天权五轴定题）\n- `deliverable_mode = 图文`",
+            ),
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_entry",
+            "tianxuan",
+            "",
+            Some("【交接卡】@天权\n任务：BM-7779《我家的气场是我调出来的》\n当前阶段：天璇已定题\n\n【天璇产出】研究 docx：https://my.feishu.cn/docx/DDyLd0zUojtghxtMBCcwvaZnKd"),
+            base + 10 * 60_000,
+        );
+        let _ = harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        let content: serde_json::Value =
+            serde_json::from_str(&list[0].content_json).expect("content json");
+        assert_eq!(
+            content["entryMode"], "AUTO_DISCOVERY",
+            "建档卡写了 task_mode 才认自主寻题"
+        );
+    }
+
+    #[test]
+    fn entry_mode_in_only_accepts_known_values() {
+        // 等号后是 markdown 记号和空白也要收到；未知值/没有等号不当真。
+        assert_eq!(
+            entry_mode_in("- `task_mode = AUTO_DISCOVERY`（派单未给标题）"),
+            "AUTO_DISCOVERY"
+        );
+        assert_eq!(entry_mode_in("task_mode = DIRECT_TITLE"), "DIRECT_TITLE");
+        assert_eq!(entry_mode_in("task_mode=DIRECT"), "DIRECT_TITLE");
+        assert_eq!(entry_mode_in("task_mode = SOMETHING_ELSE"), "");
+        assert_eq!(entry_mode_in("这一段没提到入口模式"), "");
+        // 表格里等号在很远的下文：48 字窗口外不当真
+        let far = format!("task_mode {}", "x".repeat(80));
+        assert_eq!(entry_mode_in(&far), "");
     }
 
     #[test]

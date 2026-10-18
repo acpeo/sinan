@@ -578,6 +578,10 @@ export function ledgerRowToCase(row) {
     // 别拿演示数据填，也别摆空列表让人以为真的没有。
     candidates: Array.isArray(content?.candidates) ? content.candidates : null,
     candidateNote: String(content?.candidateNote ?? ""),
+    // 入口模式（建档卡的 task_mode）：左栏「🧭 自主寻题」徽标只在这一案
+    // 真是 AUTO_DISCOVERY 时才挂。账本提不出来就是空串，徽标不显示——
+    // 不猜，免得把派单给定题的案标成自主寻题。
+    entryMode: String(content?.entryMode ?? ""),
     // 五轴分只在飞书主表，账本镜像不带：必须是 null 而不是 {}。
     // 给 {} 的话 PipelineView 会渲染出五条 0 分的假门禁（Leo 一眼看出"这两行为什么是 0"）。
     reviewAxes: null,

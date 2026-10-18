@@ -13,6 +13,7 @@ const CASES = [
     caseId: "BM-2601",
     name: "客厅沙发摆放·链路测试",
     step: 6,
+    entryMode: "AUTO_DISCOVERY",
     deliverableMode: "IMAGE_ONLY",
     ownerStar: "yaoguang",
     masterFrozen: true,

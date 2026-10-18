@@ -561,7 +561,9 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
               <h3>定题与背调依据</h3>
               <p>Auto-Title &amp; Research · 天璇</p>
             </div>
-            <span className="pl-badge pl-badge--slate">🧭 自主寻题</span>
+            {c.entryMode === "AUTO_DISCOVERY" ? (
+              <span className="pl-badge pl-badge--slate">🧭 自主寻题</span>
+            ) : null}
           </div>
           <div className="pl-slot">
             <div className="pl-kicker">天璇研究文档</div>
