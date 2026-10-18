@@ -709,8 +709,8 @@ fn send_wakeup_to_star(
             .identity_dir
             .clone()
             .unwrap_or_else(gateway_tasks::default_state_dir_for_probe);
-        let identity = gateway_tasks::load_probe_identity(&identity_dir)
-            .map_err(|error| error.to_string())?;
+        let identity =
+            gateway_tasks::load_probe_identity(&identity_dir).map_err(|error| error.to_string())?;
         let mut client = gateway_tasks::GatewayClient::connect(&gw, &identity)
             .map_err(|error| error.to_string())?;
         let sessions = client

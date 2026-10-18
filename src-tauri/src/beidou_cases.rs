@@ -376,7 +376,13 @@ pub fn attach_task_to_case(
 /// 没带标记的任务直接跳过——归不了案的东西不硬塞（数据诚实）。
 /// 在账本读取前跑一遍：gateway_task 是几十行级别的本地表，成本可忽略。
 pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usize> {
-    type TaskRow = (String, String, Option<String>, Option<String>, Option<String>);
+    type TaskRow = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
     let mut harvested = 0usize;
     let rows: Vec<TaskRow> = {
         let mut stmt = connection.prepare(
@@ -384,30 +390,46 @@ pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usi
              WHERE COALESCE(terminal_summary, '') != '' OR COALESCE(progress_summary, '') != ''",
         )?;
         let mapped = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?;
         mapped.filter_map(|item| item.ok()).collect()
     };
     for (task_id, gateway, agent_id, terminal, progress) in rows {
-        for text in [terminal.as_deref(), progress.as_deref()].into_iter().flatten() {
-            let Some(case_id) = extract_case_id(text) else { continue };
-            ensure_case_row(connection, &case_id)?;
-            // 归拢边：这条任务从此记在这一案名下（主键去重，重复扫不重复记）。
-            connection.execute(
-                "INSERT INTO beidou_case_tasks (case_id, gateway, task_id, agent_id, attached_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(gateway, task_id) DO NOTHING",
-                rusqlite::params![
-                    case_id,
-                    gateway,
-                    task_id,
-                    agent_id,
-                    chrono::Utc::now().timestamp_millis()
-                ],
-            )?;
-            let links = extract_feishu_links(text);
-            for link in &links {
-                if attach_link(connection, &case_id, link)? > 0 {
+        for text in [terminal.as_deref(), progress.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(case_id) = extract_case_id(text) {
+                ensure_case_row(connection, &case_id)?;
+                // 归拢边：这条任务从此记在这一案名下（主键去重，重复扫不重复记）。
+                connection.execute(
+                    "INSERT INTO beidou_case_tasks (case_id, gateway, task_id, agent_id, attached_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(gateway, task_id) DO NOTHING",
+                    rusqlite::params![
+                        case_id,
+                        gateway,
+                        task_id,
+                        agent_id,
+                        chrono::Utc::now().timestamp_millis()
+                    ],
+                )?;
+                for link in dedupe_links(extract_feishu_links(text)) {
+                    harvested += attach_link(connection, &case_id, &link)?;
+                }
+            } else {
+                // 兜底形：巡检/关单摘要不写标签，只写裸「BM-2601」或
+                // 「BM-2601｜已关单」——VPS 侧不注入标签（Leo 2026-10-18 明确），
+                // 本地必须自己吃裸案号，否则 watchdog 整条线都归不上。
+                let bare = extract_bm_case_ids(text);
+                // 只认全文唯一编号：多个编号说明这拍跨了案，不猜。
+                if bare.len() == 1 && harvest_bare_case(connection, &bare[0], text)? {
                     harvested += 1;
                 }
             }
@@ -415,6 +437,77 @@ pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usi
         }
     }
     Ok(harvested)
+}
+
+/// 裸北斗案号（BM-2601 形）：只认 BM 前缀 + 3-6 位数字。
+/// 与 extract_case_id 的分工：那个要 [CASE_ID] 标签（派单卡规范），这个吃
+/// 巡检/关单摘要里的裸写法。刻意收窄到 BM-\d 形——extract_case_id 注释里
+/// 记录的教训（LARK-CLI / QWEN-IMAGE / SDXL-API 等字母-字母形工具名）在
+/// 这个形状下不存在；但也不放宽到任意字母前缀：多一分宽就多一分误拢。
+/// 按码点走（中文前导段的字节/码点坐标系问题，同 regex_lite_capture 注释）。
+fn extract_bm_case_ids(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i + 2 < chars.len() {
+        let prefix_ok = (chars[i] == 'B' || chars[i] == 'b')
+            && (chars[i + 1] == 'M' || chars[i + 1] == 'm')
+            && chars[i + 2] == '-';
+        if !prefix_ok {
+            i += 1;
+            continue;
+        }
+        let prev_ok = i == 0 || !chars[i - 1].is_ascii_alphanumeric();
+        let mut j = i + 3;
+        while j < chars.len() && chars[j].is_ascii_digit() && j - (i + 3) < 6 {
+            j += 1;
+        }
+        let digits = j - (i + 3);
+        let next_ok = j >= chars.len() || !chars[j].is_ascii_alphanumeric();
+        if prev_ok && next_ok && digits >= 3 {
+            let candidate: String = chars[i..j].iter().collect::<String>().to_uppercase();
+            if !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+        i = j.max(i + 1);
+    }
+    out
+}
+
+/// 巡检/关单摘要的裸案号兜底归拢。案必须已经在账本里（本地 launch 过或
+/// 之前归拢过）——不认从没见过的案，防误建空案行。链接去重后按序归拢；
+/// 文本带关单话术时把 stage 推进到 08_已关单（只进不退）。返回是否有动作。
+fn harvest_bare_case(connection: &Connection, case_id: &str, text: &str) -> rusqlite::Result<bool> {
+    let known: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM beidou_cases WHERE case_id = ?1",
+            rusqlite::params![case_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if known.is_none() {
+        return Ok(false);
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut acted = false;
+    for link in dedupe_links(extract_feishu_links(text)) {
+        acted |= attach_link(connection, case_id, &link)? > 0;
+    }
+    if text.contains("已关单") || text.contains("关单完成") {
+        connection.execute(
+            "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
+             WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
+            rusqlite::params![case_id, now],
+        )?;
+        acted = true;
+    }
+    connection.execute(
+        "UPDATE beidou_cases SET last_activity_ms = ?2, updated_at_ms = ?2
+         WHERE case_id = ?1",
+        rusqlite::params![case_id, now],
+    )?;
+    Ok(acted)
 }
 
 /// 接力会话兜底收割（2026-10-18 Leo 实机核查后补的第二条收割线）。
@@ -530,15 +623,19 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
             let now = chrono::Utc::now().timestamp_millis();
             // 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）。
             ensure_case_row(connection, &case_id)?;
+            let mut links: Vec<String> = Vec::new();
             for row in &hops {
                 for text in [row.2.as_deref(), row.3.as_deref(), row.4.as_deref()]
                     .into_iter()
                     .flatten()
                 {
-                    for link in extract_feishu_links(text) {
-                        harvested += attach_link(connection, &case_id, &link)?;
-                    }
+                    links.extend(extract_feishu_links(text));
                 }
+            }
+            // 段级去重：同一链接在同段多跳里重复贴是常态（母稿链接在二审跳和
+            // 母稿跳各一次），逐跳 attach 会连锁占槽（见 dedupe_links 注释）。
+            for link in dedupe_links(links) {
+                harvested += attach_link(connection, &case_id, &link)?;
             }
             // 关单传播：看门狗关单分支的摘要明写「已关单」——案实际跑完，
             // 本地 stage 还停在 01_建档（launch 时建的初值）。窄规则：同段
@@ -580,6 +677,20 @@ fn ensure_case_row(connection: &Connection, case_id: &str) -> rusqlite::Result<(
         rusqlite::params![case_id, chrono::Utc::now().timestamp_millis()],
     )?;
     Ok(())
+}
+
+/// 保序去重：真机摘要里同一链接会重复出现（母稿链接在天权二审跳和天玑
+/// 母稿跳各贴一次），attach_link 又是一个链接只占一个槽——不去重的话，
+/// 第二次 attach 会继续往后找空槽，把 review/video 连锁占掉
+/// （2026-10-18 真机预演实锤：母稿长形态占了 review 又占 video）。
+fn dedupe_links(links: Vec<String>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::with_capacity(links.len());
+    for link in links {
+        if !seen.contains(&link) {
+            seen.push(link);
+        }
+    }
+    seen
 }
 
 /// 链接按 URL 形态归列：drive/folder → 任务文件夹；docx → 按 SOP 产出序
@@ -660,7 +771,17 @@ pub fn extract_feishu_links(text: &str) -> Vec<String> {
                 .split('/')
                 .next()
                 .unwrap_or("");
-            if host.ends_with("feishu.cn") || host.ends_with("larksuite.com") {
+            // 且路径里必须有产物段（docx/drive/wiki/sheets/base/file）。真机
+            // terminal_summary 常被截断——"https://my.feishu.cn/doc" 这种半截
+            // 链放进来就是垃圾数据（2026-10-18 真机预演实锤：它占了运营槽）。
+            const FEISHU_PATH_MARKERS: [&str; 6] = [
+                "/docx/", "/drive/", "/wiki/", "/sheets/", "/base/", "/file/",
+            ];
+            let has_artifact_path = FEISHU_PATH_MARKERS
+                .iter()
+                .any(|marker| raw.contains(marker));
+            if has_artifact_path && (host.ends_with("feishu.cn") || host.ends_with("larksuite.com"))
+            {
                 out.push(clean_link(raw));
             }
             i = j;
@@ -1143,7 +1264,10 @@ pub struct CaseListRow {
 /// 列全部案件：按最后活动倒序（新案在上）。limit 缺省 200，上限 500。
 /// 这就是指挥舱卷宗的真读入口——此前只有 load_case（按 ID 单取），
 /// 前端没有任何一处在调，所以看板永远兜底在 DEMO_CASES 上。
-pub fn list_cases(connection: &Connection, limit: Option<u32>) -> rusqlite::Result<Vec<CaseListRow>> {
+pub fn list_cases(
+    connection: &Connection,
+    limit: Option<u32>,
+) -> rusqlite::Result<Vec<CaseListRow>> {
     let limit = limit.unwrap_or(200).min(500);
     let sql = format!(
         "SELECT case_id, title, task_type, stage, owner_star, live_action,
@@ -1421,10 +1545,7 @@ mod dispatch_helper_tests {
             row.research_doc_url,
             "https://my.feishu.cn/docx/ZPkVdNh9abc"
         );
-        assert_eq!(
-            row.master_doc_url,
-            "https://my.feishu.cn/docx/GfNndXZsdef"
-        );
+        assert_eq!(row.master_doc_url, "https://my.feishu.cn/docx/GfNndXZsdef");
         assert!(row.last_activity_ms.unwrap_or(0) > 0, "活动时间要刷新");
     }
 
@@ -1457,6 +1578,125 @@ mod dispatch_helper_tests {
         assert_eq!(list.len(), 1, "只有带标签那一段建案");
         assert_eq!(list[0].case_id, "BM-9998");
         assert_eq!(list[0].research_doc_url, "", "跨段的链接不收");
+    }
+
+    fn gateway_task_db() -> Connection {
+        let db = memory_db();
+        db.execute_batch(
+            "CREATE TABLE gateway_task (
+                task_id TEXT NOT NULL,
+                gateway TEXT NOT NULL,
+                agent_id TEXT,
+                terminal_summary TEXT,
+                progress_summary TEXT,
+                PRIMARY KEY (task_id, gateway)
+            )",
+        )
+        .expect("gateway_task table");
+        db
+    }
+
+    #[test]
+    fn task_harvest_takes_bare_bm_summary_for_close_and_links() {
+        // VPS 侧不注入 [CASE_ID] 标签（Leo 2026-10-18 明确）：watchdog 巡检/
+        // 关单摘要只写裸「CASE BM-9996 …已关单」。本地必须吃裸案号——
+        // 唯一 BM-\d 编号 + 案已在账本才归拢，关单话术推进 stage。
+        let db = gateway_task_db();
+        let row = serde_json::json!({
+            "record_id": "BM-9996", "title": "甲案", "deliverable_mode": "IMAGE_ONLY",
+            "stage": "05_母稿"
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, agent_id, terminal_summary)
+             VALUES ('cronrun:w1', 'vps', 'tianshu',
+                     '本轮巡检完成。CASE BM-9996 已关单：reset 6 个群会话、删除 job。'
+                     ' 运营方案 https://my.feishu.cn/docx/LENQdQaiabc')",
+            [],
+        )
+        .expect("insert task");
+        assert!(harvest_links_from_tasks(&db).expect("harvest") >= 1);
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1, "裸案号不建新案，只归拢账本里已有的案");
+        assert_eq!(list[0].stage, "08_已关单", "关单话术推进 stage");
+        // 摘要里的运营方案链接落槽（第一个空 docx 槽）。
+        assert_eq!(
+            list[0].research_doc_url,
+            "https://my.feishu.cn/docx/LENQdQaiabc"
+        );
+    }
+
+    #[test]
+    fn task_harvest_ignores_bare_bm_for_unknown_case() {
+        // 账本里从没见过的裸编号：不建空案行（防误拢），也不动任何案。
+        let db = gateway_task_db();
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, agent_id, terminal_summary)
+             VALUES ('cronrun:w2', 'vps', 'tianshu',
+                     'CASE BM-8888 已关单。https://my.feishu.cn/docx/Whatever123')",
+            [],
+        )
+        .expect("insert task");
+        assert_eq!(harvest_links_from_tasks(&db).expect("harvest"), 0);
+        assert!(list_cases(&db, None).expect("list").is_empty());
+    }
+
+    #[test]
+    fn extract_bm_case_ids_only_takes_bm_digit_shape() {
+        // 只认 BM + 3-6 位数字：LARK-CLI / QWEN-IMAGE 这类字母-字母工具名
+        // （extract_case_id 注释记录的误拢教训）在这个形状下不存在。
+        assert_eq!(extract_bm_case_ids("CASE BM-2601｜已关单"), vec!["BM-2601"]);
+        assert_eq!(extract_bm_case_ids("小写 bm-2602 也认"), vec!["BM-2602"]);
+        assert!(extract_bm_case_ids("LARK-CLI QWEN-IMAGE SDXL-API").is_empty());
+        assert_eq!(
+            extract_bm_case_ids("BM-2601 和 bm-2603 两个编号"),
+            vec!["BM-2601", "BM-2603"]
+        );
+        // 编号前后贴字母数字的不认（abcBM-2601 / BM-2601abc）。
+        assert!(extract_bm_case_ids("abcBM-2601").is_empty());
+        assert!(extract_bm_case_ids("BM-2601abc").is_empty());
+    }
+
+    #[test]
+    fn extract_feishu_links_rejects_truncated() {
+        // 真机 terminal_summary 里的半截链（"https://my.feishu.cn/doc"）曾经
+        // 占掉运营槽——必须要求路径里有产物段。
+        assert!(extract_feishu_links("看这个 https://my.feishu.cn/doc 截断了").is_empty());
+        assert!(extract_feishu_links("https://my.fei").is_empty());
+        let links = extract_feishu_links("母稿 https://my.feishu.cn/docx/AbCdEf123456** 好了");
+        assert_eq!(links, vec!["https://my.feishu.cn/docx/AbCdEf123456"]);
+        let folder = extract_feishu_links("文件夹 https://my.feishu.cn/drive/folder/Rbpj123abc");
+        assert_eq!(folder.len(), 1);
+    }
+
+    #[test]
+    fn session_harvest_dedupes_repeated_links() {
+        // 同一母稿链接在二审跳和母稿跳各贴一次（真机形态）：不去重会连锁
+        // 占掉后面的空槽——段级去重后一个链接只占一个槽。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let master = "https://my.feishu.cn/docx/GfNndXZsUojtghxtMBCc";
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-9995]",
+            Some(&format!("母稿 {master}")),
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianji",
+            "母稿",
+            Some(&format!("母稿定稿 {master}")),
+            base + 10 * 60_000,
+        );
+        // 1 个唯一链接落 1 个槽（去重前同一链接会占 research 又占 master）。
+        assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 1);
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list[0].research_doc_url, master);
+        assert_eq!(list[0].master_doc_url, "", "重复链接不连锁占第二槽");
     }
 
     #[test]

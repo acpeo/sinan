@@ -667,7 +667,9 @@ fn fold_audit_events(state: &mut AuditRunState, events: &[Value], now_ms: i64) {
             "agent.run.finished" => {
                 if session_key.is_empty() {
                     // 事件缺 sessionKey（防御）：清该星全部活跃，宁可误熄不误亮。
-                    state.active.retain(|(agent, _), _| agent.as_str() != agent_id);
+                    state
+                        .active
+                        .retain(|(agent, _), _| agent.as_str() != agent_id);
                 } else {
                     state
                         .active
@@ -1271,7 +1273,8 @@ pub fn ensure_gateway_cron_table(connection: &Connection) -> Result<()> {
         );",
     )?;
     // 老镜像补列（v7：网关权威的调度状态）：重复执行报 duplicate column，直接忽略。
-    let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN schedule_every_ms INTEGER");
+    let _ =
+        connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN schedule_every_ms INTEGER");
     let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN next_run_at_ms INTEGER");
     let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN last_run_at_ms INTEGER");
     let _ = connection.execute_batch("ALTER TABLE gateway_cron ADD COLUMN last_status TEXT");
@@ -1331,7 +1334,7 @@ pub fn upsert_crons(
                 cron.state.as_ref().and_then(|s| s.next_run_at_ms),
                 cron.state.as_ref().and_then(|s| s.last_run_at_ms),
                 cron.state.as_ref().and_then(|s| s.last_status.clone()),
-                agent_id,
+                cron.agent_id,
                 now,
             ],
         )?;
@@ -1454,8 +1457,8 @@ fn cron_run_entry_to_task(entry: &Value) -> Option<GatewayTask> {
         "cronrun:{job_id}:{}",
         run_at.unwrap_or_else(|| num_of(entry, &["ts"]).unwrap_or_default())
     );
-    let status_raw =
-        str_of(entry, &["completionStatus", "completion_status"]).or_else(|| str_of(entry, &["status"]));
+    let status_raw = str_of(entry, &["completionStatus", "completion_status"])
+        .or_else(|| str_of(entry, &["status"]));
     let status = status_raw
         .as_deref()
         .filter(|raw| !raw.is_empty())
@@ -1520,7 +1523,10 @@ fn normalize_cron_run_status(raw: &str) -> String {
     }
 }
 
-fn cron_job_name_map(connection: &Connection, target_label: &str) -> std::collections::HashMap<String, String> {
+fn cron_job_name_map(
+    connection: &Connection,
+    target_label: &str,
+) -> std::collections::HashMap<String, String> {
     list_crons(connection, None)
         .unwrap_or_default()
         .into_iter()
@@ -2754,37 +2760,57 @@ mod tests {
             now,
         );
         // finished 即刻移除；started 之后 30 分钟无 finished 被 TTL 兜底清掉。
-        assert!(!state.active.contains_key(&("tianshu".to_owned(), "agent:tianshu:feishu:group:g1".to_owned())));
-        assert!(!state.active.contains_key(&("tianji".to_owned(), "agent:tianji:cron:j1".to_owned())));
+        assert!(!state.active.contains_key(&(
+            "tianshu".to_owned(),
+            "agent:tianshu:feishu:group:g1".to_owned()
+        )));
+        assert!(!state
+            .active
+            .contains_key(&("tianji".to_owned(), "agent:tianji:cron:j1".to_owned())));
         assert_eq!(state.after, now - 30_000);
         // 新鲜 started 保留为活跃（灯牌/卡片的 ● 数据源）。
         fold_audit_events(
             &mut state,
-            &[json!({"action": "agent.run.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 5_000})],
+            &[
+                json!({"action": "agent.run.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 5_000}),
+            ],
             now,
         );
         assert_eq!(
-            state.active.get(&("yuheng".to_owned(), "agent:yuheng:feishu:group:g2".to_owned())),
+            state.active.get(&(
+                "yuheng".to_owned(),
+                "agent:yuheng:feishu:group:g2".to_owned()
+            )),
             Some(&(now - 5_000))
         );
         // 工具事件续命：run 中途的工具活动把时间戳顶到最新（乱序旧事件不回退），
         // TTL 按"最后活动"起算——长 run 不误杀；停止活动 30 分钟后熄灯。
         fold_audit_events(
             &mut state,
-            &[json!({"action": "tool.action.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 2_000})],
+            &[
+                json!({"action": "tool.action.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 2_000}),
+            ],
             now,
         );
         fold_audit_events(
             &mut state,
-            &[json!({"action": "tool.action.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 4_000})],
+            &[
+                json!({"action": "tool.action.started", "agentId": "yuheng", "sessionKey": "agent:yuheng:feishu:group:g2", "occurredAt": now - 4_000}),
+            ],
             now,
         );
         assert_eq!(
-            state.active.get(&("yuheng".to_owned(), "agent:yuheng:feishu:group:g2".to_owned())),
+            state.active.get(&(
+                "yuheng".to_owned(),
+                "agent:yuheng:feishu:group:g2".to_owned()
+            )),
             Some(&(now - 2_000))
         );
         fold_audit_events(&mut state, &[], now + AUDIT_RUN_TTL_MS + 1_000);
-        assert!(!state.active.contains_key(&("yuheng".to_owned(), "agent:yuheng:feishu:group:g2".to_owned())));
+        assert!(!state.active.contains_key(&(
+            "yuheng".to_owned(),
+            "agent:yuheng:feishu:group:g2".to_owned()
+        )));
     }
 
     #[test]
@@ -2796,7 +2822,9 @@ mod tests {
         let mut state = AuditRunState::default();
         fold_audit_events(
             &mut state,
-            &[json!({"action": "agent.run.started", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 1_000})],
+            &[
+                json!({"action": "agent.run.started", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 1_000}),
+            ],
             now,
         );
         let by_agent = audit_active_by_agent(&state);
@@ -2807,15 +2835,21 @@ mod tests {
         // finished 精确收掉那一条会话；finished 缺 sessionKey 时宁滥杀不残留。
         fold_audit_events(
             &mut state,
-            &[json!({"action": "agent.run.finished", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now})],
+            &[
+                json!({"action": "agent.run.finished", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now}),
+            ],
             now,
         );
         let after_finish = audit_active_by_agent(&state);
-        assert!(after_finish.get("tianshu").map_or(true, |s| !s.contains("agent:tianshu:feishu:group:g1")));
+        assert!(after_finish
+            .get("tianshu")
+            .map_or(true, |s| !s.contains("agent:tianshu:feishu:group:g1")));
         let mut state2 = AuditRunState::default();
         fold_audit_events(
             &mut state2,
-            &[json!({"action": "agent.run.started", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 1_000})],
+            &[
+                json!({"action": "agent.run.started", "agentId": "tianshu", "sessionKey": "agent:tianshu:feishu:group:g1", "occurredAt": now - 1_000}),
+            ],
             now,
         );
         fold_audit_events(
@@ -2838,14 +2872,21 @@ mod tests {
             "agentId": "tianshu"
         });
         let task = cron_run_entry_to_task(&entry).unwrap();
-        assert_eq!(task.task_id.as_deref(), Some("cronrun:cb75a58f:1791144000025"));
+        assert_eq!(
+            task.task_id.as_deref(),
+            Some("cronrun:cb75a58f:1791144000025")
+        );
         assert_eq!(task.kind.as_deref(), Some("automation_run"));
         assert_eq!(task.status.as_deref(), Some("succeeded"));
         assert_eq!(task.source_id.as_deref(), Some("cb75a58f"));
         assert_eq!(task.agent_id.as_deref(), Some("tianshu"));
         assert_eq!(task.started_at, Some(1_791_144_000_025));
         assert_eq!(task.ended_at, Some(1_791_144_000_025 + 28_242));
-        assert!(task.terminal_summary.as_deref().unwrap().starts_with("本轮完成"));
+        assert!(task
+            .terminal_summary
+            .as_deref()
+            .unwrap()
+            .starts_with("本轮完成"));
         // snake_case 回退 + 缺 status 不给终态
         let legacy = json!({ "job_id": "j2", "status": "failed", "ts": 5 });
         let task = cron_run_entry_to_task(&legacy).unwrap();
@@ -2888,7 +2929,10 @@ mod tests {
         upsert_tasks(&db, "vps", &snapshot_at(2000, vec![task])).unwrap();
         let rows = list_tasks(&db, None, None).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].label.as_deref(), Some("北斗巡检-OpenAI安全黑洞任务"));
+        assert_eq!(
+            rows[0].label.as_deref(),
+            Some("北斗巡检-OpenAI安全黑洞任务")
+        );
         assert_eq!(rows[0].status.as_deref(), Some("succeeded"));
         assert_eq!(rows[0].source_id.as_deref(), Some("job-1"));
         assert_eq!(rows[0].started_at_ms, Some(1000));
