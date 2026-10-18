@@ -3076,6 +3076,11 @@ function taskTitleOf(row) {
   const degenerate = !cleanTaskTitle(row) && !row.label && !row.title
     && (/^cronrun:/.test(id) || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(id));
   if (degenerate) {
+    // 网关对 cron/automation 的 run 常常 label 和 title 两列都空，一排
+    // 「定时运行」谁也认不出是哪件事（Leo 2026-10-19：飞书里跑的那轮
+    // RT-01 压测，17 轮巡检折成一张「定时运行 · 17 次」，他根本没认出来）。
+    // 结论摘要里其实写着这轮在干什么——巡检是北斗的常态产出，先认它。
+    if (/巡检/.test(String(row.terminalSummary ?? ""))) return "巡检";
     return row.kind === "automation_run" ? "定时运行" : `${row.runtime ?? "任务"} 运行`;
   }
   return jobDisplayName(cleanTaskTitle(row) || row.label || row.title || row.taskId || "未命名任务");
