@@ -300,7 +300,9 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
 
   return (
     <div className="pl-lanes" ref={hostRef}>
-      {/* 列头 = 星位遥测：三行（星名+状态点 / 链路职责 / 模型+最近一次 run 用时）*/}
+      {/* 列头 = 星位遥测：三行（星名+在跑点 / 链路职责 / 模型+最近一次 run 用时）。
+          状态点只在真在跑时出现（琥珀呼吸）——空闲不挂点：早年"空闲挂绿点"
+          被读成"都在活动"（Leo 2026-10-18），绿点语义歧义，删。 */}
       <div className="pl-lane-grid pl-colhead-row">
         <div className="pl-colhead-lead">案件 / CASE</div>
         {STAGE_COLS.map((col) => {
@@ -325,16 +327,22 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             >
               {col.parallel ? (
                 <>
-                  <div className="pl-colhead-star"><StarChip star="yuheng" size={24} /><b>玉衡</b><span className={`pl-dot pl-dot--${liveStars.has("yuheng") ? "amber" : "jade"}`} /></div>
-                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={24} /><b>开阳</b><span className={`pl-dot pl-dot--${liveStars.has("kaiyang") ? "amber" : "jade"}`} /></div>
+                  <div className="pl-colhead-star"><StarChip star="yuheng" size={24} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={24} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
                 </>
               ) : (
                 <div className="pl-colhead-star">
                   <StarChip star={col.star} size={24} />
                   <b>{starNameOf(col.star)}</b>
                   {col.gate
-                    ? <span style={{ marginLeft: "auto", fontSize: 9 }}>🔒</span>
-                    : <span className={`pl-dot pl-dot--${live ? "amber" : "jade"}`} style={{ marginLeft: "auto" }} />}
+                    ? (
+                      <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        🔒{live ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}
+                      </span>
+                    )
+                    : live
+                      ? <span className="pl-dot pl-dot--amber pl-breathe" style={{ marginLeft: "auto" }} />
+                      : null}
                 </div>
               )}
               <div className="pl-colhead-role cp-mono">{col.role}</div>
