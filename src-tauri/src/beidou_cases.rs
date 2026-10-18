@@ -1719,8 +1719,7 @@ mod dispatch_helper_tests {
         db.execute(
             "INSERT INTO gateway_task (task_id, gateway, agent_id, terminal_summary)
              VALUES ('cronrun:w1', 'vps', 'tianshu',
-                     '本轮巡检完成。CASE BM-9996 已关单：reset 6 个群会话、删除 job。'
-                     ' 运营方案 https://my.feishu.cn/docx/LENQdQaiabc')",
+                     '本轮巡检完成。CASE BM-9996 已关单：reset 6 个群会话、删除 job。 运营方案 https://my.feishu.cn/docx/LENQdQaiabc')",
             [],
         )
         .expect("insert task");
