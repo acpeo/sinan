@@ -10092,6 +10092,9 @@ button.pl-badge { cursor: pointer; }
 .pl-stardetail-right { flex: none; text-align: right; }
 .pl-stardetail-ctx { display: block; font-size: 10px; color: var(--cp-body); }
 .pl-stardetail-last { display: block; margin-top: 2px; font-size: 9.5px; color: var(--cp-meta); }
+/* 星位明细里的上下文水位条：复用任务页 .task-context-bar 的配色（浅深都已适配），
+   只补一个宽度——那个类是 position:relative 的，不给宽度会缩成 0。 */
+.pl-stardetail-bar { display: block; width: 96px; margin: 4px 0 0 auto; }
 .pl-stardetail-foot { padding: 9px 14px; border-top: 1px solid var(--cp-hair); font-size: 10.5px; line-height: 1.6; color: var(--cp-meta); }
 
 /* ---------- 定时面板 ---------- */

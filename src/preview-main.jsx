@@ -3,7 +3,10 @@
 // 这里来自写死的预览数据。组件本身是同一份，改版式两边同时生效。
 import { createRoot } from "react-dom/client";
 import { PipelineView } from "./PipelineView.jsx";
+import { installExternalLinkHandler } from "./externalLinks.js";
 import "./styles.css";
+
+installExternalLinkHandler();
 
 // 泳道案件的预览数据。BM-2601 = Leo 真机账本那一行（客厅沙发摆放·链路测试，
 // 10-13 由摇光跑完关单），字段名与 Rust CaseListRow 对齐；另两条演示案
@@ -127,14 +130,18 @@ const CASES = [
   },
 ];
 
+// 真机形态：budget = contextTokenBudget（模型窗口），estimate =
+// estimatedPromptTokens（已用，只有跑过 run 的会话才有；空闲会话是 null）。
+// 七颗星都 gpt-6 所以预算都是 525k —— 以前浮层把 525k 当"用量"显示，
+// 七行一模一样，就是这个原因。
 const TELEMETRY = {
-  tianshu: { model: "gpt-6", ctx: "525k", lastRun: "127s", note: "巡检核验 / 建档案" },
-  tianxuan: { model: "gpt-6", ctx: "525k", lastRun: "869s", note: "趋势选题" },
-  tianquan: { model: "gpt-6", ctx: "525k", lastRun: "674s", note: "skill 检查 · 674s" },
-  tianji: { model: "gpt-6", ctx: "525k", lastRun: "377s", note: "母稿落盘" },
-  yuheng: { model: "gpt-6", ctx: "525k", lastRun: "869s", note: "插图实测" },
-  kaiyang: { model: "gpt-6", ctx: "525k", lastRun: "152s", note: "skill 检查 · 失败过 1 次" },
-  yaoguang: { model: "gpt-6", ctx: "525k", lastRun: "1516s", note: "定版关单" },
+  tianshu: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "127s", note: "巡检核验 / 建档案" },
+  tianxuan: { model: "gpt-6", budget: 525000, estimate: 41000, lastRun: "869s", note: "趋势选题" },
+  tianquan: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "674s", note: "skill 检查 · 674s" },
+  tianji: { model: "gpt-6", budget: 525000, estimate: 182000, lastRun: "377s", note: "母稿落盘" },
+  yuheng: { model: "gpt-6", budget: 525000, estimate: 96000, lastRun: "869s", note: "插图实测" },
+  kaiyang: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "152s", note: "skill 检查 · 失败过 1 次" },
+  yaoguang: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "1516s", note: "定版关单" },
 };
 
 

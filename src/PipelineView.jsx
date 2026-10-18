@@ -951,6 +951,15 @@ export function PipelineView({
   );
 }
 
+/// token 数紧凑写法：525000 -> "525k"，12345 -> "12.3k"，999 -> "999"。
+function compactTokens(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1000) return String(Math.round(n));
+  const k = n / 1000;
+  return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`;
+}
+
 /* ═══════════ 星位明细浮层 ═══════════ */
 function StarDetail({ telemetry, liveStars, onClose }) {
   return (
@@ -964,6 +973,19 @@ function StarDetail({ telemetry, liveStars, onClose }) {
         {STAR_ORDER.map((id) => {
           const t = telemetry[id] ?? {};
           const live = liveStars.has(id);
+          // 上下文水位 = 已用 / 预算。网关只对跑过 run 的会话给
+          // estimatedPromptTokens（空闲会话缺省），所以没有 estimate 时只报
+          // 预算、进度条留空 —— 画成 0% 等于谎称"用了零"。
+          const hasLevel =
+            typeof t.estimate === "number" && Number.isFinite(t.estimate) && t.budget > 0;
+          const fillPct = hasLevel
+            ? Math.min(100, Math.round((t.estimate / t.budget) * 100))
+            : null;
+          const ctxText = hasLevel
+            ? `${compactTokens(t.estimate)} / ${compactTokens(t.budget)}`
+            : t.budget
+              ? `— / ${compactTokens(t.budget)}`
+              : "—";
           return (
             <div className="pl-stardetail-row" key={id}>
               <StarChip star={id} size={22} />
@@ -976,7 +998,23 @@ function StarDetail({ telemetry, liveStars, onClose }) {
                 <span className="pl-stardetail-note">{t.note ?? ""}</span>
               </div>
               <div className="pl-stardetail-right">
-                <span className="cp-mono pl-stardetail-ctx">上下文 {t.ctx ?? "—"}</span>
+                <span
+                  className="cp-mono pl-stardetail-ctx"
+                  title={
+                    hasLevel
+                      ? `已用 ${fillPct}% · ${t.estimate.toLocaleString()} / ${t.budget.toLocaleString()} tok`
+                      : "空闲会话，网关不报上下文水位"
+                  }
+                >上下文 {ctxText}</span>
+                <span
+                  className={`task-context-bar pl-stardetail-bar${fillPct == null ? " task-context-bar--empty" : ""}`}
+                  aria-hidden="true"
+                >
+                  <i
+                    className={fillPct != null && fillPct >= 80 ? "task-context-fill--warn" : undefined}
+                    style={fillPct != null ? { width: `${fillPct}%` } : undefined}
+                  />
+                </span>
                 <span className="cp-mono pl-stardetail-last">上次 {t.lastRun ?? "—"}</span>
               </div>
             </div>
@@ -984,8 +1022,11 @@ function StarDetail({ telemetry, liveStars, onClose }) {
         })}
       </div>
       <div className="pl-stardetail-foot">
-        说明：openclaw 的 token 计数器是关的（<span className="cp-mono">sessions.usage</span> 全 0），所以这里只显示网关真给的东西——
-        上下文窗口、每颗星最近一次 run 的起止与用时。等哪天真开了计量，再加「本任务累计 token」。
+        说明：上下文是<span className="cp-mono">已用 / 预算</span>，取自网关的
+        <span className="cp-mono">estimatedPromptTokens</span>——只有跑过 run 的会话带这个值，
+        空闲会话缺省，那种行只报预算、进度条留空（不画成 0%）。
+        累计 token 计数器仍是关的（<span className="cp-mono">sessions.usage</span> 全 0），
+        等真开了计量再加「本任务累计 token」。
       </div>
     </div>
   );

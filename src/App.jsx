@@ -3378,27 +3378,39 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
       </div>
     );
   };
-  if (!usageSessions.length) return null;
+  // 一个会话都没有才整块不出。只剩空闲会话时也要出卡——否则看到的是
+  // 「星位上下文整个消失」，分不清是没数据还是没渲染（2026-10-19 实测：
+  // 全部会话空闲时这张卡直接不显示）。
+  if (!usageSessions.length && !idleSessions.length) return null;
+  const onlyIdle = usageSessions.length === 0;
+  // 只有空闲会话时直接摊开：卡里总得有东西看，否则等于空壳。
+  const showIdleRows = showIdleSessions || onlyIdle;
   if (variant === "board") {
     return (
       <div className="v7card tasks-usage-card--board">
         <p className="v7-mhead">
           <span>星位上下文{usageModelUniform ? ` · ${usageModelUniform}` : ""}</span>
           {idleSessions.length > 0 ? (
-            <button
-              type="button"
-              className="tasks-usage-idle"
-              aria-expanded={showIdleSessions}
-              title="点开看全部空闲会话（从未对话或未产生用量）；再点收起"
-              onClick={() => setShowIdleSessions((open) => !open)}
-            >
-              {" · 另有 "}{idleSessions.length}{" 个空闲会话"}
-            </button>
+            onlyIdle ? (
+              // 全是空闲会话时行已经摊开了，再给个"点开/收起"的按钮点了没反应——
+              // 这种假开关比没有更糟，写成纯文本。
+              <span className="tasks-usage-idle"> · 全部 {idleSessions.length} 个会话空闲</span>
+            ) : (
+              <button
+                type="button"
+                className="tasks-usage-idle"
+                aria-expanded={showIdleSessions}
+                title="点开看全部空闲会话（从未对话或未产生用量）；再点收起"
+                onClick={() => setShowIdleSessions((open) => !open)}
+              >
+                {" · 另有 "}{idleSessions.length}{" 个空闲会话"}
+              </button>
+            )
           ) : null}
         </p>
         <div className="tasks-usage-list">
           {usageSessions.map((session) => renderUsageRow(session, false))}
-          {showIdleSessions &&
+          {showIdleRows &&
             idleSessions.map((session) => renderUsageRow(session, true))}
         </div>
       </div>
@@ -3410,20 +3422,24 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
         星位上下文
         {usageModelUniform ? ` · ${usageModelUniform}` : ""}
         {idleSessions.length > 0 ? (
-          <button
-            type="button"
-            className="tasks-usage-idle"
-            aria-expanded={showIdleSessions}
-            title="点开看全部空闲会话（从未对话或未产生用量）；再点收起"
-            onClick={() => setShowIdleSessions((open) => !open)}
-          >
-            {" · 另有 "}{idleSessions.length}{" 个空闲会话"}
-          </button>
+          onlyIdle ? (
+            <span className="tasks-usage-idle"> · 全部 {idleSessions.length} 个会话空闲</span>
+          ) : (
+            <button
+              type="button"
+              className="tasks-usage-idle"
+              aria-expanded={showIdleSessions}
+              title="点开看全部空闲会话（从未对话或未产生用量）；再点收起"
+              onClick={() => setShowIdleSessions((open) => !open)}
+            >
+              {" · 另有 "}{idleSessions.length}{" 个空闲会话"}
+            </button>
+          )
         ) : null}
       </p>
       <div className="tasks-usage-list">
         {usageSessions.map((session) => renderUsageRow(session, false))}
-        {showIdleSessions &&
+        {showIdleRows &&
           idleSessions.map((session) => renderUsageRow(session, true))}
       </div>
     </div>
@@ -4431,12 +4447,29 @@ function PipelineTelemetry({
       const id = canonicalAgentId(session.agentId ?? "");
       if (!id) continue;
       const budget = Number(session.contextTokenBudget ?? 0);
-      const ctx = budget > 0 ? `${Math.round(budget / 1000)}k` : "—";
-      // 同一颗星可能有多条会话（main / group / cron），窗口取最大那条——
-      // 群会话才是干活的，但 main 的窗口也可能更大，取大的是保守读法。
+      // 上下文水位（已用）。网关只对跑过 run 的会话给 estimatedPromptTokens，
+      // 空闲会话缺省 —— null 是"不知道"，不是 0，别画成"用了零"。
+      const estimate =
+        typeof session.estimatedPromptTokens === "number" &&
+        Number.isFinite(session.estimatedPromptTokens)
+          ? session.estimatedPromptTokens
+          : null;
+      // 同一颗星可能有多条会话（main / group / cron）。挑水位最大那条当代表
+      // （同水位再取窗口更大）；全都没水位时退到窗口最大的那条，至少让用户
+      // 看到这颗星的模型窗口——以前按字符串比 "525k" > "128k"，撞上
+      // "1000k" 会选错，顺手改成数值比。
       const current = out[id];
-      if (!current || ctx !== "—" && ctx > current.ctx) {
-        out[id] = { ...(current ?? {}), model: session.model ?? current?.model ?? "—", ctx };
+      const better =
+        !current ||
+        (estimate ?? -1) > (current.estimate ?? -1) ||
+        ((estimate ?? -1) === (current.estimate ?? -1) && budget > (current.budget ?? 0));
+      if (better) {
+        out[id] = {
+          ...(current ?? {}),
+          model: session.model ?? current?.model ?? "—",
+          estimate,
+          budget: budget > 0 ? budget : null,
+        };
       } else if (current && !current.model && session.model) {
         current.model = session.model;
       }
