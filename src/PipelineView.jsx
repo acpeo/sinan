@@ -100,7 +100,7 @@ function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] 
   const pending = cases.filter((item) => (item.secondStrikes ?? 0) >= 3).length;
   const inFlight = cases.filter((item) => !caseClosed(item)).length;
   return (
-    <header className="pl-topbar">
+    <header className="pl-topbar" data-tauri-drag-region>
       <div className="pl-brand">
         {/* 品牌标：设计稿是深色方角块 + 白色星芒，不是一个彩色 emoji 圆点
             （Leo 2026-10-17：emoji 直接把"标题"整行拉低了一个档次）。 */}

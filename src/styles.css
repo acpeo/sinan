@@ -8875,7 +8875,11 @@ html:has(.hopcard-stage) #root {
    滚动区不再预留那 88px——只留窗口按钮一排（44px），顶栏立刻跟上。
    不然顶上多出一条 44px 的空带，指挥舱看着"高出一截"。
    注意不能用 > .pl-root：PipelineView 外面还包着一层 TasksSection。 */
-.console-scroll:has(.pl-root) { top: 44px; padding: 0; overflow: hidden; }
+.console-scroll:has(.pl-root) { top: 0; padding: 0; overflow: hidden; }
+/* 顶栏提到 y=0 后：右侧让出窗口按钮药丸的位（absolute top8/right10，宽约230），
+   自身抬到拖拽层之上（拖拽区 z-7），拖拽改由顶栏自己的 data-tauri-drag-region 接管。
+   不然顶栏压在 44px 空带下面，指挥舱比别的页"高出一截"（Leo 2026-10-18 三图对照）。 */
+.console-scroll:has(.pl-root) .pl-topbar { position: relative; z-index: 8; padding-right: 248px; }
 
 /* 全栈遥测等宽字体（强制规范）：案件编号、七轴得分、倒计时、Watchdog 周期、
    Token 消耗、document_id 一律等宽 + tabular-nums。 */
@@ -10135,4 +10139,4 @@ html[data-theme="dark"] .pl-gate-mark, html[data-theme="dark"] .pl-strike-mark {
    但 console-tabs 保留——那是任务台的四大分区导航（指挥舱/任务/定时/设置），
    流水线自己的页签只管它内部两块面板。 */
 .console-root:has(.pl-root) .console-head { display: none; }
-.console-root:has(.pl-root) .console-scroll { top: 46px; }
+.console-root:has(.pl-root) .console-scroll { top: 0; }
