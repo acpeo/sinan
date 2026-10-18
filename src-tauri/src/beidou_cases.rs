@@ -1676,8 +1676,7 @@ fn watchdog_branch(text: &str) -> Option<String> {
     let mut idx = 0;
     while idx + 1 < chars.len() {
         // 找下一个「命中」
-        let hit = (idx..chars.len() - 1).find(|&k| chars[k] == '命' && chars[k + 1] == '中');
-        let Some(hit) = hit else { return None };
+        let hit = (idx..chars.len() - 1).find(|&k| chars[k] == '命' && chars[k + 1] == '中')?;
         idx = hit + 2;
         // 否定的命中（未命中/不命中/没命中）不是动作
         let prev: String = chars[hit.saturating_sub(2)..hit].iter().collect();
