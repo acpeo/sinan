@@ -4823,7 +4823,6 @@ export function App() {
       {/* 独立窗口条（方案 B，Leo 2026-10-18 定稿）：30px 专用条，整条可拖，
            主题/小窗/钉住/窗口控制在右。品牌行在其下，所有页签共用。 */}
       <div className="window-strip" data-tauri-drag-region>
-        <span className="window-strip-hint">拖动这里移动窗口</span>
         <WindowActions
           mode="expanded"
           strip

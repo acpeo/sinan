@@ -8828,7 +8828,8 @@ html:has(.hopcard-stage) #root {
 .pl-root,
 .cp-root,
 .ca-root,
-.console-topbar {
+.console-topbar,
+.window-strip {
   /* ---- 画布与容器 ---- */
   --cp-canvas: #f7f6f2;                 /* 温润宣纸白 */
   --cp-surface: #ffffff;                /* 主卡片纯白 */
@@ -9422,7 +9423,10 @@ html[data-theme="dark"] .cp-star--tianshu { background: #f2f0ea; color: #1a1917;
 /* 选择器同时挂 .pl-root 与 .cp-root：v6 版式渲染前者，旧版式（已不挂载）渲染后者。
    漏掉 .pl-root 的后果是深色下整页还是浅色——变量全部继承不到。 */
 html[data-theme="dark"] .pl-root,
-html[data-theme="dark"] .cp-root {
+html[data-theme="dark"] .cp-root,
+html[data-theme="dark"] .ca-root,
+html[data-theme="dark"] .console-topbar,
+html[data-theme="dark"] .window-strip {
   --cp-canvas: #1a1917;
   --cp-surface: #221f1c;
   --cp-slot: #191715;
@@ -9510,13 +9514,6 @@ html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
   background: color-mix(in srgb, var(--cp-canvas) 92%, transparent);
   border-bottom: 1px solid var(--cp-hair);
 }
-.window-strip-hint {
-  font-size: 10px;
-  color: #a3a19a;
-  margin-right: auto;
-  padding-left: 10px;
-  user-select: none;
-}
 .window-actions--strip {
   position: static;
   display: flex;
@@ -9559,7 +9556,6 @@ html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
   .console-topbar .pl-tabs button { padding: 3px 4px; font-size: 10px; }
 }
 @media (max-width: 640px) {
-  .window-strip-hint { display: none; }
   .console-topbar { gap: 4px; padding: 0 8px; }
   .console-topbar .pl-tabs { gap: 0; }
   /* 提一级优先级：.pl-tabs button 的基础规则在文件更靠后，同级会被它盖掉 */
