@@ -518,14 +518,14 @@ function SliderRow({ label, hint, min, max, step, percent, ariaLabel, onChange }
   );
 }
 
-function WindowActions({ mode, pinned, transparent = false, glassTint = "dark", macMinimal = false, strip = false, theme, darkTheme, onThemeChange, onToggleMode, onTogglePinned, onToggleTransparent, tasksWidgetEnabled, onToggleTasksWidget }) {
+function WindowActions({ mode, pinned, transparent = false, glassTint = "dark", macMinimal = false, inline = false, theme, darkTheme, onThemeChange, onToggleMode, onTogglePinned, onToggleTransparent, tasksWidgetEnabled, onToggleTasksWidget }) {
   const glassName = (id) =>
     GLASS_TINT_OPTIONS.find((option) => option.id === id)?.label || "深色";
   const glassCurrent = normalizeGlassTint(glassTint);
   const glassNext = nextGlassTint(glassCurrent);
   const glassLabel = `${glassName(glassCurrent)} · 点击切为${glassName(glassNext)}`;
   return (
-    <div className={`window-actions window-actions--${mode}${strip ? " window-actions--strip" : ""}`} aria-label="窗口操作">
+    <div className={`window-actions window-actions--${mode}${inline ? " window-actions--inline" : ""}`} aria-label="窗口操作">
       {mode === "expanded" && (
         <>
           {onToggleMode && (
@@ -4820,21 +4820,6 @@ export function App() {
     <div className="console-root">
       <div className="expanded-drag-region" data-tauri-drag-region aria-hidden="true" />
 
-      {/* 独立窗口条（方案 B，Leo 2026-10-18 定稿）：30px 专用条，整条可拖，
-           主题/小窗/钉住/窗口控制在右。品牌行在其下，所有页签共用。 */}
-      <div className="window-strip" data-tauri-drag-region>
-        <WindowActions
-          mode="expanded"
-          strip
-          pinned={pinned}
-          theme={theme}
-          darkTheme={darkTheme}
-          onThemeChange={handleThemeChange}
-          onTogglePinned={handleTogglePinned}
-          tasksWidgetEnabled={tasksWidgetEnabled}
-          onToggleTasksWidget={handleToggleTasksWidget}
-        />
-      </div>
       {/* 统一外壳：五个页签共用同一条顶栏——品牌在左、胶囊页签居中、状态在右。
           之前只有指挥舱是设计稿外壳，另外四页还是「司南任务台+同步」两排老壳，
           切个页签像换了个 app（Leo 2026-10-18 五图对照）。 */}
@@ -4913,6 +4898,17 @@ export function App() {
               </button>
             </>
           )}
+          <WindowActions
+            mode="expanded"
+            inline
+            pinned={pinned}
+            theme={theme}
+            darkTheme={darkTheme}
+            onThemeChange={handleThemeChange}
+            onTogglePinned={handleTogglePinned}
+            tasksWidgetEnabled={tasksWidgetEnabled}
+            onToggleTasksWidget={handleToggleTasksWidget}
+          />
         </div>
       </header>
       <div className="console-scroll">
