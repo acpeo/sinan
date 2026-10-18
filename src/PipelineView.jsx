@@ -150,20 +150,21 @@ function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] 
 }
 
 
-/* 品牌标：照 src-tauri/icons/128x128.png 画的内联版——深蓝圆角方块 +
-   北斗七星星图（连星线 + 七枚星点，最外那颗微暖）。之前的 ✦ 四角星
-   是照设计稿画的，不是 app 真标志（Leo 2026-10-18 指出）。 */
+/* 品牌标：直接用打包图标原图（src-tauri/icons/128x128.png → src/assets）。
+   之前手绘的北斗七星 SVG 和 ✦ 都是近似，Leo 2026-10-18 指出与任务栏图标
+   对不上——真标志就一张图，别画第二份。 */
+import sinanLogoUrl from "./assets/sinan-logo.png";
+
 export function BrandLogo({ size = 28 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 26 26" aria-hidden="true" style={{ flex: "none", display: "block" }}>
-      <rect width="26" height="26" rx="7" fill="#232840" />
-      <circle cx="13" cy="12.5" r="8.5" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
-      <polyline points="8,7 9,11 13,13 14,9 17,8 20,7 23,3" fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="1" />
-      <circle cx="8" cy="7" r="1.5" fill="#fff" /><circle cx="9" cy="11" r="1.3" fill="#fff" />
-      <circle cx="13" cy="13" r="1.3" fill="#fff" /><circle cx="14" cy="9" r="1.3" fill="#fff" />
-      <circle cx="17" cy="8" r="1.3" fill="#fff" /><circle cx="20" cy="7" r="1.3" fill="#fff" />
-      <circle cx="23" cy="3" r="1.7" fill="#ffd27d" />
-    </svg>
+    <img
+      src={sinanLogoUrl}
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden="true"
+      style={{ flex: "none", display: "block", borderRadius: 7 }}
+    />
   );
 }
 
