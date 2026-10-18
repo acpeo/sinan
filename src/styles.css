@@ -8447,7 +8447,7 @@ html[data-theme="dark"] .console-root {
 /* 页签行同属门面：浮在拖拽区之上，避免被拖窗层吃掉点击。 */
 .console-tabs { position: relative; z-index: 8; }
 .console-tabs button { user-select: none; }
-.console-root .console-scroll { top: 56px; }
+.console-root .console-scroll { top: 86px; }
 /* 北斗派发回执条：发车/追投/自愈的真回执（含"没发出去"的原因）。
    6 秒自消，但存在期间要显眼——这是主理人唯一能确认"车动没动"的地方。 */
 .console-beidou-toast { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; border: 1px solid rgba(127, 127, 127, 0.3); background: rgba(127, 127, 127, 0.1); }
@@ -8876,7 +8876,7 @@ html:has(.hopcard-stage) #root {
    滚动区不再预留那 88px——只留窗口按钮一排（44px），顶栏立刻跟上。
    不然顶上多出一条 44px 的空带，指挥舱看着"高出一截"。
    注意不能用 > .pl-root：PipelineView 外面还包着一层 TasksSection。 */
-.console-scroll:has(.pl-root) { top: 56px; padding: 0; overflow: hidden; }
+.console-scroll:has(.pl-root) { top: 86px; padding: 0; overflow: hidden; }
 /* 顶栏提到 y=0 后：右侧让出窗口按钮药丸的位（absolute top8/right10，宽约230），
    自身抬到拖拽层之上（拖拽区 z-7），拖拽改由顶栏自己的 data-tauri-drag-region 接管。
    不然顶栏压在 44px 空带下面，指挥舱比别的页"高出一截"（Leo 2026-10-18 三图对照）。 */
@@ -9498,38 +9498,52 @@ html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
   position: relative;
   z-index: 8;
 }
-/* 窗口按钮内联进顶栏（方案 A，Leo 2026-10-18）：不再是悬浮药丸。
-   朴素灰色细线风——激活态也不许蓝红彩（参考 Leo 给的对照图）。 */
-.window-actions--inline {
+/* 独立窗口条（方案 B，Leo 2026-10-18 定稿）：30px 专用条，整条可拖。
+   按钮延续朴素灰色细线风——激活态同样不许蓝红彩。 */
+.window-strip {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 30px;
+  flex: none;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--cp-canvas) 92%, transparent);
+  border-bottom: 1px solid var(--cp-hair);
+}
+.window-strip-hint {
+  font-size: 10px;
+  color: #a3a19a;
+  margin-right: auto;
+  padding-left: 10px;
+  user-select: none;
+}
+.window-actions--strip {
   position: static;
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 0 0 8px;
-  margin-left: 2px;
   background: none;
   border: 0;
-  border-left: 1px solid var(--cp-hair);
   box-shadow: none;
-  height: 30px;
+  height: 26px;
   flex: none;
 }
-.window-actions--inline .window-action {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+.window-actions--strip .window-action {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   color: #6b6a64;
 }
-.window-actions--inline .window-action:hover {
+.window-actions--strip .window-action:hover {
   color: #141413;
   background: rgba(20, 20, 19, 0.05);
 }
-.window-actions--inline .window-action--active,
-.window-actions--inline .window-action--active:hover {
+.window-actions--strip .window-action--active,
+.window-actions--strip .window-action--active:hover {
   color: #141413;
   background: rgba(20, 20, 19, 0.08);
 }
-.window-actions--inline .window-action svg { color: inherit; }
+.window-actions--strip .window-action svg { color: inherit; }
 /* 小窗口（主窗最小 420px）：一层层收——先是副标题与计数 chip，再是品牌文字，
    页签缩紧，最后窗口按钮缩到 26px。任何宽度都不换行、不溢出。 */
 @media (max-width: 980px) {
@@ -9545,12 +9559,13 @@ html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
   .console-topbar .pl-tabs button { padding: 3px 4px; font-size: 10px; }
 }
 @media (max-width: 640px) {
+  .window-strip-hint { display: none; }
   .console-topbar { gap: 4px; padding: 0 8px; }
   .console-topbar .pl-tabs { gap: 0; }
   /* 提一级优先级：.pl-tabs button 的基础规则在文件更靠后，同级会被它盖掉 */
   .console-topbar .pl-tabs button { padding: 4px 5px; font-size: 10.5px; }
-  .window-actions--inline { gap: 0; padding-left: 6px; }
-  .window-actions--inline .window-action { width: 24px; height: 24px; }
+  .window-actions--strip { gap: 0; }
+  .window-actions--strip .window-action { width: 22px; height: 22px; }
 }
 .console-topbar .console-topright { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
 .pl-brand { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -10212,14 +10227,14 @@ html[data-theme="dark"] .pl-gate-mark, html[data-theme="dark"] .pl-strike-mark {
    但 console-tabs 保留——那是任务台的四大分区导航（指挥舱/任务/定时/设置），
    流水线自己的页签只管它内部两块面板。 */
 .console-root:has(.pl-root) .console-head { display: none; }
-.console-root:has(.pl-root) .console-scroll { top: 56px; }
+.console-root:has(.pl-root) .console-scroll { top: 86px; }
 
 /* 最窄档（主窗最小 420px）：logo 24、页签 9.5px、窗口按钮 22px——
    420 宽也要一行放下且不溢出（探针实测 lastBtnRight ≤ 视口宽）。 */
 @media (max-width: 470px) {
   .console-topbar { gap: 2px; padding: 0 6px; }
   .console-topbar .pl-tabs button { padding: 3px 3px; font-size: 9.5px; }
-  .window-actions--inline .window-action { width: 22px; height: 22px; }
+  .window-actions--strip .window-action { width: 20px; height: 20px; }
   .window-actions--inline { padding-left: 4px; }
   .pl-logo, .console-topbar .pl-brand svg { width: 24px; height: 24px; }
 }
