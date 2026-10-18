@@ -1683,12 +1683,13 @@ fn watchdog_branch(text: &str) -> Option<String> {
         if prev.contains('未') || prev.contains('不') || prev.contains('没') {
             continue;
         }
-        // 先看命中后面 15 字（「本轮命中分支】漏派分支」「已命中并执行超时分支」），
-        // 再紧贴前面 6 字（「分支 1 关单命中」「无事分支命中」）——贴脸的才是
-        // 这一命中的主语，远处的分支名属于别的句子（真机 18:29 那轮前面
-        // 3 字就是「① 关单不命中」的叙述）。
+        // 先贴脸看命中前面 6 字（「无事分支命中」「分支 1 关单命中」——主语
+        // 贴在命中前面），找不到再看后面 15 字（「本轮命中分支】漏派分支」
+        // 「已命中并执行超时分支」）。顺序反了会把后面枚举项当成这一命中的
+        // 主语——真机形态「本轮无事分支命中。① 关单：…不命中」里，那个
+        // 关单属于下一节且写明不命中（CI 实测实锤）。
         let branch =
-            scan(hit + 2, (hit + 17).min(chars.len())).or_else(|| scan(hit.saturating_sub(6), hit));
+            scan(hit.saturating_sub(6), hit).or_else(|| scan(hit + 2, (hit + 17).min(chars.len())));
         if let Some(b) = branch {
             if b == "无事" {
                 continue;
@@ -1764,6 +1765,13 @@ pub fn extract_feishu_links(text: &str) -> Vec<String> {
             // URL 字符：字母数字 + 常见安全符号；遇到空白/中文/引号即收
             while j < bytes.len() {
                 let ch = bytes[j];
+                // 连续的点是截断标记（半截链以 … 或 ... 收尾）：点在 URL 里
+                // 是合法字符，不在这里断的话 "…docx/abc..." 的尾巴会被整段
+                // 吃进 URL，后面的 starts_with("...") 永远看不到它
+                // （CI 实测：三个点的截断链漏成了 25 位死链）。
+                if ch == b'.' && bytes.get(j + 1) == Some(&b'.') {
+                    break;
+                }
                 let is_url_char = ch.is_ascii_alphanumeric()
                     || matches!(
                         ch,
