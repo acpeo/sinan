@@ -4281,9 +4281,21 @@ function TasksSection({
 
   // 链路全景（六案④）：进行中的接力轮（同群聊一串，逐跳带原话/结论）+
   // 登记任务链（父子/runId 边，≥2 跳才算链）。
+  // activeRuns 先过僵尸阈值，与星位灯（boardLiveActiveIds）同口径：久无
+  // 动静的 running 行两处都不认。真机 BM-2601 实锤：watchdog 的 cron 会话
+  // job 已删、57 分钟无动静却让「进行中 1」常亮——同一份数据两套结论，
+  // 统计必须跟灯牌走。queued 也算在跑（与灯牌同口径），lastSeenMs 缺失
+  // 或为 0 时放行（没观测到的不冤枉）。
+  const relayZombieMs = Math.max(60, monitor.zombieThresholdSec) * 1000;
+  const liveRunningRuns = sessionRuns.filter((run) => {
+    if (!run || (run.status !== "running" && run.status !== "queued")) return false;
+    const at = Number.isFinite(run.lastSeenMs) ? run.lastSeenMs : 0;
+    if (at > 0 && now - at > relayZombieMs) return false;
+    return true;
+  });
   const relayEpisodes = activeRelayEpisodes(
     sessionRuns,
-    sessionRuns.filter((run) => run.status === "running"),
+    liveRunningRuns,
     Math.max(5, monitor.episodeGapMin) * 60_000,
   );
 

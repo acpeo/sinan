@@ -417,6 +417,157 @@ pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usi
     Ok(harvested)
 }
 
+/// 接力会话兜底收割（2026-10-18 Leo 实机核查后补的第二条收割线）。
+///
+/// 为什么需要它：北斗整条 relay 其实走飞书群聊会话，gateway_task 里反而
+/// 没有一条带 [CASE_ID] 标签（真机 BM-2601 实测：23 条网关任务 0 条带标签，
+/// 案号只在派单会话的标题/结论里）——只扫 gateway_task 的那条线对整个
+/// 接力是瞎的，案行/阶段/产出链接全空。Leo 明确 VPS 侧不会补标签注入，
+/// 所以本地必须自己从 session_run 把案号挖出来。
+///
+/// 分段规则与前端 UI 同款（taskChains.groupSessionEpisodes）：同群聊
+/// （session_key 的 :group: 后段）+ 交接沉默 ≤ SESSION_EPISODE_GAP_MS 算
+/// 同一轮。轮内任一跳文本带 [CASE_ID: BM-xxxx] → 案号传播给整轮所有跳，
+/// 各跳结论里的飞书链接收进该案。派单卡（天枢）通常带标签，后续跳只带
+/// 裸案号或链接——所以必须整轮传播，不能逐跳归拢。
+///
+/// gap 用常量 60 分钟（= 前端 episodeGapMin 默认值）。设置页改前端配置时
+/// 两边会差；兜底收割宁大勿小（大 gap 最多多拢同群聊相邻案，attach_link
+/// 只填空位，误拢损失有限；小 gap 直接漏整段）。
+const SESSION_EPISODE_GAP_MS: i64 = 60 * 60 * 1000;
+
+/// 群聊键：与前端 chatIdOf 同规则——session_key 里 ":group:" 的后段，
+/// 没有 marker 时整个键即一群（单聊/cron 会话自成一群）。
+fn session_chat_id(session_key: &str) -> &str {
+    match session_key.find(":group:") {
+        Some(at) => &session_key[at + ":group:".len()..],
+        None => session_key,
+    }
+}
+
+/// session_run 一行的收割视角字段（元组类型别名：clippy type-complexity）。
+type SessionHarvestRow = (
+    String,         // session_key
+    Option<String>, // agent_id
+    Option<String>, // title
+    Option<String>, // terminal_summary
+    Option<String>, // progress_summary
+    Option<i64>,    // started_at_ms
+    Option<i64>,    // ended_at_ms
+);
+
+pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<usize> {
+    let rows: Vec<SessionHarvestRow> = {
+        let mut stmt = connection.prepare(
+            "SELECT session_key, agent_id, title, terminal_summary, progress_summary,
+                    started_at_ms, ended_at_ms
+             FROM session_run
+             WHERE COALESCE(title, '') != '' OR COALESCE(terminal_summary, '') != ''
+                OR COALESCE(progress_summary, '') != ''",
+        )?;
+        let mapped = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
+        })?;
+        mapped.filter_map(|item| item.ok()).collect()
+    };
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    // 分群聊 → 按 started 倒序切段（链内最旧一跳的开始 vs 候选跳的结束，
+    // 沉默超限即切段）——与 groupSessionEpisodes 同一比较。
+    let mut by_chat: std::collections::BTreeMap<&str, Vec<&SessionHarvestRow>> =
+        std::collections::BTreeMap::new();
+    for row in &rows {
+        by_chat
+            .entry(session_chat_id(&row.0))
+            .or_default()
+            .push(row);
+    }
+    let mut harvested = 0usize;
+    for chat_rows in by_chat.values() {
+        let mut ordered: Vec<&SessionHarvestRow> = chat_rows.clone();
+        ordered.sort_by(|a, b| b.5.unwrap_or(0).cmp(&a.5.unwrap_or(0)));
+        let mut current: Vec<&SessionHarvestRow> = Vec::new();
+        let mut episodes: Vec<Vec<&SessionHarvestRow>> = Vec::new();
+        for row in ordered {
+            if let Some(oldest) = current.last() {
+                let chain_start = oldest.5.unwrap_or(0);
+                let run_end = row.6.unwrap_or_else(|| row.5.unwrap_or(0));
+                if chain_start - run_end > SESSION_EPISODE_GAP_MS {
+                    episodes.push(std::mem::take(&mut current));
+                }
+            }
+            current.push(row);
+        }
+        if !current.is_empty() {
+            episodes.push(current);
+        }
+        for episode in episodes {
+            let mut hops = episode;
+            hops.sort_by(|a, b| a.5.unwrap_or(0).cmp(&b.5.unwrap_or(0)));
+            // 段内逐跳找带标签的案号——第一个命中的赢。同群聊同一轮就是
+            // 同一案（跨案必然沉默超限被切段），多个命中取最早一跳的。
+            let case_id = hops.iter().find_map(|row| {
+                for text in [row.2.as_deref(), row.3.as_deref(), row.4.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(found) = extract_case_id(text) {
+                        return Some(found);
+                    }
+                }
+                None
+            });
+            let Some(case_id) = case_id else { continue };
+            let now = chrono::Utc::now().timestamp_millis();
+            // 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）。
+            ensure_case_row(connection, &case_id)?;
+            for row in &hops {
+                for text in [row.2.as_deref(), row.3.as_deref(), row.4.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    for link in extract_feishu_links(text) {
+                        harvested += attach_link(connection, &case_id, &link)?;
+                    }
+                }
+            }
+            // 关单传播：看门狗关单分支的摘要明写「已关单」——案实际跑完，
+            // 本地 stage 还停在 01_建档（launch 时建的初值）。窄规则：同段
+            // 文本出现「已关单」或「关单完成」时推进。只进不退（关单是终态），
+            // 且只在有案号的段里判——不认没有案号归属的裸文本。
+            let closed_text = hops.iter().any(|row| {
+                [row.3.as_deref(), row.4.as_deref(), row.2.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|text| text.contains("已关单") || text.contains("关单完成"))
+            });
+            if closed_text {
+                connection.execute(
+                    "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
+                     WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
+                    rusqlite::params![case_id, now],
+                )?;
+            }
+            // 这一轮有案号 = 该案今天有活动：刷新活动时间，卷宗排序不冻。
+            connection.execute(
+                "UPDATE beidou_cases SET last_activity_ms = ?2, updated_at_ms = ?2
+                 WHERE case_id = ?1",
+                rusqlite::params![case_id, now],
+            )?;
+        }
+    }
+    Ok(harvested)
+}
+
 /// 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）：建一行最小案，
 /// 标题暂用案号占位，真实标题从别的线（发车/主表）进来时由 upsert 覆盖。
 fn ensure_case_row(connection: &Connection, case_id: &str) -> rusqlite::Result<()> {
@@ -431,22 +582,38 @@ fn ensure_case_row(connection: &Connection, case_id: &str) -> rusqlite::Result<(
     Ok(())
 }
 
-/// 链接按 URL 形态归列：drive/folder → 任务文件夹；docx → 母稿位（兜底分不清
-/// 是哪份 docx，只往空位放）；其余飞书链接 → 运营列。已占的位不覆盖。
-/// 列名来自固定 if/else，不是用户输入，无注入面。
+/// 链接按 URL 形态归列：drive/folder → 任务文件夹；docx → 按 SOP 产出序
+/// 依次填空位链（研究→母稿→二审→视觉包→视频包→运营），其余飞书链接 →
+/// 运营列。已占的位不覆盖（权威数据先来，兜底只补空）。
+/// 列名来自固定数组，不是用户输入，无注入面。
 fn attach_link(connection: &Connection, case_id: &str, link: &str) -> rusqlite::Result<usize> {
-    let column = if link.contains("/drive/folder/") {
-        "folder_url"
+    // 一案下同名形态会出现多个 docx（选题研究/母稿/二审报告/运营方案…），
+    // 兜底分不清是哪一份，按北斗 SOP 的固定产出顺序填空位——顺序即语义。
+    let columns: &[&str] = if link.contains("/drive/folder/") {
+        &["folder_url"]
     } else if link.contains("/docx/") {
-        "master_doc_url"
+        &[
+            "research_doc_url",
+            "master_doc_url",
+            "review_doc_url",
+            "visual_url",
+            "video_url",
+            "ops_doc_url",
+        ]
     } else {
-        "ops_doc_url"
+        &["ops_doc_url"]
     };
-    let sql = format!(
-        "UPDATE beidou_cases SET {column} = ?2
-         WHERE case_id = ?1 AND ({column} IS NULL OR {column} = '')"
-    );
-    connection.execute(&sql, rusqlite::params![case_id, link])
+    for column in columns {
+        let sql = format!(
+            "UPDATE beidou_cases SET {column} = ?2
+             WHERE case_id = ?1 AND ({column} IS NULL OR {column} = '')"
+        );
+        // 一个链接只占一个槽：本条填空了就到手，不继续往后面的槽塞。
+        if connection.execute(&sql, rusqlite::params![case_id, link])? > 0 {
+            return Ok(1);
+        }
+    }
+    Ok(0)
 }
 
 /// 从一段自由文本（terminal_summary / 交接卡）里捞出所有飞书链接。
@@ -1170,5 +1337,153 @@ mod dispatch_helper_tests {
         // 真机现状：账本还没落过一行。前端不能因为空表就崩，要显示"还没有案件"。
         let db = memory_db();
         assert!(list_cases(&db, None).expect("list").is_empty());
+    }
+
+    fn session_run_db() -> Connection {
+        let db = memory_db();
+        db.execute_batch(
+            "CREATE TABLE session_run (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                gateway TEXT NOT NULL,
+                session_key TEXT NOT NULL,
+                agent_id TEXT,
+                title TEXT,
+                status TEXT,
+                progress_summary TEXT,
+                terminal_summary TEXT,
+                started_at_ms INTEGER,
+                ended_at_ms INTEGER,
+                first_seen_ms INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL
+            )",
+        )
+        .expect("session_run table");
+        db
+    }
+
+    fn insert_session(
+        db: &Connection,
+        session_key: &str,
+        agent_id: &str,
+        title: &str,
+        terminal: Option<&str>,
+        started_ms: i64,
+    ) {
+        db.execute(
+            "INSERT INTO session_run (gateway, session_key, agent_id, title, status,
+                                     terminal_summary, started_at_ms, ended_at_ms,
+                                     first_seen_ms, last_seen_ms)
+             VALUES ('vps', ?1, ?2, ?3, 'done', ?4, ?5, ?5, ?5, ?5)",
+            rusqlite::params![session_key, agent_id, title, terminal, started_ms],
+        )
+        .expect("insert session");
+    }
+
+    #[test]
+    fn session_harvest_spreads_case_id_along_the_relay() {
+        // 真机 BM-2601 形态：派单卡（第一跳）标题带标签，后续跳只带裸案号和
+        // 飞书链接——案号必须整轮传播，各跳链接按 SOP 顺序落槽位。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-9999]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianquan",
+            "二审报告",
+            Some("二审通过 https://my.feishu.cn/docx/ZPkVdNh9abc**"),
+            base + 10 * min,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianji",
+            "母稿",
+            Some("母稿已冻结 https://my.feishu.cn/docx/GfNndXZsdef"),
+            base + 15 * min,
+        );
+        // 2 条链接落槽（案行本身由 ensure_case_row 兜底建出，不计 harvested）。
+        assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 2);
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        let row = &list[0];
+        assert_eq!(row.case_id, "BM-9999");
+        // docx 按产出序填空位链：先研究位、再母稿位，不挤同一个槽。
+        assert_eq!(
+            row.research_doc_url,
+            "https://my.feishu.cn/docx/ZPkVdNh9abc"
+        );
+        assert_eq!(
+            row.master_doc_url,
+            "https://my.feishu.cn/docx/GfNndXZsdef"
+        );
+        assert!(row.last_activity_ms.unwrap_or(0) > 0, "活动时间要刷新");
+    }
+
+    #[test]
+    fn session_harvest_does_not_cross_episode_boundaries() {
+        // 沉默超过 60 分钟切段：后一段没有标签的 run 不继承前一段的案号，
+        // 链接也不跨段收——拢不上只是少一跳，拢错是把别人的活计挂到本案名下。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-9998]",
+            None,
+            base,
+        );
+        // 3 小时后另一个案开跑：同群聊，但沉默超限，必须切成两段。
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianxuan",
+            "选题",
+            Some("研究文档 https://my.feishu.cn/docx/DDyLd0zghi"),
+            base + 180 * min,
+        );
+        assert_eq!(harvest_links_from_sessions(&db).expect("harvest"), 0);
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1, "只有带标签那一段建案");
+        assert_eq!(list[0].case_id, "BM-9998");
+        assert_eq!(list[0].research_doc_url, "", "跨段的链接不收");
+    }
+
+    #[test]
+    fn session_harvest_closes_case_from_watchdog_summary() {
+        // 看门狗关单分支摘要明写「BM-2601｜已关单」：本地 stage 必须跟着
+        // 推进到 08_已关单（closed 推导认这个值），否则案永远停在 01_建档。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-9997]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "watchdog",
+            "巡检简报",
+            Some("BM-2601｜已关单：reset 6 个群会话、删除 watchdog job"),
+            base + 10 * 60_000,
+        );
+        harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].stage, "08_已关单");
     }
 }

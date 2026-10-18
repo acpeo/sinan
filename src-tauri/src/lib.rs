@@ -891,12 +891,18 @@ fn beidou_case_list(
     // 链接兜底收割（写连接）：把任务摘要里带 [CASE_ID] 的飞书链接归进案。
     // 放在读取前跑，UI 每次刷新账本都是最新归拢结果；表是几十行级，成本可忽略。
     // 收割失败不阻塞读取（比如库被别的进程锁了一瞬）——宁可这轮少几条链接。
+    // 两条收割线分工（2026-10-18 Leo 实机核查，VPS 侧不注入标签）：
+    //   gateway_task 线——任务卡（北斗 SOP 规定任务卡带标签）；
+    //   session_run  线——整条 relay 其实走群聊会话，任务卡反而不带标签
+    //                   （真机 BM-2601：0/23 条带标签），按 UI 同款 episode
+    //                   链把派单卡的案号传播给同轮所有跳，再收各跳链接。
     match open_database(&state.database_path) {
         Ok(connection) => {
             // 建表也是幂等的（CREATE TABLE IF NOT EXISTS）：没发过车的库这里
             // 第一次把 beidou_cases / beidou_case_tasks 建出来。
             let harvested = beidou_cases::ensure_case_tables(&connection)
-                .and_then(|_| beidou_cases::harvest_links_from_tasks(&connection));
+                .and_then(|_| beidou_cases::harvest_links_from_tasks(&connection))
+                .and_then(|_| beidou_cases::harvest_links_from_sessions(&connection));
             if let Err(error) = harvested {
                 eprintln!("sinan link harvest skipped: {error}");
             }

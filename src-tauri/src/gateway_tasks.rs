@@ -1288,8 +1288,12 @@ pub fn ensure_gateway_cron_table(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// 镜像 cron.list 全量 job（INSERT OR REPLACE：看板是现状镜像，不是账本，
-/// 网关侧删掉的 job 下次全量对齐时自然消失——不追加删除逻辑）。
+/// 镜像 cron.list 全量 job（INSERT OR REPLACE：看板是现状镜像，不是账本）。
+/// VPS 侧删掉的 job 本地必须跟着消失——真机 BM-2601 跑完后看门狗 job 被删，
+/// 旧版只增不删（注释嘴上说"自然消失"却没有删除逻辑），本地定时页挂着幽灵
+/// 任务、下次运行逾期 65 分钟（2026-10-18 Leo 实机核查）。
+/// 拉取返回空列表时不删：网关异常/解析全失败的防御——宁可留一小时幽灵，
+/// 不把 12 个真任务一键清空（误删比幽灵糟得多）。
 pub fn upsert_crons(
     connection: &Connection,
     target_label: &str,
@@ -1327,11 +1331,34 @@ pub fn upsert_crons(
                 cron.state.as_ref().and_then(|s| s.next_run_at_ms),
                 cron.state.as_ref().and_then(|s| s.last_run_at_ms),
                 cron.state.as_ref().and_then(|s| s.last_status.clone()),
-                cron.agent_id,
+                agent_id,
                 now,
             ],
         )?;
         written += 1;
+    }
+    // 全量对齐删除：本地这个 gateway 标签下、本次 cron.list 没有的 job 删掉。
+    // 上面 upsert 只覆盖"返回了的"，返回列表是 VPS 现状全集——没返回就是
+    // 被删了。空列表跳过（见函数注释：解析失败的防御）。
+    if !crons.is_empty() {
+        let ids: Vec<&str> = crons
+            .iter()
+            .filter_map(|cron| cron.id.as_deref())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if !ids.is_empty() {
+            let placeholders = (1..=ids.len())
+                .map(|index| format!("?{index}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "DELETE FROM gateway_cron WHERE gateway = ?{} AND id NOT IN ({placeholders})",
+                ids.len() + 1
+            );
+            let mut params: Vec<&str> = ids;
+            params.push(target_label);
+            connection.execute(&sql, rusqlite::params_from_iter(params.iter()))?;
+        }
     }
     Ok(written)
 }
