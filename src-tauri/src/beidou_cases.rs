@@ -376,8 +376,9 @@ pub fn attach_task_to_case(
 /// 没带标记的任务直接跳过——归不了案的东西不硬塞（数据诚实）。
 /// 在账本读取前跑一遍：gateway_task 是几十行级别的本地表，成本可忽略。
 pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usize> {
+    type TaskRow = (String, String, Option<String>, Option<String>, Option<String>);
     let mut harvested = 0usize;
-    let rows: Vec<(String, String, Option<String>, Option<String>, Option<String>)> = {
+    let rows: Vec<TaskRow> = {
         let mut stmt = connection.prepare(
             "SELECT task_id, gateway, agent_id, terminal_summary, progress_summary FROM gateway_task
              WHERE COALESCE(terminal_summary, '') != '' OR COALESCE(progress_summary, '') != ''",
