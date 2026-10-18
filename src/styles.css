@@ -8447,7 +8447,7 @@ html[data-theme="dark"] .console-root {
 /* 页签行同属门面：浮在拖拽区之上，避免被拖窗层吃掉点击。 */
 .console-tabs { position: relative; z-index: 8; }
 .console-tabs button { user-select: none; }
-.console-root .console-scroll { top: 88px; }
+.console-root .console-scroll { top: 56px; }
 /* 北斗派发回执条：发车/追投/自愈的真回执（含"没发出去"的原因）。
    6 秒自消，但存在期间要显眼——这是主理人唯一能确认"车动没动"的地方。 */
 .console-beidou-toast { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; border: 1px solid rgba(127, 127, 127, 0.3); background: rgba(127, 127, 127, 0.1); }
@@ -8827,7 +8827,8 @@ html:has(.hopcard-stage) #root {
    两边共用，别在各自规则里再写一遍色值。 */
 .pl-root,
 .cp-root,
-.ca-root {
+.ca-root,
+.console-topbar {
   /* ---- 画布与容器 ---- */
   --cp-canvas: #f7f6f2;                 /* 温润宣纸白 */
   --cp-surface: #ffffff;                /* 主卡片纯白 */
@@ -8875,7 +8876,7 @@ html:has(.hopcard-stage) #root {
    滚动区不再预留那 88px——只留窗口按钮一排（44px），顶栏立刻跟上。
    不然顶上多出一条 44px 的空带，指挥舱看着"高出一截"。
    注意不能用 > .pl-root：PipelineView 外面还包着一层 TasksSection。 */
-.console-scroll:has(.pl-root) { top: 0; padding: 0; overflow: hidden; }
+.console-scroll:has(.pl-root) { top: 56px; padding: 0; overflow: hidden; }
 /* 顶栏提到 y=0 后：右侧让出窗口按钮药丸的位（absolute top8/right10，宽约230），
    自身抬到拖拽层之上（拖拽区 z-7），拖拽改由顶栏自己的 data-tauri-drag-region 接管。
    不然顶栏压在 44px 空带下面，指挥舱比别的页"高出一截"（Leo 2026-10-18 三图对照）。 */
@@ -9480,6 +9481,25 @@ html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
+/* 统一外壳顶栏（App 渲染，五个页签共用）：与 pl-topbar 同一款式同一种高度。
+   之前只有指挥舱是设计稿外壳，另外四页还是「司南任务台+同步」两排老壳
+   （Leo 2026-10-18 五图对照：切个页签像换了个 app）。 */
+.console-topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 56px;
+  flex: none;
+  padding: 0 20px;
+  padding-right: 248px;
+  border-bottom: 1px solid var(--cp-hair);
+  background: color-mix(in srgb, var(--cp-canvas) 86%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  position: relative;
+  z-index: 8;
+}
+.console-topbar .console-topright { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
 .pl-brand { display: flex; align-items: center; gap: 10px; flex: none; }
 .pl-logo {
   display: grid;
@@ -10139,4 +10159,4 @@ html[data-theme="dark"] .pl-gate-mark, html[data-theme="dark"] .pl-strike-mark {
    但 console-tabs 保留——那是任务台的四大分区导航（指挥舱/任务/定时/设置），
    流水线自己的页签只管它内部两块面板。 */
 .console-root:has(.pl-root) .console-head { display: none; }
-.console-root:has(.pl-root) .console-scroll { top: 0; }
+.console-root:has(.pl-root) .console-scroll { top: 56px; }

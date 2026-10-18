@@ -729,6 +729,8 @@ export function PipelineView({
   activeTab = "cockpit",
   onTab,
   focusCaseId = null,
+  starsOpen: starsOpenProp,
+  onToggleStars,
 }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [colFilter, setColFilter] = useState(null);
@@ -736,7 +738,14 @@ export function PipelineView({
   // 拖过之后存**像素**。以前存比例（0.46），等于把「拖那一刻的主区高度」记死，
   // 换窗口尺寸就多出/少掉一截 —— 0 案的机器上就变成一大片白。
   const [lanePx, setLanePx] = useState(null);
-  const [starsOpen, setStarsOpen] = useState(false);
+  const [starsOpenInner, setStarsOpenInner] = useState(false);
+  // 产品模式（App 统一外壳）下「星位明细」按钮在外壳顶栏，这里受控；
+  // 预览页没人传，走自己的内部态。
+  const starsOpen = starsOpenProp ?? starsOpenInner;
+  const toggleStars = () => {
+    if (onToggleStars) onToggleStars();
+    else setStarsOpenInner((v) => !v);
+  };
   const lanesRef = useRef(null);
   const dragRef = useRef(null);
 
@@ -792,14 +801,14 @@ export function PipelineView({
 
   return (
     <div className="pl-root">
-      <PipelineTopBar
-        conn={{ ...conn, onRetry: onRetryConn }}
-        onOpenStars={() => setStarsOpen((v) => !v)}
-        tabs={tabs}
-        activeTab={activeTab}
-        onTab={onTab}
-        cases={cases}
-      />
+      {/* 产品模式：顶栏由 App 统一外壳渲染；预览页（没传 tabs）仍走自己的顶栏。 */}
+      {tabs ? null : (
+        <PipelineTopBar
+          conn={{ ...conn, onRetry: onRetryConn }}
+          onOpenStars={toggleStars}
+          cases={cases}
+        />
+      )}
 
       <main className="pl-main" ref={dragRef}>
           <LaunchBar onLaunch={onLaunch} busy={busy} />
@@ -867,7 +876,7 @@ export function PipelineView({
       </main>
 
       {starsOpen ? (
-        <StarDetail telemetry={starTelemetry} liveStars={liveStars} onClose={() => setStarsOpen(false)} />
+        <StarDetail telemetry={starTelemetry} liveStars={liveStars} onClose={toggleStars} />
       ) : null}
       {busy ? <span className="pl-busy" role="status">派发中…</span> : null}
     </div>

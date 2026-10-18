@@ -3983,6 +3983,8 @@ function TasksSection({
   onTab,
   onOpenCase,
   focusCaseId,
+  starsOpen,
+  onToggleStars,
 }) {
   const [state, setState] = useState({ status: "loading", filter: "all", data: null });
   const [busy, setBusy] = useState(false);
@@ -4315,6 +4317,8 @@ function TasksSection({
           activeTab={tab}
           onTab={onTab}
           focusCaseId={focusCaseId}
+          starsOpen={starsOpen}
+          onToggleStars={onToggleStars}
         />
       ) : null}
 
@@ -4395,6 +4399,8 @@ function PipelineTelemetry({
   activeTab,
   onTab,
   focusCaseId,
+  starsOpen,
+  onToggleStars,
 }) {
   // 每颗星的遥测：model 与上下文窗口取快照会话行；"最近一次 run 用时"
   // 取本地 session_run 账本里这颗星最新一条的起止差。两条线互补——
@@ -4476,6 +4482,8 @@ function PipelineTelemetry({
         activeTab={activeTab}
         onTab={onTab}
         focusCaseId={focusCaseId}
+        starsOpen={starsOpen}
+        onToggleStars={onToggleStars}
       />
     </>
   );
@@ -4506,6 +4514,7 @@ export function App() {
   const [consoleTab, setConsoleTab] = useState("cockpit");
   // 卷宗里点一行 → 回指挥舱并选中那一案（不然点了没反应，"查看过往案件"就断在这）。
   const [focusCaseId, setFocusCaseId] = useState(null);
+  const [starsOpen, setStarsOpen] = useState(false);
   const [consoleStatus, setConsoleStatus] = useState(null);
   const [tasksWidgetEnabled, setTasksWidgetEnabled] = useState(
     () => localStorage.getItem("metrik:tasksWidget") !== "off",
@@ -4795,6 +4804,10 @@ export function App() {
       cancelled = true;
     };
   }, [beidouCasesVersion]);
+  // 顶栏右侧两枚 chip 的数（外壳统一后从 PipelineTopBar 挪上来）。账本只写真数据：
+  // 在途 = 没关单的案；待你裁决 = 打回满 3 次的案。
+  const cockpitPending = beidouCases.filter((item) => (item.secondStrikes ?? 0) >= 3).length;
+  const cockpitInFlight = beidouCases.filter((item) => !(item.closed ?? false)).length;
   // 提示条 6 秒自消：不自动消就要手动关，多一步操作。
   useEffect(() => {
     if (!beidouToast) return undefined;
@@ -4815,52 +4828,86 @@ export function App() {
         tasksWidgetEnabled={tasksWidgetEnabled}
         onToggleTasksWidget={handleToggleTasksWidget}
       />
-      {/* 指挥舱把分区页签收进了自己的顶栏（Leo 2026-10-17：设计稿是一行顶栏），
-          所以这一屏不再重复渲染 console-head / console-tabs，否则顶上两排。 */}
-      {consoleTab === "cockpit" ? null : (
-        <>
-          <header className="console-head">
-            <span className="console-brand">司南<small>任务台</small></span>
-            {consoleStatus && (
-              <span
-                className={consoleStatus.live ? "console-live console-live--on" : "console-live"}
-                title={consoleStatus.live ? "自动同步 Gateway 中" : "未在同步：检查网关配置或网络"}
-              >
-                <span className="live-dot" />
-                {consoleStatus.live ? "同步中" : "未同步"}
-              </span>
-            )}
-            {consoleStatus?.lastSync ? (
-              <span className="console-sync-at">
-                更新于 {new Date(consoleStatus.lastSync).toLocaleTimeString("zh-CN", { hour12: false })}
-              </span>
-            ) : null}
+      {/* 统一外壳：五个页签共用同一条顶栏——品牌在左、胶囊页签居中、状态在右。
+          之前只有指挥舱是设计稿外壳，另外四页还是「司南任务台+同步」两排老壳，
+          切个页签像换了个 app（Leo 2026-10-18 五图对照）。 */}
+      <header className="console-topbar" data-tauri-drag-region>
+        <div className="pl-brand">
+          <span className="pl-logo" aria-hidden="true">✦</span>
+          <div>
+            <div className="pl-brand-name">司南 · 北斗矩阵</div>
+            <div className="pl-brand-sub">Sinan · Zero-Touch</div>
+          </div>
+        </div>
+        <nav className="pl-tabs" role="tablist" aria-label="任务台分区">
+          {CONSOLE_TABS.map((item) => (
             <button
+              key={item.id}
               type="button"
-              className="console-refresh"
-              disabled={!!consoleStatus?.busy}
-              onClick={() => consoleStatus?.refresh?.()}
-              title="立即拉取网关任务台账"
+              role="tab"
+              aria-selected={consoleTab === item.id}
+              className={consoleTab === item.id ? "is-on" : ""}
+              onClick={() => setConsoleTab(item.id)}
             >
-              <ArrowsClockwise size={13} /> {consoleStatus?.busy ? "拉取中…" : "同步"}
+              {item.label}
             </button>
-          </header>
-          <nav className="console-tabs" role="tablist" aria-label="任务台分区">
-            {CONSOLE_TABS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="tab"
-                aria-selected={consoleTab === item.id}
-                className={consoleTab === item.id ? "is-selected" : ""}
-                onClick={() => setConsoleTab(item.id)}
+          ))}
+        </nav>
+        <div className="console-topright">
+          {consoleTab === "cockpit" ? (
+            <>
+              {cockpitPending > 0 ? (
+                <span className="pl-chip pl-chip--alert" title="打回满 3 次，停着等你改判">
+                  <span className="pl-dot pl-dot--cinnabar" />待你裁决 {cockpitPending}
+                </span>
+              ) : null}
+              <span className="pl-chip" title="账本里还没关单的案">{cockpitInFlight} 在途</span>
+              <span
+                className={`pl-badge pl-badge--${
+                  consoleStatus?.busy ? "amber" : consoleStatus?.live ? "jade" : "cinnabar"
+                }`}
+                title={consoleStatus?.live ? "网关快照正常" : "快照没下来：检查网关配置或点任务页「同步」重试"}
               >
-                {item.label}
+                <span
+                  className={`pl-dot pl-dot--${
+                    consoleStatus?.busy ? "amber" : consoleStatus?.live ? "jade" : "cinnabar"
+                  } pl-breathe`}
+                />
+                <span>{consoleStatus?.busy ? "同步中…" : consoleStatus?.live ? "已连接" : "未连接"}</span>
+              </span>
+              <button type="button" className="pl-btn pl-btn--sm" onClick={() => setStarsOpen((v) => !v)}>
+                ⭐ 星位明细
               </button>
-            ))}
-          </nav>
-        </>
-      )}
+            </>
+          ) : (
+            <>
+              {consoleStatus && (
+                <span
+                  className={consoleStatus.live ? "console-live console-live--on" : "console-live"}
+                  title={consoleStatus.live ? "自动同步 Gateway 中" : "未在同步：检查网关配置或网络"}
+                >
+                  <span className="live-dot" />
+                  {consoleStatus.live ? "同步中" : "未同步"}
+                </span>
+              )}
+              {consoleStatus?.lastSync ? (
+                <span className="console-sync-at">
+                  更新于 {new Date(consoleStatus.lastSync).toLocaleTimeString("zh-CN", { hour12: false })}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="console-refresh"
+                disabled={!!consoleStatus?.busy}
+                onClick={() => consoleStatus?.refresh?.()}
+                title="立即拉取网关任务台账"
+              >
+                <ArrowsClockwise size={13} /> {consoleStatus?.busy ? "拉取中…" : "同步"}
+              </button>
+            </>
+          )}
+        </div>
+      </header>
       <div className="console-scroll">
         <div className={consoleTab === "settings" ? "console-hidden" : ""}>
           <TasksSection
@@ -4876,6 +4923,8 @@ export function App() {
             tabs={CONSOLE_TABS}
             onTab={setConsoleTab}
             focusCaseId={focusCaseId}
+            starsOpen={starsOpen}
+            onToggleStars={() => setStarsOpen((v) => !v)}
             onOpenCase={(id) => {
               setFocusCaseId(id);
               setConsoleTab("cockpit");
