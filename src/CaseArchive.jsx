@@ -55,7 +55,9 @@ export function CaseArchive({ cases = [], onOpenCase }) {
         <div className="ca-badges">
           <span className={`ca-badge${scope === "inflight" ? " is-on" : ""}`} onClick={() => setScope(scope === "inflight" ? "all" : "inflight")} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setScope(scope === "inflight" ? "all" : "inflight"); }}>在途 <b>{inFlight}</b></span>
           <span className={`ca-badge${scope === "closed" ? " is-on" : ""}`} onClick={() => setScope(scope === "closed" ? "all" : "closed")} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setScope(scope === "closed" ? "all" : "closed"); }}>历史 <b>{history}</b></span>
-          <span className="ca-badge">打回 <b>{strikes}</b></span>
+          {/* 打回徽标是累计二审打回次数（按案累加），与每行「打回」列的
+              单案次数不同义——不写清，两处数字会被当成对不上（2026-10-18 审计） */}
+          <span className="ca-badge" title="全部案件的二审打回次数之和（按案累加）">打回 <b>{strikes}</b></span>
         </div>
       </header>
 

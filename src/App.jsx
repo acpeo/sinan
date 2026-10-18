@@ -3512,10 +3512,14 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
     !card.mainChat && ((card.summary && card.cjk) || card.type === "episode" || card.type === "batch");
   const conclusionCards = filteredCards.filter(isConclusionCard);
   // 统计口径（v7.1）：案 = 星位案 + 定时/任务结论卡；主 Agent 聊天不算案。
+  // 统计行不跟视图过滤走（2026-10-18 审计）：选了某颗星或点了「失败」过滤后，
+  // 「今日 N 案」如果跟着缩水，同一个数字就悄悄换了含义没人知道——统计永远
+  // 数全量结论卡（statCards），下面动态流列表自己按过滤渲染，各管各的。
+  const statCards = feed.cards.filter(isConclusionCard);
   const todayKey = new Date(now).toDateString();
   const isToday = (card) => new Date(card.at).toDateString() === todayKey;
-  const visibleToday = conclusionCards.filter(isToday).length;
-  const failedToday = conclusionCards.filter((card) => card.tone === "fail" && isToday(card)).length;
+  const visibleToday = statCards.filter(isToday).length;
+  const failedToday = statCards.filter((card) => card.tone === "fail" && isToday(card)).length;
   // 值班案卡只装星位案：主 Agent 的纯对话轮不成案
   const starEpisodes = activeEpisodes.filter((ep) => ep.hops?.some((hop) => hop.agentId && hop.agentId !== "main"));
   const runningCount = starEpisodes.length + rows.filter((row) => row.status === "running").length;
@@ -3542,10 +3546,12 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
   const execTotal = [...feed.execAgg.values()].reduce((sum, agg) => sum + agg.total, 0);
   const execDetail = [...feed.execAgg.entries()].map(([agent, agg]) => `${starNameOf(agent)} ${agg.total}`).join(" · ");
 
-  // 近 7 天节奏：账本非 exec 行按天计数（与 realdays 同口径），今日柱高亮
+  // 近 7 天节奏：与「今日 N 案」同一口径（结论卡按天计数），今日柱高亮。
+  // 之前数的是全部 feed.cards（心跳折叠卡、英文检查卡都算）——今天这根柱子
+  // 和左边的「今日 N 案」对不上，同一行两个数说的不是一件事（2026-10-18 审计）。
   const sparkSeries = (() => {
     const counts = new Map();
-    for (const card of feed.cards) {
+    for (const card of statCards) {
       const key = new Date(card.at).toDateString();
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
@@ -3854,7 +3860,7 @@ function TasksBoard({ rows, episodes, activeEpisodes, cronJobs, lastRunByJob, no
                 key={x.label}
                 className={`v7-sb${i === sparkSeries.length - 1 ? " is-now" : ""}`}
                 style={{ height: `${Math.max(2, Math.round((x.count / sparkPeak) * 20))}px` }}
-                title={`${x.label} · ${x.count} 次`}
+                title={`${x.label} · ${x.count} 案`}
               />
             ))}
           </span>
