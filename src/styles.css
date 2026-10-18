@@ -9490,14 +9490,67 @@ html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
   gap: 14px;
   height: 56px;
   flex: none;
-  padding: 0 20px;
-  padding-right: 248px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--cp-hair);
   background: color-mix(in srgb, var(--cp-canvas) 86%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   position: relative;
   z-index: 8;
+}
+/* 窗口按钮内联进顶栏（方案 A，Leo 2026-10-18）：不再是悬浮药丸。
+   朴素灰色细线风——激活态也不许蓝红彩（参考 Leo 给的对照图）。 */
+.window-actions--inline {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0 0 8px;
+  margin-left: 2px;
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--cp-hair);
+  box-shadow: none;
+  height: 30px;
+  flex: none;
+}
+.window-actions--inline .window-action {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: #6b6a64;
+}
+.window-actions--inline .window-action:hover {
+  color: #141413;
+  background: rgba(20, 20, 19, 0.05);
+}
+.window-actions--inline .window-action--active,
+.window-actions--inline .window-action--active:hover {
+  color: #141413;
+  background: rgba(20, 20, 19, 0.08);
+}
+.window-actions--inline .window-action svg { color: inherit; }
+/* 小窗口（主窗最小 420px）：一层层收——先是副标题与计数 chip，再是品牌文字，
+   页签缩紧，最后窗口按钮缩到 26px。任何宽度都不换行、不溢出。 */
+@media (max-width: 980px) {
+  .pl-brand-sub { display: none; }
+  .console-topright .pl-chip, .console-topright .console-sync-at { display: none; }
+}
+@media (max-width: 820px) {
+  .console-topbar .pl-brand div { display: none; }
+  .console-topbar { gap: 8px; }
+}
+@media (max-width: 520px) {
+  .pl-hide-narrow { display: none; }
+  .console-topbar .pl-tabs button { padding: 3px 4px; font-size: 10px; }
+}
+@media (max-width: 640px) {
+  .console-topbar { gap: 4px; padding: 0 8px; }
+  .console-topbar .pl-tabs { gap: 0; }
+  /* 提一级优先级：.pl-tabs button 的基础规则在文件更靠后，同级会被它盖掉 */
+  .console-topbar .pl-tabs button { padding: 4px 5px; font-size: 10.5px; }
+  .window-actions--inline { gap: 0; padding-left: 6px; }
+  .window-actions--inline .window-action { width: 24px; height: 24px; }
 }
 .console-topbar .console-topright { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
 .pl-brand { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -10160,3 +10213,13 @@ html[data-theme="dark"] .pl-gate-mark, html[data-theme="dark"] .pl-strike-mark {
    流水线自己的页签只管它内部两块面板。 */
 .console-root:has(.pl-root) .console-head { display: none; }
 .console-root:has(.pl-root) .console-scroll { top: 56px; }
+
+/* 最窄档（主窗最小 420px）：logo 24、页签 9.5px、窗口按钮 22px——
+   420 宽也要一行放下且不溢出（探针实测 lastBtnRight ≤ 视口宽）。 */
+@media (max-width: 470px) {
+  .console-topbar { gap: 2px; padding: 0 6px; }
+  .console-topbar .pl-tabs button { padding: 3px 3px; font-size: 9.5px; }
+  .window-actions--inline .window-action { width: 22px; height: 22px; }
+  .window-actions--inline { padding-left: 4px; }
+  .pl-logo, .console-topbar .pl-brand svg { width: 24px; height: 24px; }
+}

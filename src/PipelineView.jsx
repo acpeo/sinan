@@ -104,7 +104,7 @@ function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] 
       <div className="pl-brand">
         {/* 品牌标：设计稿是深色方角块 + 白色星芒，不是一个彩色 emoji 圆点
             （Leo 2026-10-17：emoji 直接把"标题"整行拉低了一个档次）。 */}
-        <span className="pl-logo" aria-hidden="true">✦</span>
+        <BrandLogo />
         <div>
           <div className="pl-brand-name">司南 · 北斗矩阵</div>
           <div className="pl-brand-sub">Sinan · Zero-Touch</div>
@@ -146,6 +146,24 @@ function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] 
         <button type="button" className="pl-btn pl-btn--sm" onClick={onOpenStars}>⭐ 星位明细</button>
       </div>
     </header>
+  );
+}
+
+
+/* 品牌标：照 src-tauri/icons/128x128.png 画的内联版——深蓝圆角方块 +
+   北斗七星星图（连星线 + 七枚星点，最外那颗微暖）。之前的 ✦ 四角星
+   是照设计稿画的，不是 app 真标志（Leo 2026-10-18 指出）。 */
+export function BrandLogo({ size = 28 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 26 26" aria-hidden="true" style={{ flex: "none", display: "block" }}>
+      <rect width="26" height="26" rx="7" fill="#232840" />
+      <circle cx="13" cy="12.5" r="8.5" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
+      <polyline points="8,7 9,11 13,13 14,9 17,8 20,7 23,3" fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="1" />
+      <circle cx="8" cy="7" r="1.5" fill="#fff" /><circle cx="9" cy="11" r="1.3" fill="#fff" />
+      <circle cx="13" cy="13" r="1.3" fill="#fff" /><circle cx="14" cy="9" r="1.3" fill="#fff" />
+      <circle cx="17" cy="8" r="1.3" fill="#fff" /><circle cx="20" cy="7" r="1.3" fill="#fff" />
+      <circle cx="23" cy="3" r="1.7" fill="#ffd27d" />
+    </svg>
   );
 }
 
