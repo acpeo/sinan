@@ -401,9 +401,12 @@ pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usi
         mapped.filter_map(|item| item.ok()).collect()
     };
     for (task_id, gateway, agent_id, terminal, progress) in rows {
-        for text in [terminal.as_deref(), progress.as_deref()]
+        // 一条任务只归一个案：terminal 优先、首个 CASE_ID 说了算——取第一条
+        // 非空摘要就收工（不是循环：clippy never_loop，且语义上只要一个案）。
+        if let Some(text) = [terminal.as_deref(), progress.as_deref()]
             .into_iter()
             .flatten()
+            .next()
         {
             if let Some(case_id) = extract_case_id(text) {
                 ensure_case_row(connection, &case_id)?;
@@ -433,7 +436,6 @@ pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usi
                     harvested += 1;
                 }
             }
-            break; // 一条任务只归一个案：首个 CASE_ID 说了算
         }
     }
     Ok(harvested)
@@ -494,6 +496,7 @@ fn harvest_bare_case(connection: &Connection, case_id: &str, text: &str) -> rusq
     for link in dedupe_links(extract_feishu_links(text)) {
         acted |= attach_link(connection, case_id, &link)? > 0;
     }
+    acted |= harvest_watchdog_artifacts(connection, case_id, text)?;
     if text.contains("已关单") || text.contains("关单完成") {
         connection.execute(
             "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
@@ -508,6 +511,91 @@ fn harvest_bare_case(connection: &Connection, case_id: &str, text: &str) -> rusq
         rusqlite::params![case_id, now],
     )?;
     Ok(acted)
+}
+
+/// 巡检摘要「交付物留痕」段的裸 ID 归拢（2026-10-18 真机 BM-2601 关单摘要
+/// 实锤形态）：watchdog 不贴 URL，只贴反引号裸 docx ID——
+///   【交付物留痕】玉衡图文包 `UiXMdOn…`；摇光发布运营方案 `LENQdQai…`；
+///   文件夹 `QlkyfW…`
+/// 按标签前缀拼飞书 URL 归槽。窄规则三重锚定：标签话术 + 反引号包裹 +
+/// 只在 harvest_bare_case（全文唯一裸 BM + 案已存在）里调——误拢概率近零。
+/// 已占的槽不覆盖（权威数据先来）。
+fn harvest_watchdog_artifacts(
+    connection: &Connection,
+    case_id: &str,
+    text: &str,
+) -> rusqlite::Result<bool> {
+    // 只在「交付物留痕」段里归拢。巡检摘要正文也会提「文件夹内已出现
+    // …docx（`ID`」——那里的 ID 不是文件夹本身（2026-10-18 真机预演 v3
+    // 实锤：folder 槽被图文包 ID 占掉）。关单摘要的交付物段格式稳定，
+    // 段内标签到反引号恒为 1 字符；没有这个段的摘要（巡检拍）不归拢。
+    let Some(segment) = text.split("交付物留痕").nth(1) else {
+        return Ok(false);
+    };
+    // (标签, URL 前缀, 槽位列)——列名是固定字面量，不是用户输入，无注入面。
+    const MARKS: [(&str, &str, &str); 3] = [
+        ("图文包", "https://my.feishu.cn/docx/", "visual_url"),
+        ("运营方案", "https://my.feishu.cn/docx/", "ops_doc_url"),
+        ("文件夹", "https://my.feishu.cn/drive/folder/", "folder_url"),
+    ];
+    let mut acted = false;
+    for (label, prefix, column) in MARKS {
+        let Some(id) = backticked_id_after(segment, label) else {
+            continue;
+        };
+        let link = format!("{prefix}{id}");
+        let sql = format!(
+            "UPDATE beidou_cases SET {column} = ?2
+             WHERE case_id = ?1 AND ({column} IS NULL OR {column} = '')"
+        );
+        if connection.execute(&sql, rusqlite::params![case_id, link])? > 0 {
+            acted = true;
+        }
+    }
+    Ok(acted)
+}
+
+/// 找 `label` 之后第一个反引号包裹的 ID（8-40 位字母数字）。
+/// 窗口语义（2026-10-18 二次修正）：12 字符只限制「标签 → 第一个反引号」
+/// 的距离。调用方已把文本限定在「交付物留痕」段内（段内实测间距 1），
+/// 12 是 12 倍余量；而巡检正文「文件夹内已出现…docx（`ID`」的间距 24
+/// 必须排除——那里的 ID 不是标签自己的交付物。ID 本身一路收到反引号/
+/// 非字母数字为止，绝不截断：截断会拼出半截 URL，比不收更糟。
+/// 没有反引号 / ID 长度不在区间 → None（不硬猜）。
+/// 按码点走：标签是中文，字节下标会在多字节字符中间错位。
+fn backticked_id_after(text: &str, label: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let label_chars: Vec<char> = label.chars().collect();
+    if label_chars.is_empty() || chars.len() < label_chars.len() {
+        return None;
+    }
+    let label_text: String = label_chars.iter().collect();
+    let mut at = 0usize;
+    while at + label_chars.len() <= chars.len() {
+        let window: String = chars[at..at + label_chars.len()].iter().collect();
+        if window == label_text {
+            // 标签后 12 字符内找第一个反引号；找不到就换个标签出现位置。
+            let scan_limit = (at + label_chars.len() + 12).min(chars.len());
+            let mut i = at + label_chars.len();
+            while i < scan_limit && chars[i] != '`' {
+                i += 1;
+            }
+            if i < scan_limit {
+                // 反引号后一路收字母数字（不设上限，长度校验兜底）。
+                let mut id: Vec<char> = Vec::new();
+                let mut j = i + 1;
+                while j < chars.len() && chars[j].is_ascii_alphanumeric() {
+                    id.push(chars[j]);
+                    j += 1;
+                }
+                if (8..=40).contains(&id.len()) {
+                    return Some(id.iter().collect());
+                }
+            }
+        }
+        at += 1;
+    }
+    None
 }
 
 /// 接力会话兜底收割（2026-10-18 Leo 实机核查后补的第二条收割线）。
@@ -700,17 +788,38 @@ fn dedupe_links(links: Vec<String>) -> Vec<String> {
 fn attach_link(connection: &Connection, case_id: &str, link: &str) -> rusqlite::Result<usize> {
     // 一案下同名形态会出现多个 docx（选题研究/母稿/二审报告/运营方案…），
     // 兜底分不清是哪一份，按北斗 SOP 的固定产出顺序填空位——顺序即语义。
+    // 图文案（IMAGE_ONLY）跳过 video 槽：真机 KTuydsjklonilHxFrAGcpqnunob
+    // 这种不明文档占住「视频」位比空着更糟（2026-10-18 预演 v3 实锤）。
+    let mode: String = connection
+        .query_row(
+            "SELECT COALESCE(task_type, 'IMAGE_ONLY') FROM beidou_cases WHERE case_id = ?1",
+            rusqlite::params![case_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "IMAGE_ONLY".to_owned());
+    let has_video = mode == "DUAL" || mode == "VIDEO_ONLY";
     let columns: &[&str] = if link.contains("/drive/folder/") {
         &["folder_url"]
     } else if link.contains("/docx/") {
-        &[
-            "research_doc_url",
-            "master_doc_url",
-            "review_doc_url",
-            "visual_url",
-            "video_url",
-            "ops_doc_url",
-        ]
+        if has_video {
+            &[
+                "research_doc_url",
+                "master_doc_url",
+                "review_doc_url",
+                "visual_url",
+                "video_url",
+                "ops_doc_url",
+            ]
+        } else {
+            &[
+                "research_doc_url",
+                "master_doc_url",
+                "review_doc_url",
+                "visual_url",
+                "ops_doc_url",
+            ]
+        }
     } else {
         &["ops_doc_url"]
     };
@@ -1642,6 +1751,79 @@ mod dispatch_helper_tests {
     }
 
     #[test]
+    fn bare_case_harvest_picks_watchdog_backticked_ids() {
+        // watchdog 关单摘要只贴裸 docx ID（反引号），不贴 URL——真机 19:12
+        // 实锤：【交付物留痕】玉衡图文包 `UiXMdOn…`；摇光发布运营方案
+        // `LENQdQai…`；文件夹 `QlkyfW…`。按标签拼 URL 归槽。
+        let db = gateway_task_db();
+        let row = serde_json::json!({
+            "record_id": "BM-9993", "title": "甲案", "deliverable_mode": "IMAGE_ONLY",
+            "stage": "07_关单"
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, terminal_summary)
+             VALUES ('cronrun:w9', 'vps',
+                     '【任务状态】BM-9993｜已关单。【交付物留痕】玉衡图文包 `UiXMdOnEDouQzAxw1Yjc1XFRnqP`；摇光发布运营方案 `LENQdQaiaoBWiTxrzGGcoxTfnNh`；文件夹 `QlkyfWDZalOFUXdztyAcYRu2nVe`。')",
+            [],
+        )
+        .expect("insert task");
+        assert!(harvest_links_from_tasks(&db).expect("harvest") >= 1);
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].stage, "08_已关单");
+        assert_eq!(
+            list[0].visual_url,
+            "https://my.feishu.cn/docx/UiXMdOnEDouQzAxw1Yjc1XFRnqP"
+        );
+        assert_eq!(
+            list[0].ops_doc_url,
+            "https://my.feishu.cn/docx/LENQdQaiaoBWiTxrzGGcoxTfnNh"
+        );
+        assert_eq!(
+            list[0].folder_url,
+            "https://my.feishu.cn/drive/folder/QlkyfWDZalOFUXdztyAcYRu2nVe"
+        );
+    }
+
+    #[test]
+    fn backticked_id_after_needs_label_ticks_and_length() {
+        // 反引号锚定 + 长度区间：没有反引号、ID 太短、或标签后 60 字符内
+        // 没有反引号，都返回 None——不硬猜。
+        assert_eq!(
+            backticked_id_after("图文包 `UiXMdOnEDouQzAxw1Yjc1XFRnqP` 落盘", "图文包").as_deref(),
+            Some("UiXMdOnEDouQzAxw1Yjc1XFRnqP")
+        );
+        // 段外的长间距形态不认（12 字符窗）：巡检正文「文件夹内已出现
+        // …docx（`ID`」的 ID 不是文件夹自己的——预演 v3 实锤它占过 folder 槽。
+        assert_eq!(
+            backticked_id_after(
+                "文件夹内已出现「玉衡-图文包-BM-2601」docx（`UiXMdOnEDouQzAxw1Yjc1XFRnqP`",
+                "文件夹"
+            ),
+            None
+        );
+        // 段内（交付物留痕）的贴脸形态照认。
+        assert_eq!(
+            backticked_id_after(
+                "交付物留痕】玉衡图文包 `UiXMdOnEDouQzAxw1Yjc1XFRnqP`；",
+                "图文包"
+            )
+            .as_deref(),
+            Some("UiXMdOnEDouQzAxw1Yjc1XFRnqP")
+        );
+        assert_eq!(
+            backticked_id_after("图文包已落盘（docx UiXMdOn，无反引号", "图文包"),
+            None
+        );
+        assert_eq!(backticked_id_after("文件夹 `abc` 太短", "文件夹"), None);
+        assert_eq!(
+            backticked_id_after("玉衡图文包 `UiXMdOnEDouQzAxw1Yjc1XFRnqP`", "运营方案"),
+            None
+        );
+    }
+
+    #[test]
     fn extract_bm_case_ids_only_takes_bm_digit_shape() {
         // 只认 BM + 3-6 位数字：LARK-CLI / QWEN-IMAGE 这类字母-字母工具名
         // （extract_case_id 注释记录的误拢教训）在这个形状下不存在。
@@ -1667,6 +1849,59 @@ mod dispatch_helper_tests {
         assert_eq!(links, vec!["https://my.feishu.cn/docx/AbCdEf123456"]);
         let folder = extract_feishu_links("文件夹 https://my.feishu.cn/drive/folder/Rbpj123abc");
         assert_eq!(folder.len(), 1);
+    }
+
+    #[test]
+    fn bare_case_ignores_watchdog_mentions_outside_artifact_segment() {
+        // 巡检摘要（无「交付物留痕」段）里提「文件夹内已出现…docx（`ID`」：
+        // 那个 ID 是图文包不是文件夹——folder 槽不许被占（预演 v3 实锤）。
+        // 摘要里也没有任何 URL，所以这一拍什么槽都不该动。
+        let db = gateway_task_db();
+        let row = serde_json::json!({
+            "record_id": "BM-9992", "title": "甲案", "deliverable_mode": "IMAGE_ONLY",
+            "stage": "07_关单"
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, terminal_summary)
+             VALUES ('cronrun:w8', 'vps',
+                     '判据：文件夹内已出现「玉衡-图文包-BM-9992」docx（`UiXMdOnEDouQzAxw1Yjc1XFRnqP`，创建 17:40），阶段推进。')",
+            [],
+        )
+        .expect("insert task");
+        harvest_links_from_tasks(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].folder_url, "", "段外提及不归拢 folder");
+        assert_eq!(list[0].visual_url, "", "段外提及不归拢 visual");
+    }
+
+    #[test]
+    fn image_only_case_skips_video_slot() {
+        // 图文案（IMAGE_ONLY）没有视频产物：docx 链跳过 video 槽——真机
+        // KTuydsjklonilHxFrAGcpqnunob 这种不明文档占住「视频」位比空着糟。
+        let db = gateway_task_db();
+        let row = serde_json::json!({
+            "record_id": "BM-9991", "title": "甲案", "deliverable_mode": "IMAGE_ONLY",
+            "stage": "01_建档"
+        });
+        upsert_case_from_master_row(&db, &row).expect("upsert");
+        // 摘要里唯一裸编号 + 一条真 docx 链接（SIM 前缀过形状检查）。
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, terminal_summary)
+             VALUES ('cronrun:w7', 'vps',
+                     'CASE BM-9991 巡检：母稿 https://my.feishu.cn/docx/AbCdEf123456 落盘')",
+            [],
+        )
+        .expect("insert task");
+        harvest_links_from_tasks(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        // 第一个空 docx 槽是 research；video 槽全程不碰。
+        assert_eq!(
+            list[0].research_doc_url,
+            "https://my.feishu.cn/docx/AbCdEf123456"
+        );
+        assert_eq!(list[0].video_url, "", "IMAGE_ONLY 案不占 video 槽");
     }
 
     #[test]
