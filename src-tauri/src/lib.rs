@@ -888,6 +888,21 @@ fn beidou_case_list(
     limit: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<Vec<beidou_cases::CaseListRow>, String> {
+    // 链接兜底收割（写连接）：把任务摘要里带 [CASE_ID] 的飞书链接归进案。
+    // 放在读取前跑，UI 每次刷新账本都是最新归拢结果；表是几十行级，成本可忽略。
+    // 收割失败不阻塞读取（比如库被别的进程锁了一瞬）——宁可这轮少几条链接。
+    match open_database(&state.database_path) {
+        Ok(connection) => {
+            // 建表也是幂等的（CREATE TABLE IF NOT EXISTS）：没发过车的库这里
+            // 第一次把 beidou_cases / beidou_case_tasks 建出来。
+            let harvested = beidou_cases::ensure_case_tables(&connection)
+                .and_then(|_| beidou_cases::harvest_links_from_tasks(&connection));
+            if let Err(error) = harvested {
+                eprintln!("sinan link harvest skipped: {error}");
+            }
+        }
+        Err(error) => eprintln!("sinan link harvest skipped: {error}"),
+    }
     let connection = open_database_read_only(&state.database_path)?;
     beidou_cases::list_cases(&connection, limit).map_err(|error| error.to_string())
 }

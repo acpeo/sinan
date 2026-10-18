@@ -370,11 +370,88 @@ pub fn attach_task_to_case(
     Ok(changed > 0)
 }
 
+/// 链接兜底收割（本文件头说的「链接兜底先行」——之前一直没接线）：
+/// 扫 gateway_task 的 terminal_summary / progress_summary，文本里带
+/// [CASE_ID: BM-xxxx] 的，把里面的飞书链接按 URL 形态归进对应案的产物列。
+/// 没带标记的任务直接跳过——归不了案的东西不硬塞（数据诚实）。
+/// 在账本读取前跑一遍：gateway_task 是几十行级别的本地表，成本可忽略。
+pub fn harvest_links_from_tasks(connection: &Connection) -> rusqlite::Result<usize> {
+    let mut harvested = 0usize;
+    let rows: Vec<(String, String, Option<String>, Option<String>, Option<String>)> = {
+        let mut stmt = connection.prepare(
+            "SELECT task_id, gateway, agent_id, terminal_summary, progress_summary FROM gateway_task
+             WHERE COALESCE(terminal_summary, '') != '' OR COALESCE(progress_summary, '') != ''",
+        )?;
+        let mapped = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+        })?;
+        mapped.filter_map(|item| item.ok()).collect()
+    };
+    for (task_id, gateway, agent_id, terminal, progress) in rows {
+        for text in [terminal.as_deref(), progress.as_deref()].into_iter().flatten() {
+            let Some(case_id) = extract_case_id(text) else { continue };
+            ensure_case_row(connection, &case_id)?;
+            // 归拢边：这条任务从此记在这一案名下（主键去重，重复扫不重复记）。
+            connection.execute(
+                "INSERT INTO beidou_case_tasks (case_id, gateway, task_id, agent_id, attached_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(gateway, task_id) DO NOTHING",
+                rusqlite::params![
+                    case_id,
+                    gateway,
+                    task_id,
+                    agent_id,
+                    chrono::Utc::now().timestamp_millis()
+                ],
+            )?;
+            let links = extract_feishu_links(text);
+            for link in &links {
+                if attach_link(connection, &case_id, link)? > 0 {
+                    harvested += 1;
+                }
+            }
+            break; // 一条任务只归一个案：首个 CASE_ID 说了算
+        }
+    }
+    Ok(harvested)
+}
+
+/// 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）：建一行最小案，
+/// 标题暂用案号占位，真实标题从别的线（发车/主表）进来时由 upsert 覆盖。
+fn ensure_case_row(connection: &Connection, case_id: &str) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO beidou_cases (
+            case_id, gateway, title, task_type, stage, first_strike, second_strike,
+            master_frozen, owner_star, last_activity_ms, updated_at_ms
+         ) VALUES (?1, '本机', ?1, 'IMAGE_ONLY', '01_建档', 0, 0, 0, 'tianshu', ?2, ?2)
+         ON CONFLICT(case_id) DO NOTHING",
+        rusqlite::params![case_id, chrono::Utc::now().timestamp_millis()],
+    )?;
+    Ok(())
+}
+
+/// 链接按 URL 形态归列：drive/folder → 任务文件夹；docx → 母稿位（兜底分不清
+/// 是哪份 docx，只往空位放）；其余飞书链接 → 运营列。已占的位不覆盖。
+/// 列名来自固定 if/else，不是用户输入，无注入面。
+fn attach_link(connection: &Connection, case_id: &str, link: &str) -> rusqlite::Result<usize> {
+    let column = if link.contains("/drive/folder/") {
+        "folder_url"
+    } else if link.contains("/docx/") {
+        "master_doc_url"
+    } else {
+        "ops_doc_url"
+    };
+    let sql = format!(
+        "UPDATE beidou_cases SET {column} = ?2
+         WHERE case_id = ?1 AND ({column} IS NULL OR {column} = '')"
+    );
+    connection.execute(&sql, rusqlite::params![case_id, link])
+}
+
 /// 从一段自由文本（terminal_summary / 交接卡）里捞出所有飞书链接。
 /// 真机实测：链接裸奔在 session_run.terminal_summary 里，形如
 /// `https://my.feishu.cn/docx/CDcfd…` 与 `https://my.feishu.cn/drive/folder/Rbpj…`。
 /// 顺手剥掉 markdown 强调记号（** 结尾）和尾随标点，别把 `)**` 带进 URL。
-#[allow(dead_code)] // 指挥舱改造后前端暂不消费，等飞书主表回填
 pub fn extract_feishu_links(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
@@ -427,7 +504,6 @@ pub fn extract_feishu_links(text: &str) -> Vec<String> {
 }
 
 /// 剥掉 markdown 强调与尾随标点：真机链接常写成 `https://…docx/xxx**`。
-#[allow(dead_code)] // 指挥舱改造后 extract_feishu_links 暂不被调用，随主表接通一起接上
 fn clean_link(raw: &str) -> String {
     let mut s = raw.trim();
     // 尾部 markdown/标点记号逐个剥（**、*、，。、）) 、、] 】 等）
