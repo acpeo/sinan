@@ -1684,6 +1684,12 @@ fn harvest_episode_content(
         }
     }
     let has_labelled_title = !labelled_title.is_empty();
+    // 强证据 = 【正式标题】标签 或 交接卡《》：两者都是 SOP 刚性格式。标签是
+    // 最高权威；交接卡《》同样只可能来自本案的定题结论（hops_of_case 归属）。
+    // 真机 BM-2601 只有交接卡《》形态（【正式标题】标签一次都没出现过），
+    // 旧代码把强证据门槛全押在标签上，标题槽被发车卡通用名「室内设计」占着
+    // 永远盖不过去。弱证据（全段重复两次的《》）才走原来的两条件。
+    let has_strong_title = has_labelled_title || !handoff_title.is_empty();
     let formal_title = {
         // 权威度：【正式标题】标签 > 交接卡《》 > 全段重复两次的《》 > 旧值。
         let raw = if has_labelled_title {
@@ -1700,13 +1706,15 @@ fn harvest_episode_content(
     // （BM-2603 一度顶着 BM-2602 的名字），这一条把它改回自己的。发车/主表
     // 写进来的独立标题两个条件都不满足，不会被覆盖。
     if !formal_title.is_empty() {
-        // 【正式标题】标签是最高权威（"已回写任务表「内容标题」，不得自拟"）：
-        // 它一出现就必须盖上。真机 BM-2601 的标题槽被发车卡的通用名「室内设计」
-        // 占着——不是案号占位、也不是别的案的名，原来两条件都不占，正式标题
-        // 《家的气场，是我一手调出来的｜100个适我主义提案》永远盖不过它。
-        // 没有标签时（只有《》证据）才走原来的两条件，防混段串名。
-        // 标签路径也防串名：新标题已经是别的案在用的名字时不写。
-        let sql = if has_labelled_title {
+        // 强证据（【正式标题】标签或交接卡《》）出现就必须盖上。真机 BM-2601
+        // 的标题槽被发车卡的通用名「室内设计」占着——不是案号占位、也不是
+        // 别的案的名，原来两条件都不占，正式标题《家的气场，是我一手调出来
+        // 的｜100个适我主义提案》永远盖不过它。发车卡的通用名只是派单前的
+        //  brief，定题结论才是案名（"已回写任务表「内容标题」，不得自拟"）；
+        // upsert_case_from_master_row 只在发车时跑一次，不会被同步覆盖回去。
+        // 没有强证据时（只有重复《》）才走原来的两条件，防混段串名。
+        // 强证据也防串名：新标题已经是别的案在用的名字时不写。
+        let sql = if has_strong_title {
             "UPDATE beidou_cases SET title = ?2, updated_at_ms = ?3
              WHERE case_id = ?1
                AND ?2 NOT IN (SELECT title FROM beidou_cases WHERE case_id != ?1)"
@@ -2019,6 +2027,22 @@ fn promote_stage(
     Ok(())
 }
 
+/// 流水线星位（真正干活的）：天璇/天玑/天权/玉衡/开阳/摇光。
+///
+/// 天枢（tianshu）是中枢+看门狗：Leo 的提问、天枢的复盘答话、watchdog
+/// 巡检镜像全落在 tianshu 名下。这些文本**会引用历史阶段语言**（真机
+/// BM-2601 10-18 19:51：Leo 在天枢群问「16:45 天权二审七轴打回…同分钟
+/// 复审 PASS，母稿 FROZEN…」），但不是活动证据——案子 19:12 就真关单了，
+/// 之后的闲聊再提「复审 PASS」也不能把它翻回去。所以误关自愈的活动证据
+/// 只认星位跳；关单证据仍然任何出处都认（看门狗的关单判词常常只在
+/// gateway_task 里，BM-2601 的真身形态）。
+fn is_pipeline_star(agent_id: &str) -> bool {
+    matches!(
+        agent_id,
+        "tianxuan" | "tianji" | "tianquan" | "yuheng" | "kaiyang" | "yaoguang"
+    )
+}
+
 /// 误关自愈：否定词修复（58d21d9 / 1a1b4ed）只防**新的**误关，已经误关的单
 /// 要能按最新证据翻回来。
 ///
@@ -2030,7 +2054,13 @@ fn promote_stage(
 ///
 /// 判据（全局视角，一个案的跳散在多个 60 分钟段里）：
 ///   · 关单证据 = 显式提到案号的跳里，says_closed 或 watchdog 分支判「关单」
-///   · 活动证据 = 显式提到案号的跳里，最新一条能推出阶段的（hop_stage_target>0）
+///     （session_run 任何星位 + gateway_task 巡检行——真机 BM-2601 的关单
+///     判词只活在巡检行里）
+///   · 活动证据 = 显式提到案号的**流水线星位跳**里，最新一条能推出阶段的
+///     （hop_stage_target>0）。天枢群的复盘闲聊、别案巡检行的历史提及都
+///     不算——真机 BM-2601 19:51 的提问引用过「复审 PASS，母稿 FROZEN」，
+///     10-20 00:27 的巡检行拿它当历史盲区例子，旧规则把这两句当成"最新
+///     活动"，把 19:12 真关单的单翻成了 05_母稿。
 ///   · 活动证据比关单证据新 → 关早了，按活动证据退回对应阶段
 /// 真正的关单判词落下来后（比活动证据新），下一轮收割自然重新推回 08，
 /// 不会震荡。只认**显式提到案号**的跳：空转跳跟随归属的不算——BM-2601
@@ -2074,9 +2104,21 @@ fn repair_false_closures(connection: &Connection) -> rusqlite::Result<()> {
     //                   都没有，只以「看门狗巡检：关单」动作行活在 gateway_task
     //                   ——漏了它，合法关单的 BM-2601 会被误翻（活动证据
     //                   18:12 的图文包比"不存在的关单"新）。
-    let mut evidence: Vec<(String, i64)> = Vec::new();
+    // 但**活动证据**另有一队，只收流水线星位的 session 跳（is_pipeline_star）：
+    //   · 天枢群里的复盘闲聊（Leo 提问引用「复审 PASS，母稿 FROZEN」）不是活动；
+    //   · 别的案的巡检行历史提及本案（BM-2602 的看门狗行提了一嘴 BM-2601，
+    //     却带「母稿+落盘」判据）也不是活动。
+    // 真机 BM-2601 两者都中了：19:51 闲聊 + 10-20 00:27 的跨案提及，把 19:12
+    // 真关单的单翻成了 05_母稿。关单证据不设星位门槛——看门狗写关单是天职。
+    let mut closure_evidence: Vec<(String, i64)> = Vec::new();
+    let mut activity_evidence: Vec<(String, i64)> = Vec::new();
     for row in &rows {
-        evidence.push((hop_blob(row), hop_at_ms(row)));
+        let blob = hop_blob(row);
+        let at = hop_at_ms(row);
+        closure_evidence.push((blob.clone(), at));
+        if is_pipeline_star(row.1.as_deref().unwrap_or("")) {
+            activity_evidence.push((blob, at));
+        }
     }
     let has_task_table: Option<i64> = connection
         .query_row(
@@ -2100,19 +2142,28 @@ fn repair_false_closures(connection: &Connection) -> rusqlite::Result<()> {
         })?;
         for item in mapped {
             let (text, at) = item?;
-            evidence.push((text, at));
+            // 巡检行只作关单证据：它是状态复盘，跨案提及比比皆是（真机
+            // BM-2602 的巡检行里提 BM-2601 只是拿它当历史盲区例子），拿来
+            // 当活动证据就会把真关单的案翻下马。误关案要翻回来，靠的是
+            // 星位自己的跳（真机 BM-2602 03:14 玉衡图文包落盘那一跳）。
+            closure_evidence.push((text, at));
         }
     }
     for case_id in &closed {
         let mut closed_at = 0i64;
         let mut activity_at = 0i64;
         let mut activity_target = 0u8;
-        for (blob, at) in &evidence {
+        for (blob, at) in &closure_evidence {
             if !blob.contains(case_id.as_str()) {
                 continue;
             }
             if says_closed(blob) || watchdog_branch(blob).as_deref() == Some("关单") {
                 closed_at = closed_at.max(*at);
+            }
+        }
+        for (blob, at) in &activity_evidence {
+            if !blob.contains(case_id.as_str()) {
+                continue;
             }
             // 活动证据取**最新一条**能推阶段的（不是历史最高级）：案子退到
             // 哪一阶，应该听最后一条实况，而不是听它这辈子到过的最高处。
@@ -4473,6 +4524,119 @@ mod dispatch_helper_tests {
     }
 
     #[test]
+    fn handoff_book_title_overwrites_generic_slot_title() {
+        // 真机 BM-2601 的真身形态：标题槽被发车卡的通用名「室内设计」占着，而
+        // 定题证据只有交接卡里的《》（【正式标题】标签一次都没出现过）。旧代码
+        // 把强证据门槛全押在标签上，这单的标题永远盖不过去。交接卡《》同样是
+        // SOP 刚性格式（只可能来自本案的定题结论），必须能盖上。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_ho",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7778]",
+            None,
+            base,
+        );
+        harvest_links_from_sessions(&db).expect("first");
+        db.execute(
+            "UPDATE beidou_cases SET title = '室内设计' WHERE case_id = 'BM-7778'",
+            [],
+        )
+        .expect("preset generic title");
+        insert_session(
+            &db,
+            "cli:main:group:oc_ho",
+            "tianquan",
+            "",
+            Some(
+                "【交接卡｜天权 → 天玑｜BM-7778】\n\
+                 任务：BM-7778《家的气场，是我一手调出来的｜100个适我主义提案》\n\
+                 当前阶段：天玑创作中（二审打回修改，小改）",
+            ),
+            base + 10 * min,
+        );
+        harvest_links_from_sessions(&db).expect("second");
+        let list = list_cases(&db, None).expect("list");
+        let row = list.iter().find(|r| r.case_id == "BM-7778").expect("case");
+        assert_eq!(
+            row.title.as_deref(),
+            Some("家的气场，是我一手调出来的｜100个适我主义提案"),
+            "交接卡《》盖过发车卡的通用名（BM-2601 真身形态）"
+        );
+    }
+
+    #[test]
+    fn false_closure_ignores_chatter_and_cross_case_mentions_after_real_closure() {
+        // 真机 BM-2601 10-18 事故缩比：19:12 真关单（判词只在 gateway_task
+        // 巡检行里），之后 Leo 在天枢群复盘这单——19:51 的提问引用「复审
+        // PASS，母稿 FROZEN」；10-20 别案的巡检行又拿它当历史盲区例子提及
+        // （母稿落盘没问题但 dispatch 掉了）。这些都不是活动证据：案子真跑
+        // 完了，闲聊再提阶段语言也不能把它翻下马。旧代码两样都中，把 08 翻
+        // 成了 05_母稿（真机快照实测实锤）。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_ch",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7783]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_ch",
+            "yuheng",
+            "",
+            Some("【玉衡阶段完成汇总】BM-7783 图文包已产出"),
+            base + 15 * min,
+        );
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, agent_id, terminal_summary,
+                                       started_at_ms, ended_at_ms)
+             VALUES ('cronrun:test:bm7783', 'vps', 'watchdog',
+                     'BM-7783｜已关单：reset 6 个群会话、删除 watchdog job', ?1, ?2)",
+            rusqlite::params![base + 25 * min, base + 27 * min],
+        )
+        .expect("insert gateway watchdog row");
+        ensure_case_row(&db, "BM-7783").expect("ensure BM-7783 case row");
+        db.execute(
+            "UPDATE beidou_cases SET stage = '08_已关单' WHERE case_id = 'BM-7783'",
+            [],
+        )
+        .expect("preset closure");
+        // 关单后的天枢闲聊：提问里引用历史阶段语言（复审 PASS / 母稿 FROZEN）
+        insert_session(
+            &db,
+            "cli:main:group:oc_ch",
+            "tianshu",
+            "",
+            Some("【BM-7783 复盘】16:45 天权二审七轴打回 → 同分钟复审 PASS，母稿 FROZEN（revision 7），这单还有问题吗"),
+            base + 200 * min,
+        );
+        // 别案看门狗的巡检行：拿 BM-7783 当历史盲区例子，却带「母稿+落盘」判据
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, agent_id, terminal_summary,
+                                       started_at_ms, ended_at_ms)
+             VALUES ('cronrun:test:other', 'vps', 'watchdog',
+                     '本轮巡检命中漏派分支。这正是 SKILL 2.2 记录的 BM-7783 同型盲区——母稿落盘没问题但 dispatch 掉了', ?1, ?2)",
+            rusqlite::params![base + 210 * min, base + 212 * min],
+        )
+        .expect("insert other-task watchdog row");
+        harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        let row = list.iter().find(|r| r.case_id == "BM-7783").expect("case");
+        assert_eq!(
+            row.stage, "08_已关单",
+            "真关单后的复盘闲聊/跨案巡检提及都不算活动证据（BM-2601 真身形态）"
+        );
+    }
+
+    #[test]
     fn false_closure_repairs_on_newer_activity_but_keeps_real_closures() {
         // 真机 BM-2602 01:49 事故缩比：巡检跳写「五分支按序：分支 1（已关单）
         // 未命中」——否定词在括号里、话术又贴在「未命中」前，旧 says_closed
@@ -4539,13 +4703,17 @@ mod dispatch_helper_tests {
             [],
         )
         .expect("preset false closure");
-        // 误关之后的实况：图文包落盘 + 玉衡出图中（活动证据更新）
+        // 误关之后的实况：图文包落盘（活动证据更新）。必须是**流水线星位**的
+        // 跳——真机 BM-2602 的自愈依据就是玉衡 03:14 的图文包落盘那一跳。
+        // 天枢身份不行：Leo 的复盘提问、天枢的答话都落在 tianshu 名下，那些
+        // 文本引用历史阶段语言（真机 BM-2601 19:51 的提问里就有「复审 PASS，
+        // 母稿 FROZEN」），当活动证据会把真关单的案翻下马（见 is_pipeline_star）。
         insert_session(
             &db,
             "cli:main:group:oc_rc",
-            "tianshu",
+            "yuheng",
             "",
-            Some("【任务状态】BM-7780 全链路落盘实测｜玉衡出图中\nfolder_token 内新增「玉衡图文包-BM7780」，已代发摇光"),
+            Some("【玉衡阶段完成汇总】BM-7780 全链路落盘实测｜图文包已产出\nfolder_token 内新增「玉衡图文包-BM7780」，6 张真实成图"),
             base + 200 * min,
         );
         // ── 真关单案 BM-7782：关单判词只在 gateway_task 巡检行里（真机 BM-2601
