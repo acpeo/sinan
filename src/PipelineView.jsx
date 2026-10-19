@@ -255,7 +255,6 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
     const draw = () => {
       host.querySelectorAll(".pl-lane-row").forEach((row) => {
         const svg = row.querySelector(".pl-loop");
-        const tag = row.querySelector(".pl-loop-tag");
         if (!svg) return;
         const nodes = row.querySelectorAll(".pl-cell .pl-node, .pl-cell .pl-par-slot");
         // 链路：... 天玑(3) → 天权审稿(4) → 并行(5) ...
@@ -279,17 +278,6 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
         dot.setAttribute("cx", x2);
         dot.setAttribute("cy", y2 - 3);
         svg.setAttribute("viewBox", `0 0 ${rr.width} ${rr.height}`);
-        if (tag) {
-          // 标签钉在弧线的正中：三次贝塞尔 t=0.5 处的参数坐标。
-          // 早先标签贴在目标格正下方，弧线中点空着，看着像标签跟弧线没关系
-          // （Leo 2026-10-15："为什么不是放在虚线的中间呢"）。
-          const t = 0.5;
-          const it = 1 - t;
-          const bx = it * it * it * x1 + 3 * it * it * t * x1 + 3 * it * t * t * x2 + t * t * t * x2;
-          const by = it * it * it * y1 + 3 * it * it * t * (y1 + dip) + 3 * it * t * t * (y2 + dip) + t * t * t * y2;
-          tag.style.left = `${bx}px`;
-          tag.style.top = `${by}px`;
-        }
       });
     };
     draw();
@@ -449,17 +437,16 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
               </span>
             </button>
             {cells}
-            {/* 打回回环（mock8 有、我落地时丢了的设计）：从审稿门禁绕一条弧线
-                回创作中，挂"🔁 打回重审 n/3"。SOP 的打回链是链路的回流，
-                不该只在中栏写成三张文字卡。 */}
+            {/* 打回回环：从审稿门禁绕一条弧线回创作中。
+                **只留动线、零文字**（Leo 2026-10-16 第 ④ 条口径）——
+                原来这里还挂过一个「🔁 打回重审 n/3」的朱砂标，产品一直没跟着
+                设计稿去掉，2026-10-19 Leo 明确要求删。打回次数在深潜舱的
+                「打回链 · REJECT LOOP」和头部徽标里都有，泳道上不重复。 */}
             {item.secondStrikes > 0 ? (
               <svg className="pl-loop" aria-hidden="true">
                 <path d="M 0 0" className="pl-loop-path" />
                 <circle className="pl-loop-dot" r="3.5" />
               </svg>
-            ) : null}
-            {item.secondStrikes > 0 ? (
-              <span className="pl-loop-tag">🔁 打回重审 {item.secondStrikes}/3</span>
             ) : null}
           </div>
         );
