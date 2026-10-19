@@ -517,12 +517,13 @@ fn harvest_bare_case(connection: &Connection, case_id: &str, text: &str) -> rusq
     }
     acted |= harvest_watchdog_artifacts(connection, case_id, text)?;
     if says_closed(text) {
-        connection.execute(
+        // 用 rowcount 判断"真有动作"：这条 SQL 自带 NOT IN 守卫，重复收割时
+        // 一行都改不到，但旧代码照样把 acted 置真 → 每 15 秒推一次活动时间。
+        acted |= connection.execute(
             "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
              WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
             rusqlite::params![case_id, now],
-        )?;
-        acted = true;
+        )? > 0;
     }
     // 真有动作才推活动时间，且只进不退：收割线被前端 15 秒一拍的账本重读
     // 反复跑，无条件写"此刻"会把该案永久钉在卷宗顶上。
@@ -715,17 +716,52 @@ fn label_segments(blob: &str) -> Vec<(String, String)> {
     out
 }
 
+/// 交接卡里「任务：BM-xxxx …」那一行指向的案号。只认行首的「任务：」
+/// （交接卡的刚性格式），不去正文里随便抓 —— 正文里的编号可能是"参考
+/// 上一单 BM-2602"这种。
+fn handoff_case_id(blob: &str) -> Option<String> {
+    for line in blob.lines() {
+        let text = line
+            .trim()
+            .trim_start_matches(|c: char| matches!(c, '*' | ' ' | '\t'))
+            .trim();
+        let rest = match text.strip_prefix("任务：").or_else(|| text.strip_prefix("任务:")) {
+            Some(rest) => rest,
+            None => continue,
+        };
+        if let Some(id) = extract_bm_case_ids(rest).into_iter().next() {
+            return Some(id);
+        }
+    }
+    None
+}
+
 /// 段归属案号：先认带 [CASE_ID] 标签的跳（北斗派单规范，第一个命中的赢）。
-/// 标签缺失时（派单卡那一跳没落进本地账本——app 当时没开）退一步认
-/// 「段里有交接卡 + 全段只有一个裸 BM 编号」。Leo 2026-10-18 明确 VPS 侧
-/// 不会注入 [CASE_ID]，但交接卡是 SOP 刚性格式，每一跳都有；多编号或没
-/// 交接卡都不猜（猜错是把别人的活计挂到本案名下，比拢不上更糟）。
+/// 标签缺失时（派单卡那一跳没落进本地账本——app 当时没开）退一步：
+/// ① 交接卡「任务：BM-xxxx」行——SOP 刚性格式，**段内最后一次交接卡说了算**；
+/// ② 「段里有交接卡 + 全段只有一个裸 BM 编号」。
+/// Leo 2026-10-18 明确 VPS 侧不会注入 [CASE_ID]，但交接卡每一跳都有。
+///
+/// 为什么要有 ①（2026-10-20 01:30 真机实测）：旧版只有 ②，而那段里除了
+/// BM-2603 的新交接卡，还压着上一单 BM-2602 的巡检汇报——一段两个案号就被
+/// 判成"有歧义、不猜"，**新开的 BM-2603 永远进不了泳道**。交接卡的
+/// 「任务：」行是唯一指向"这一跳在办哪一单"的刚性字段，比全段唯一的裸号硬。
 fn episode_case_id(hops: &[&SessionHarvestRow]) -> Option<String> {
     for row in hops {
         for text in hop_texts(row) {
             if let Some(found) = extract_case_id(text) {
                 return Some(found);
             }
+        }
+    }
+    // ① 倒着找：越靠后的交接卡越接近"当前在办的那一单"。
+    for row in hops.iter().rev() {
+        let blob = hop_blob(row);
+        if !blob.contains("【交接卡】") {
+            continue;
+        }
+        if let Some(found) = handoff_case_id(&blob) {
+            return Some(found);
         }
     }
     let has_handoff = hops
@@ -3084,6 +3120,53 @@ mod dispatch_helper_tests {
         let again = list_cases(&db, None).expect("list");
         assert_eq!(again[0].last_activity_ms, activity, "活动时间不许被重复读顶到此刻");
         assert_eq!(again[0].updated_at_ms, updated, "updated_at_ms 不许被重复读刷新");
+    }
+
+    #[test]
+    fn handoff_task_line_wins_over_stale_case_id_in_the_same_episode() {
+        // 2026-10-20 01:30 真机：这一轮里同时压着上一单 BM-2602 的巡检汇报和
+        // 新单 BM-2603 的交接卡。旧规则「全段只有一个裸编号才归案」直接放弃，
+        // 于是新开的单永远进不了泳道。交接卡的「任务：」行才是这一跳在办哪一单。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "重新测试一个",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "",
+            Some("【任务状态】BM-2602 全链路落盘实测 / 玉衡出图中（进行中）"),
+            base + 2 * min,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianxuan",
+            "",
+            Some(
+                "【交接卡】@天权\n任务：BM-2603 落盘实测第二轮\n当前阶段：天权初审中\n\n\
+                 【天璇产出】研究 docx：https://my.feishu.cn/docx/VUOabc123",
+            ),
+            base + 5 * min,
+        );
+        harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1, "只归这一单");
+        assert_eq!(
+            list[0].case_id, "BM-2603",
+            "交接卡的任务行赢过巡检里的旧案号"
+        );
+        assert_eq!(
+            list[0].research_doc_url, "https://my.feishu.cn/docx/VUOabc123"
+        );
     }
 
     #[test]
