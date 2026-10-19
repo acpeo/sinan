@@ -3252,7 +3252,21 @@ function buildTasksFeedModel({ rows, episodes, now }) {
     if (!latest) continue;
     const epAgent = latest.agentId || "main";
     const { tone } = hopToneOf({ status: latest.status, taskId: latest.taskId ?? latest.id, error: latest.error });
-    const summary = String(latest.terminalSummary ?? latest.progressSummary ?? "").trim();
+    // 结论行取**链尾往回第一条有意义的话**：末跳若还在跑，它的摘要往往只有
+    // 一个工具名（"exec" / "message"），照抄上去整张卡就成了 --dump 灰样，
+    // 看着跟没有内容一样——Leo 2026-10-20 说"一点动静没有"，一头就栽在这。
+    const summary = (() => {
+      for (let i = ep.runs.length - 1; i >= 0; i -= 1) {
+        const run = ep.runs[i];
+        for (const raw of [run?.terminalSummary, run?.progressSummary]) {
+          const text = String(raw ?? "").trim();
+          if (text && !/^(exec|message|cli|bash|shell|read|write|edit|grep|glob)$/i.test(text)) {
+            return text;
+          }
+        }
+      }
+      return "";
+    })();
     const key = `ep:${ep.startedAtMs}:${latest.id ?? latest.sessionKey ?? "ep"}`;
     const at = ep.lastActivityMs ?? ep.startedAtMs ?? 0;
     if (epAgent === "main") {
@@ -3282,7 +3296,10 @@ function buildTasksFeedModel({ rows, episodes, now }) {
     const episodeTitle = (speaking ? hopTitleOf(speaking) : "") || hopTitleOf(latest);
     cards.push({
       key, type: "episode", episode: ep, agentId: epAgent,
-      agent: starNameOf(epAgent), kind: "接力",
+      agent: starNameOf(epAgent),
+      // 跳数上卡面：一条接力只出一张卡，不写跳数的话，一条正在跑的 10 跳链
+      // 在动态流里就是一张静止的卡（跳数还会随每一跳落库而增长，是活的进度）。
+      kind: ep.runs.length > 1 ? `接力 ${ep.runs.length} 跳` : "接力",
       at,
       tone: tone === "failed" ? "fail" : tone === "done" ? "done" : "live",
       color: tone === "failed" ? DIAL_TONE.fail : tone === "done" ? DIAL_TONE.done : DIAL_TONE.live,
