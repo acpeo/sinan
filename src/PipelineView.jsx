@@ -997,24 +997,23 @@ function StarDetail({ telemetry, liveStars, onClose }) {
                 </span>
                 <span className="pl-stardetail-note">{t.note ?? ""}</span>
               </div>
+              {/* 水位条放中间那条空白里（Leo 2026-10-19：挤在右边数字下面，
+                  左边留一大片空，中间更合适）。它自己吃掉剩余宽度。 */}
+              <span
+                className={`task-context-bar pl-stardetail-bar${fillPct == null ? " task-context-bar--empty" : ""}`}
+                title={
+                  hasLevel
+                    ? `已用 ${fillPct}% · ${t.estimate.toLocaleString()} / ${t.budget.toLocaleString()} tok`
+                    : "空闲会话，网关不报上下文水位"
+                }
+              >
+                <i
+                  className={fillPct != null && fillPct >= 80 ? "task-context-fill--warn" : undefined}
+                  style={fillPct != null ? { width: `${fillPct}%` } : undefined}
+                />
+              </span>
               <div className="pl-stardetail-right">
-                <span
-                  className="cp-mono pl-stardetail-ctx"
-                  title={
-                    hasLevel
-                      ? `已用 ${fillPct}% · ${t.estimate.toLocaleString()} / ${t.budget.toLocaleString()} tok`
-                      : "空闲会话，网关不报上下文水位"
-                  }
-                >上下文 {ctxText}</span>
-                <span
-                  className={`task-context-bar pl-stardetail-bar${fillPct == null ? " task-context-bar--empty" : ""}`}
-                  aria-hidden="true"
-                >
-                  <i
-                    className={fillPct != null && fillPct >= 80 ? "task-context-fill--warn" : undefined}
-                    style={fillPct != null ? { width: `${fillPct}%` } : undefined}
-                  />
-                </span>
+                <span className="cp-mono pl-stardetail-ctx">上下文 {ctxText}</span>
                 <span className="cp-mono pl-stardetail-last">上次 {t.lastRun ?? "—"}</span>
               </div>
             </div>
