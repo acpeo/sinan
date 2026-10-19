@@ -716,6 +716,33 @@ fn label_segments(blob: &str) -> Vec<(String, String)> {
     out
 }
 
+/// 段内按案号归属切跳：一跳只要提到某个 BM 编号，就算它（以及紧随其后、
+/// 没提编号的空转跳，如只有 "exec" 的玉衡跳）在办那一单；后面提到别的编号
+/// 就换归属。真机 01:30 那段里 BM-2602 的巡检汇报和 BM-2603 的交接卡挨在一起，
+/// 不切的话 BM-2602 的玉衡跳会把 BM-2603 推到「视听并行」，BM-2602 的《》会
+/// 顶掉 BM-2603 的案名。
+fn hops_of_case<'a>(hops: &[&'a SessionHarvestRow], case_id: &str) -> Vec<&'a SessionHarvestRow> {
+    let mut out: Vec<&'a SessionHarvestRow> = Vec::new();
+    let mut owner: Option<String> = None;
+    for row in hops {
+        let mut ids: Vec<String> = Vec::new();
+        for text in hop_texts(row) {
+            for id in extract_bm_case_ids(text) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        if let Some(first) = ids.into_iter().next() {
+            owner = Some(first);
+        }
+        if owner.as_deref() == Some(case_id) {
+            out.push(*row);
+        }
+    }
+    out
+}
+
 /// 交接卡里「任务：BM-xxxx …」那一行指向的案号。只认行首的「任务：」
 /// （交接卡的刚性格式），不去正文里随便抓 —— 正文里的编号可能是"参考
 /// 上一单 BM-2602"这种。
@@ -755,18 +782,30 @@ fn episode_case_id(hops: &[&SessionHarvestRow]) -> Option<String> {
         }
     }
     // ① 倒着找：越靠后的交接卡越接近"当前在办的那一单"。
+    //    交接卡有两种开头，真机都出现过：
+    //      【交接卡】@天权\n任务：BM-2603 …
+    //      【交接卡｜天权 → 天玑｜BM-2603 …｜初审 PASS】
     for row in hops.iter().rev() {
         let blob = hop_blob(row);
-        if !blob.contains("【交接卡】") {
+        if !blob.contains("【交接卡") {
             continue;
         }
         if let Some(found) = handoff_case_id(&blob) {
             return Some(found);
         }
+        // 第二种写法把案号写在标签名里，没有「任务：」行。
+        for (label, _) in label_segments(&blob) {
+            if !label.starts_with("交接卡") {
+                continue;
+            }
+            if let Some(id) = extract_bm_case_ids(&label).into_iter().next() {
+                return Some(id);
+            }
+        }
     }
     let has_handoff = hops
         .iter()
-        .any(|row| hop_texts(row).any(|text| text.contains("【交接卡】")));
+        .any(|row| hop_texts(row).any(|text| text.contains("【交接卡")));
     if !has_handoff {
         return None;
     }
@@ -850,6 +889,12 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
             let now = chrono::Utc::now().timestamp_millis();
             // 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）。
             ensure_case_row(connection, &case_id)?;
+            // 段里可能同时压着别的单（真机 01:30：BM-2603 的交接卡和 BM-2602 的
+            // 巡检汇报落在同一段 60 分钟里）。所有提炼都只吃「归属本案的跳」，
+            // 否则上一单的玉衡跳会把这一单推到视听并行、上一单的《》会顶掉这一
+            // 单的案名（BM-2603 一度挂着 BM-2602 的名字，就是这一步漏了）。
+            let case_hops = hops_of_case(&hops, &case_id);
+            let hops = if case_hops.is_empty() { hops } else { case_hops };
             // ① 标签归槽：交接卡段名（【母稿】【二审报告】【复审报告】…）就是
             //    语义，比按 URL 出现顺序猜槽位硬得多。标签认领直接覆盖旧值——
             //    旧值可能是老版本盲猜塞错的（真机 BM-2601：二审报告的链接占着
@@ -1485,14 +1530,51 @@ fn harvest_episode_content(
             .unwrap_or("")
             .to_owned()
     };
-    let formal_title = pick(&formal_title, "formalTitle");
-    // 案名回填：兜底归案的占位标题就是案号本身（"BM-2602"），真案名在交接卡
-    // 的《…》里。只在标题还是占位时换掉——`title = ?1` 这一条就是那道锁，
-    // 换过一次就不再触发，发车/主表写进来的权威标题也永远不会被覆盖。
+    // 正式标题还有第二种写法：天权交接卡把标题直接写在标签正文里，不带《》——
+    // 【正式标题（已回写任务表「内容标题」，不得自拟）】
+    // 进门第一眼决定家的秩序：玄关收…
+    // 真机 BM-2603 就是这种；只认《》的话这一单永远没有案名。
+    let labelled_title = hops
+        .iter()
+        .filter_map(|row| {
+            let segs = label_segments(&hop_blob(row));
+            let body = segs
+                .into_iter()
+                .find(|(label, _)| label.contains("正式标题"))
+                .map(|(_, body)| body)?;
+            let line = body
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
+                .trim_matches(|c: char| c == '《' || c == '》' || c == '*' || c == ' ')
+                .to_owned();
+            if line.chars().count() >= 6 {
+                Some(line)
+            } else {
+                None
+            }
+        })
+        .next()
+        .unwrap_or_default();
+    let formal_title = {
+        let raw = if formal_title.is_empty() {
+            labelled_title
+        } else {
+            formal_title
+        };
+        pick(&raw, "formalTitle")
+    };
+    // 案名回填：兜底归案的占位标题就是案号本身（"BM-2603"）。两种情形才改写：
+    // ① 标题还是占位案号；② 标题正挂着**别的案**的正式标题——混段时代串过去的
+    // （BM-2603 一度顶着 BM-2602 的名字），这一条把它改回自己的。发车/主表
+    // 写进来的独立标题两个条件都不满足，不会被覆盖。
     if !formal_title.is_empty() {
         connection.execute(
             "UPDATE beidou_cases SET title = ?2, updated_at_ms = ?3
-             WHERE case_id = ?1 AND title = ?1",
+             WHERE case_id = ?1
+               AND (title = ?1
+                    OR title IN (SELECT title FROM beidou_cases WHERE case_id != ?1))",
             rusqlite::params![case_id, formal_title, now],
         )?;
     }
@@ -1707,6 +1789,11 @@ fn promote_stage(
             || blob.contains("天权阶段已全部完成")
         {
             target = target.max(4);
+        }
+        if blob.contains("初审 PASS") || blob.contains("初审PASS") {
+            // 初审 PASS = 定题完成、进母稿创作（泳道没有单独"初审"列，定题那一列
+            // 由研究/定题证据覆盖，这里直接推下一步）。
+            target = target.max(3);
         }
         if blob.contains("母稿")
             && (blob.contains("已完成")
@@ -3120,6 +3207,59 @@ mod dispatch_helper_tests {
         let again = list_cases(&db, None).expect("list");
         assert_eq!(again[0].last_activity_ms, activity, "活动时间不许被重复读顶到此刻");
         assert_eq!(again[0].updated_at_ms, updated, "updated_at_ms 不许被重复读刷新");
+    }
+
+    #[test]
+    fn mixed_episode_does_not_leak_the_other_case_into_this_one() {
+        // 真机 2026-10-20 01:30：同一段里 BM-2602 的巡检汇报 + 玉衡跳，
+        // 紧挨着 BM-2603 的交接卡。不切跳的话：BM-2603 被 BM-2602 的玉衡跳
+        // 推到「视听并行」，案名被 BM-2602 的《》顶掉（线上实际发生）。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "",
+            Some("【北斗任务 watchdog｜BM-2602 全链路落盘实测】阶段：玉衡出图中（进行中）"),
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "yuheng",
+            "",
+            Some("exec"),
+            base + 3 * min,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianquan",
+            "",
+            Some(
+                "【交接卡｜天权 → 天玑｜BM-2603 落盘实测第二轮】\n\
+                 【审查结论】初审 PASS。三个候选按五轴竞优打分，无一票否决项。\n\
+                 【正式标题（已回写任务表「内容标题」，不得自拟）】\n\
+                 进门第一眼决定家的秩序：玄关收纳",
+            ),
+            base + 10 * min,
+        );
+        harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1, "这一段只归最后一单");
+        let row = &list[0];
+        assert_eq!(row.case_id, "BM-2603");
+        assert_eq!(
+            row.title.as_deref(),
+            Some("进门第一眼决定家的秩序：玄关收纳"),
+            "案名认【正式标题】标签（不带《》），且不许被上一单顶掉"
+        );
+        assert_eq!(
+            row.stage, "05_母稿",
+            "初审 PASS 推进到母稿；不能被 BM-2602 的玉衡跳推成视听并行"
+        );
     }
 
     #[test]
