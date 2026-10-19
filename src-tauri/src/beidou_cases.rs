@@ -1384,6 +1384,16 @@ fn harvest_episode_content(
             .to_owned()
     };
     let formal_title = pick(&formal_title, "formalTitle");
+    // 案名回填：兜底归案的占位标题就是案号本身（"BM-2602"），真案名在交接卡
+    // 的《…》里。只在标题还是占位时换掉——`title = ?1` 这一条就是那道锁，
+    // 换过一次就不再触发，发车/主表写进来的权威标题也永远不会被覆盖。
+    if !formal_title.is_empty() {
+        connection.execute(
+            "UPDATE beidou_cases SET title = ?2, updated_at_ms = ?3
+             WHERE case_id = ?1 AND title = ?1",
+            rusqlite::params![case_id, formal_title, now],
+        )?;
+    }
     let verdict_text = pick(&verdict_text, "verdictText");
     let verdict_by = pick(&verdict_by, "verdictBy");
     let research_note = pick(&research_note, "researchIdNote");
@@ -3167,6 +3177,13 @@ mod dispatch_helper_tests {
         let content: serde_json::Value =
             serde_json::from_str(&row.content_json).expect("content json");
         assert_eq!(content["formalTitle"], "我家的气场是我调出来的");
+        // 兜底归案建出来的占位标题就是案号，真案名在交接卡的《》里——
+        // 不换掉的话泳道上摆着的就是一行「BM-7777」，看不出这是哪单活。
+        assert_eq!(
+            row.title.as_deref(),
+            Some("我家的气场是我调出来的"),
+            "占位标题被交接卡的真案名换掉"
+        );
         assert_eq!(
             content["verdictText"],
             "PASS（3 处必改项全部落实，无新增问题）"
