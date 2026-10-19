@@ -956,7 +956,18 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
             harvest_episode_content(connection, &case_id, &hops)?;
             // ⑤ 阶段推进（只进不退）：账本原先只有「建档」和「已关单」两个写入点，
             //    中间六列从来没人写过，于是跑到玉衡的案在泳道上还挂着「01 建档」。
-            promote_stage(connection, &case_id, &hops, now)?;
+            // 真出过图的案会有 visual/video 链接；两个都空 = 没进过并行。
+            let has_asset: bool = connection
+                .query_row(
+                    "SELECT 1 FROM beidou_cases
+                     WHERE case_id = ?1
+                       AND (COALESCE(visual_url, '') != '' OR COALESCE(video_url, '') != '')",
+                    rusqlite::params![case_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .is_some();
+            promote_stage(connection, &case_id, &hops, now, has_asset)?;
         }
     }
     Ok(harvested)
@@ -1557,9 +1568,37 @@ fn harvest_episode_content(
         })
         .next()
         .unwrap_or_default();
+    // 交接卡里的《…》最可信：SOP 刚性格式，出现**一次**就够（全段"同标题两次"
+    // 的门槛是给没标签的散文本用的）。真机 BM-2604 的正文只有一次
+    // 《卧室放完床就走不动了？…》，按两次门槛就永远提不出来，名字只好挂着上一单的。
+    let mut handoff_title = String::new();
+    for row in hops.iter().rev() {
+        let blob = hop_blob(row);
+        if !blob.contains("【交接卡") {
+            continue;
+        }
+        for (label, body) in label_segments(&blob) {
+            if !label.starts_with("交接卡") {
+                continue;
+            }
+            if let Some(found) = book_titles(&body)
+                .into_iter()
+                .find(|t| t.trim().chars().count() >= 6)
+            {
+                handoff_title = found.trim().to_owned();
+                break;
+            }
+        }
+        if !handoff_title.is_empty() {
+            break;
+        }
+    }
     let formal_title = {
-        let raw = if formal_title.is_empty() {
+        // 权威度：【正式标题】标签 > 交接卡《》 > 全段重复两次的《》 > 旧值。
+        let raw = if !labelled_title.is_empty() {
             labelled_title
+        } else if !handoff_title.is_empty() {
+            handoff_title
         } else {
             formal_title
         };
@@ -1773,11 +1812,11 @@ fn promote_stage(
     case_id: &str,
     hops: &[&SessionHarvestRow],
     now_ms: i64,
+    has_asset: bool,
 ) -> rusqlite::Result<()> {
-    // 玉衡/开阳真在这一段里跑过 = 已经进视听并行（最硬的证据，比话术可靠）。
-    let production_star = hops
-        .iter()
-        .any(|row| matches!(row.1.as_deref(), Some("yuheng") | Some("kaiyang")));
+    // 判据只用**文本证据**。曾经用「段里有玉衡/开阳跳」当最硬证据——2026-10-20
+    // 02:13 实测它把新单推进了视听并行：玉衡那一跳是上一单的，跳里一个字都没有
+    // （只有 exec），按"跟随上一归属"被算到了新单头上。星跳不等于案，文本才等于案。
     let mut target = 0u8;
     for row in hops {
         let blob = hop_blob(row);
@@ -1805,9 +1844,6 @@ fn promote_stage(
             target = target.max(3);
         }
     }
-    if production_star {
-        target = target.max(5);
-    }
     let next = match target {
         5 => "07_视听并行",
         4 => "06_二审",
@@ -1823,6 +1859,16 @@ fn promote_stage(
         .optional()?
         .unwrap_or_default();
     if stage_step(&current) >= stage_step(next) {
+        // 证据回落：账本里停在「07_视听并行」、可 visual/video 两个槽都是空的，
+        // 说明它从来没真的出过图——那是被别的案的玉衡跳推上去的（真机 02:13）。
+        // 只退这一种，且必须 next 比 07 低，其余情况维持"只进不退"。
+        if current == "07_视听并行" && next != "07_视听并行" && !has_asset {
+            connection.execute(
+                "UPDATE beidou_cases SET stage = ?2, updated_at_ms = ?3
+                 WHERE case_id = ?1 AND stage = ?4",
+                rusqlite::params![case_id, next, now_ms, current],
+            )?;
+        }
         return Ok(());
     }
     // `COALESCE(stage,'') = ?4`：同一批账本重复收割时不重复写（幂等）；
