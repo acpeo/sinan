@@ -1008,6 +1008,10 @@ fn harvest_one_case(
     for link in dedupe_links(links) {
         harvested += attach_link_unclaimed(connection, case_id, &link)?;
     }
+    // ⑥ 同案去重：盲填/旧版遗迹可能让一条链接占多个槽（真机 BM-2602 四槽
+    //    同链）。attach_link_unclaimed 只防"新链接重复占槽"，防不了账本里
+    //    已经躺着的旧错位——这里按 SOP 序扫一遍，重复的清后不清先。
+    dedupe_case_slots(connection, case_id)?;
     // 关单传播：看门狗关单分支的摘要明写「已关单」——案实际跑完，
     // 本地 stage 还停在 01_建档（launch 时建的初值）。窄规则：同段
     // 文本出现「已关单」或「关单完成」时推进。只进不退（关单是终态），
@@ -1277,6 +1281,41 @@ fn repair_mis_slots(
                 );
                 connection.execute(&sql, rusqlite::params![case_id, now])?;
             }
+        }
+    }
+    Ok(())
+}
+
+/// 同案去重：一条链接不许占两个槽。真机 BM-2602 的 master/review/visual/ops
+/// 四槽躺着同一条母稿链接（RPNYdT…）——旧版盲填连锁占槽的遗迹：那时候天玑
+/// 完成摘要还在 `agent:tianji:main` 里带着 URL，后来网关把群里的同源摘要改
+/// 成了截断版（「落盘 docx 到任务唯一…」），正确的二审/图文包/运营链接不在
+/// 数据里了，旧值也修不回正的。一条链接出现在多个槽，至少 N-1 个是假的——
+/// 按 CASE_LINK_SLOTS 的 SOP 产出序保留第一条，清掉其余。留空槽比留错链
+/// 诚实：UI 对空槽显示「—」，指着母稿说「这是二审报告」才是撒谎。
+/// 幂等：清完之后不再有重复，重复收割不写行。
+fn dedupe_case_slots(connection: &Connection, case_id: &str) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut seen: Vec<String> = Vec::new();
+    for slot in CASE_LINK_SLOTS {
+        let current: String = connection
+            .query_row(
+                &format!("SELECT COALESCE({slot}, '') FROM beidou_cases WHERE case_id = ?1"),
+                rusqlite::params![case_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        if current.is_empty() {
+            continue;
+        }
+        if seen.contains(&current) {
+            let sql = format!(
+                "UPDATE beidou_cases SET {slot} = '', updated_at_ms = ?2 WHERE case_id = ?1"
+            );
+            connection.execute(&sql, rusqlite::params![case_id, now])?;
+        } else {
+            seen.push(current);
         }
     }
     Ok(())
@@ -4566,6 +4605,50 @@ mod dispatch_helper_tests {
             Some("家的气场，是我一手调出来的｜100个适我主义提案"),
             "交接卡《》盖过发车卡的通用名（BM-2601 真身形态）"
         );
+    }
+
+    #[test]
+    fn dedupe_case_slots_keeps_first_and_clears_duplicates() {
+        // 真机 BM-2602 遗迹：master/review/visual/ops 四槽同一条母稿链接——
+        // 旧版盲填连锁占槽，后来网关把带 URL 的天玑摘要换成截断版，正确的
+        // 二审/图文包/运营链接不在数据里，旧值修不回正。一条链接占多个槽，
+        // 至少 N-1 个是假的：按 SOP 序留第一条，其余清空（空槽显示「—」，
+        // 比指着母稿说「这是二审报告」诚实）。
+        let db = session_run_db();
+        insert_session(
+            &db,
+            "cli:main:group:oc_dd",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7777]",
+            None,
+            1_800_000_000_000,
+        );
+        harvest_links_from_sessions(&db).expect("first");
+        db.execute(
+            "UPDATE beidou_cases SET
+                research_doc_url = 'https://www.feishu.cn/docx/AAAAresearch',
+                master_doc_url = 'https://www.feishu.cn/docx/BBBBmaster',
+                review_doc_url = 'https://www.feishu.cn/docx/BBBBmaster',
+                visual_url = 'https://www.feishu.cn/docx/BBBBmaster',
+                ops_doc_url = 'https://www.feishu.cn/docx/BBBBmaster'
+             WHERE case_id = 'BM-7777'",
+            [],
+        )
+        .expect("preset duplicated slots");
+        harvest_links_from_sessions(&db).expect("second");
+        let list = list_cases(&db, None).expect("list");
+        let row = list.iter().find(|r| r.case_id == "BM-7777").expect("case");
+        assert_eq!(
+            row.research_doc_url, "https://www.feishu.cn/docx/AAAAresearch",
+            "独占槽不动"
+        );
+        assert_eq!(
+            row.master_doc_url, "https://www.feishu.cn/docx/BBBBmaster",
+            "SOP 序最前的槽留住"
+        );
+        assert_eq!(row.review_doc_url, "", "重复槽清空");
+        assert_eq!(row.visual_url, "", "重复槽清空");
+        assert_eq!(row.ops_doc_url, "", "重复槽清空");
     }
 
     #[test]
