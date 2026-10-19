@@ -963,7 +963,7 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
                      WHERE case_id = ?1
                        AND (COALESCE(visual_url, '') != '' OR COALESCE(video_url, '') != '')",
                     rusqlite::params![case_id],
-                    |row| row.get(0),
+                    |row| row.get::<_, i64>(0),
                 )
                 .optional()?
                 .is_some();
