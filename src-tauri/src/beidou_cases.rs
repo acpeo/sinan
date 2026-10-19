@@ -721,18 +721,24 @@ fn label_segments(blob: &str) -> Vec<(String, String)> {
 /// 就换归属。真机 01:30 那段里 BM-2602 的巡检汇报和 BM-2603 的交接卡挨在一起，
 /// 不切的话 BM-2602 的玉衡跳会把 BM-2603 推到「视听并行」，BM-2602 的《》会
 /// 顶掉 BM-2603 的案名。
+/// 一跳里提到的案号（去重、保序）。只认裸 BM 编号，不认别的编号形态。
+fn hop_case_ids(row: &SessionHarvestRow) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for text in hop_texts(row) {
+        for id in extract_bm_case_ids(text) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
 fn hops_of_case<'a>(hops: &[&'a SessionHarvestRow], case_id: &str) -> Vec<&'a SessionHarvestRow> {
     let mut out: Vec<&'a SessionHarvestRow> = Vec::new();
     let mut owner: Option<String> = None;
     for row in hops {
-        let mut ids: Vec<String> = Vec::new();
-        for text in hop_texts(row) {
-            for id in extract_bm_case_ids(text) {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-        }
+        let ids = hop_case_ids(row);
         if let Some(first) = ids.into_iter().next() {
             owner = Some(first);
         }
@@ -883,93 +889,127 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
         for episode in episodes {
             let mut hops = episode;
             hops.sort_by(|a, b| a.5.unwrap_or(0).cmp(&b.5.unwrap_or(0)));
-            let Some(case_id) = episode_case_id(&hops) else {
+            let Some(anchor) = episode_case_id(&hops) else {
                 continue;
             };
-            let now = chrono::Utc::now().timestamp_millis();
-            // 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）。
-            ensure_case_row(connection, &case_id)?;
-            // 段里可能同时压着别的单（真机 01:30：BM-2603 的交接卡和 BM-2602 的
-            // 巡检汇报落在同一段 60 分钟里）。所有提炼都只吃「归属本案的跳」，
-            // 否则上一单的玉衡跳会把这一单推到视听并行、上一单的《》会顶掉这一
-            // 单的案名（BM-2603 一度挂着 BM-2602 的名字，就是这一步漏了）。
-            let case_hops = hops_of_case(&hops, &case_id);
-            let hops = if case_hops.is_empty() { hops } else { case_hops };
-            // ① 标签归槽：交接卡段名（【母稿】【二审报告】【复审报告】…）就是
-            //    语义，比按 URL 出现顺序猜槽位硬得多。标签认领直接覆盖旧值——
-            //    旧值可能是老版本盲猜塞错的（真机 BM-2601：二审报告的链接占着
-            //    「研究文档」槽，母稿槽里是 25 位截断死链，复审报告无家可归）。
-            let claims = labeled_link_claims(&hops);
-            harvested += apply_labeled_claims(connection, &case_id, &claims)?;
-            // ② 修复错槽：某槽里的链接若被别的标签认领，说明它是被 URL 顺序
-            //    瞎猜塞进来的——清掉，等标签/盲填重来。没被任何标签认领的值
-            //    不动（发车 payload、看门狗反引号 ID 填的那些有别的出处）。
-            repair_mis_slots(connection, &case_id, &claims)?;
-            // ③ 剩余链接盲填空位（SOP 产出顺序）。已经躺在任何槽里的链接不
-            //    重复占槽——二审报告的链接归了 review，就不该再以"第一个空槽"
-            //    的身份落进 research（旧版错位就是这么来的）。
-            let mut links: Vec<String> = Vec::new();
+            // 这一段里出现过的所有案号：每个都各自提炼一遍。同段里更早的案
+            // 不能因为"这一段的主角是别人"就永远不再更新（见 harvest_one_case）。
+            let mut case_ids: Vec<String> = Vec::new();
             for row in &hops {
-                for text in hop_texts(row) {
-                    links.extend(extract_feishu_links(text));
+                for id in hop_case_ids(row) {
+                    if !case_ids.contains(&id) {
+                        case_ids.push(id);
+                    }
                 }
             }
-            // 段级去重：同一链接在同段多跳里重复贴是常态（母稿链接在二审跳和
-            // 母稿跳各一次），逐跳 attach 会连锁占槽（见 dedupe_links 注释）。
-            for link in dedupe_links(links) {
-                harvested += attach_link_unclaimed(connection, &case_id, &link)?;
+            if !case_ids.contains(&anchor) {
+                case_ids.push(anchor);
             }
-            // 关单传播：看门狗关单分支的摘要明写「已关单」——案实际跑完，
-            // 本地 stage 还停在 01_建档（launch 时建的初值）。窄规则：同段
-            // 文本出现「已关单」或「关单完成」时推进。只进不退（关单是终态），
-            // 且只在有案号的段里判——不认没有案号归属的裸文本。
-            let closed_text = hops.iter().any(|row| {
-                [row.3.as_deref(), row.4.as_deref(), row.2.as_deref()]
-                    .into_iter()
-                    .flatten()
-                    .any(says_closed)
-            });
-            if closed_text {
-                connection.execute(
-                    "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
-                     WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
-                    rusqlite::params![case_id, now],
-                )?;
+            let now = chrono::Utc::now().timestamp_millis();
+            for case_id in case_ids {
+                let case_hops = hops_of_case(&hops, &case_id);
+                if case_hops.is_empty() {
+                    continue;
+                }
+                harvested += harvest_one_case(connection, &case_id, &case_hops, now)?;
             }
-            // 这一轮有案号 = 该案有活动：把活动时间推到**轮内最新一跳的结束**，
-            // 不是"此刻"。这条线被前端 15 秒一拍的账本重读反复调用，写"此刻"
-            // 等于让该案永远显示刚刚有活动、永远排在卷宗顶上。只进不退：
-            // 更旧的轮次（历史回补）不把时间倒退回去。
-            let episode_end = hops
-                .iter()
-                .filter_map(|row| row.6.or(row.5))
-                .max()
-                .unwrap_or(now);
-            connection.execute(
-                "UPDATE beidou_cases SET last_activity_ms = ?2, updated_at_ms = ?2
-                 WHERE case_id = ?1 AND COALESCE(last_activity_ms, 0) < ?2",
-                rusqlite::params![case_id, episode_end],
-            )?;
-            // ④ episode 内容提取：正式标题 / 天权判词 / 打回链 / 研究编号注 /
-            //    产出时间线，写进 content_json（深潜舱三栏的真内容，
-            //    Leo 2026-10-21 批准——那三栏原来各摆一句假话）。
-            harvest_episode_content(connection, &case_id, &hops)?;
-            // ⑤ 阶段推进（只进不退）：账本原先只有「建档」和「已关单」两个写入点，
-            //    中间六列从来没人写过，于是跑到玉衡的案在泳道上还挂着「01 建档」。
-            // 真出过图的案会有 visual/video 链接；两个都空 = 没进过并行。
-            let has_asset: bool = connection
-                .query_row(
-                    "SELECT 1 FROM beidou_cases
-                     WHERE case_id = ?1
-                       AND (COALESCE(visual_url, '') != '' OR COALESCE(video_url, '') != '')",
-                    rusqlite::params![case_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?
-                .is_some();
-            promote_stage(connection, &case_id, &hops, now, has_asset)?;
         }
     }
+    Ok(harvested)
+}
+
+/// 一个案在一段里的提炼：链接归槽 / 判词 / 标题 / 阶段 / content_json。
+/// 2026-10-20 02:40 从收割主循环里抽出来。原因：一段 60 分钟里可能压着好几
+/// 单（Leo 每十几分钟发一单，全落进同一段），而主循环以前每段只提炼"这一段
+/// 的归属案"——同段里更早的案就再也不更新，各自停在最后一次当主角的那一刻。
+/// 真机 02:34 的现场：BM-2602 被误关成已关单没人翻、BM-2603 卡在 07_视听并行
+/// 没人退，都是这个原因。
+fn harvest_one_case(
+    connection: &Connection,
+    case_id: &str,
+    hops: &[&SessionHarvestRow],
+    now: i64,
+) -> rusqlite::Result<usize> {
+    let mut harvested = 0usize;
+    // 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）。
+    ensure_case_row(connection, case_id)?;
+    // 段里可能同时压着别的单（真机 01:30：BM-2603 的交接卡和 BM-2602 的
+    // 巡检汇报落在同一段 60 分钟里）。所有提炼都只吃「归属本案的跳」，
+    // 否则上一单的玉衡跳会把这一单推到视听并行、上一单的《》会顶掉这一
+    // 单的案名（BM-2603 一度挂着 BM-2602 的名字，就是这一步漏了）。
+    // ① 标签归槽：交接卡段名（【母稿】【二审报告】【复审报告】…）就是
+    //    语义，比按 URL 出现顺序猜槽位硬得多。标签认领直接覆盖旧值——
+    //    旧值可能是老版本盲猜塞错的（真机 BM-2601：二审报告的链接占着
+    //    「研究文档」槽，母稿槽里是 25 位截断死链，复审报告无家可归）。
+    let claims = labeled_link_claims(hops);
+    harvested += apply_labeled_claims(connection, case_id, &claims)?;
+    // ② 修复错槽：某槽里的链接若被别的标签认领，说明它是被 URL 顺序
+    //    瞎猜塞进来的——清掉，等标签/盲填重来。没被任何标签认领的值
+    //    不动（发车 payload、看门狗反引号 ID 填的那些有别的出处）。
+    repair_mis_slots(connection, case_id, &claims)?;
+    // ③ 剩余链接盲填空位（SOP 产出顺序）。已经躺在任何槽里的链接不
+    //    重复占槽——二审报告的链接归了 review，就不该再以"第一个空槽"
+    //    的身份落进 research（旧版错位就是这么来的）。
+    let mut links: Vec<String> = Vec::new();
+    for row in hops {
+        for text in hop_texts(row) {
+            links.extend(extract_feishu_links(text));
+        }
+    }
+    // 段级去重：同一链接在同段多跳里重复贴是常态（母稿链接在二审跳和
+    // 母稿跳各一次），逐跳 attach 会连锁占槽（见 dedupe_links 注释）。
+    for link in dedupe_links(links) {
+        harvested += attach_link_unclaimed(connection, case_id, &link)?;
+    }
+    // 关单传播：看门狗关单分支的摘要明写「已关单」——案实际跑完，
+    // 本地 stage 还停在 01_建档（launch 时建的初值）。窄规则：同段
+    // 文本出现「已关单」或「关单完成」时推进。只进不退（关单是终态），
+    // 且只在有案号的段里判——不认没有案号归属的裸文本。
+    let closed_text = hops.iter().any(|row| {
+        [row.3.as_deref(), row.4.as_deref(), row.2.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(says_closed)
+    });
+    if closed_text {
+        connection.execute(
+            "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
+             WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
+            rusqlite::params![case_id, now],
+        )?;
+    }
+    // 这一轮有案号 = 该案有活动：把活动时间推到**轮内最新一跳的结束**，
+    // 不是"此刻"。这条线被前端 15 秒一拍的账本重读反复调用，写"此刻"
+    // 等于让该案永远显示刚刚有活动、永远排在卷宗顶上。只进不退：
+    // 更旧的轮次（历史回补）不把时间倒退回去。
+    let episode_end = hops
+        .iter()
+        .filter_map(|row| row.6.or(row.5))
+        .max()
+        .unwrap_or(now);
+    connection.execute(
+        "UPDATE beidou_cases SET last_activity_ms = ?2, updated_at_ms = ?2
+         WHERE case_id = ?1 AND COALESCE(last_activity_ms, 0) < ?2",
+        rusqlite::params![case_id, episode_end],
+    )?;
+    // ④ episode 内容提取：正式标题 / 天权判词 / 打回链 / 研究编号注 /
+    //    产出时间线，写进 content_json（深潜舱三栏的真内容，
+    //    Leo 2026-10-21 批准——那三栏原来各摆一句假话）。
+    harvest_episode_content(connection, case_id, hops)?;
+    // ⑤ 阶段推进（只进不退）：账本原先只有「建档」和「已关单」两个写入点，
+    //    中间六列从来没人写过，于是跑到玉衡的案在泳道上还挂着「01 建档」。
+    // 真出过图的案会有 visual/video 链接；两个都空 = 没进过并行。
+    let has_asset: bool = connection
+        .query_row(
+            "SELECT 1 FROM beidou_cases
+             WHERE case_id = ?1
+               AND (COALESCE(visual_url, '') != '' OR COALESCE(video_url, '') != '')",
+            rusqlite::params![case_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    promote_stage(connection, case_id, hops, now, has_asset)?;
     Ok(harvested)
 }
 
