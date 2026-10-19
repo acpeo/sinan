@@ -516,7 +516,7 @@ fn harvest_bare_case(connection: &Connection, case_id: &str, text: &str) -> rusq
         acted |= attach_link(connection, case_id, &link)? > 0;
     }
     acted |= harvest_watchdog_artifacts(connection, case_id, text)?;
-    if text.contains("已关单") || text.contains("关单完成") {
+    if says_closed(text) {
         connection.execute(
             "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
              WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
@@ -846,7 +846,7 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
                 [row.3.as_deref(), row.4.as_deref(), row.2.as_deref()]
                     .into_iter()
                     .flatten()
-                    .any(|text| text.contains("已关单") || text.contains("关单完成"))
+                    .any(|text| says_closed(text))
             });
             if closed_text {
                 connection.execute(
@@ -1403,6 +1403,30 @@ fn harvest_episode_content(
         )?;
     }
 
+    // ── 关单自愈：只看最新一条证据（历史行不参与）──
+    // 2026-10-20 01:29 真机事故：watchdog 写「阶段=玉衡出图中，非已关单」，
+    // 旧规则 contains("已关单") 命中，把还在出图的 BM-2602 关成了已关单。
+    // 关单是终态、只进不退，误关之后永远翻不回来——所以补这条窄自愈：
+    // **最新证据**明说进行中/出图中、且没有任何肯定关单话术时，退回 05_母稿，
+    // 随后的 promote_stage 会按星跳把它推回真实列。其余情况一律不动。
+    let latest_hop_blob = hops.last().map(|row| hop_blob(row)).unwrap_or_default();
+    let latest_watch_blob = watch_rows
+        .last()
+        .and_then(|row| row.1.as_deref())
+        .unwrap_or("")
+        .to_owned();
+    let inflight = latest_hop_blob.contains("进行中")
+        || latest_hop_blob.contains("出图中")
+        || latest_watch_blob.contains("进行中")
+        || latest_watch_blob.contains("出图中");
+    if inflight && !says_closed(&latest_hop_blob) && !says_closed(&latest_watch_blob) {
+        connection.execute(
+            "UPDATE beidou_cases SET stage = '05_母稿', updated_at_ms = ?2
+             WHERE case_id = ?1 AND stage IN ('08_已关单', '08_关单完成')",
+            rusqlite::params![case_id, now],
+        )?;
+    }
+
     // ── 合并旧值：同一案可能有多轮 episode（追投视频会再跑一轮），新提取为
     //    非空的标量字段赢，旧值只补新一遍没看到的部分；打回记录按时刻合并
     //    （新的替换同时刻的旧记录）；时间线按 (时刻, 内容) 去重合并后排序，
@@ -1546,6 +1570,37 @@ fn book_titles(text: &str) -> Vec<String> {
         i += 1;
     }
     out
+}
+
+/// 文本里有没有**肯定**的关单话术。
+///
+/// 2026-10-20 01:29 真机现场：watchdog 巡检写的是
+/// 「分支1 未命中：阶段=玉衡出图中，**非**已关单」——旧规则 `contains("已关单")`
+/// 直接命中，把还在出图的 BM-2602 关成了「已关单」，而且一关就贴在泳道外面
+/// （Leo 一分钟后就在看这个案）。所以否定前缀必须挡掉：非 / 未 / 不 / 没。
+fn says_closed(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    for needle in ["已关单", "关单完成"] {
+        let mut i = 0usize;
+        while i + needle.chars().count() <= chars.len() {
+            let hit = needle
+                .chars()
+                .enumerate()
+                .all(|(k, c)| chars[i + k] == c);
+            if hit {
+                // 往前看 3 个字符，出现否定词就当这句在说"还没关单"。
+                let start = i.saturating_sub(3);
+                let negated = chars[start..i]
+                    .iter()
+                    .any(|c| matches!(c, '非' | '未' | '不' | '没'));
+                if !negated {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+    }
+    false
 }
 
 /// 阶段 → 泳道列号（0..=6）。与前端 cockpit.js 的 STAGE_TO_STEP 同一套语义
@@ -3029,6 +3084,22 @@ mod dispatch_helper_tests {
         let again = list_cases(&db, None).expect("list");
         assert_eq!(again[0].last_activity_ms, activity, "活动时间不许被重复读顶到此刻");
         assert_eq!(again[0].updated_at_ms, updated, "updated_at_ms 不许被重复读刷新");
+    }
+
+    #[test]
+    fn closed_wording_ignores_negation() {
+        // 2026-10-20 01:29 真机事故：巡检写「阶段=玉衡出图中，非已关单」，
+        // contains("已关单") 命中，把在跑的案关了单。
+        assert!(says_closed("BM-2601｜已关单：reset 6 个群会话"));
+        assert!(says_closed("关单完成，归档"));
+        assert!(!says_closed("阶段=玉衡出图中，非已关单"), "非已关单不是关单");
+        assert!(!says_closed("尚未关单"), "尚未关单不是关单");
+        assert!(!says_closed("还没关单，继续跑"), "还没关单不是关单");
+        assert!(
+            says_closed("分支1 未命中：阶段=玉衡出图中，非已关单。分支5 已关单，已归档"),
+            "同一段里只要有一句肯定关单就算"
+        );
+        assert!(!says_closed("玉衡出图中"));
     }
 
     #[test]
