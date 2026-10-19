@@ -873,6 +873,9 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
             //    产出时间线，写进 content_json（深潜舱三栏的真内容，
             //    Leo 2026-10-21 批准——那三栏原来各摆一句假话）。
             harvest_episode_content(connection, &case_id, &hops)?;
+            // ⑤ 阶段推进（只进不退）：账本原先只有「建档」和「已关单」两个写入点，
+            //    中间六列从来没人写过，于是跑到玉衡的案在泳道上还挂着「01 建档」。
+            promote_stage(connection, &case_id, &hops, now)?;
         }
     }
     Ok(harvested)
@@ -1225,14 +1228,49 @@ fn harvest_episode_content(
         }
     }
 
-    // ── 天权判词 + 打回记录：末次【天权二审结论】赢（打回在前、复审 PASS 在后）──
+    // ── 候选标题 + 五轴总分：定题卡的「候选N 名字 分数」──
+    let mut candidates: Vec<(String, u32, bool)> = Vec::new();
+    for row in hops {
+        for (name, score, champion) in extract_candidates(&hop_blob(row)) {
+            // 用下标而不是 &mut：get_mut 的 None 分支要 push，同一个 map 上
+            // 借用会打架（NLL 不覆盖这个形状）。
+            match candidates.iter().position(|(t, _, _)| t == &name) {
+                Some(idx) => {
+                    // 同一候选在不同跳里分数一样；真不一样时取高分。
+                    if score > candidates[idx].1 {
+                        candidates[idx].1 = score;
+                    }
+                    candidates[idx].2 |= champion;
+                }
+                None => candidates.push((name, score, champion)),
+            }
+        }
+    }
+    // 没有显式 Top 1 标记时，用已定的正式标题反认：谁是钦定标题里出现的那一个。
+    if !formal_title.is_empty() && !candidates.iter().any(|(_, _, c)| *c) {
+        if let Some(entry) = candidates.iter_mut().find(|(t, _, _)| formal_title.contains(t.as_str())) {
+            entry.2 = true;
+        }
+    }
+
+    // ── 天权判词 + 打回记录：末次判词赢（打回在前、复审 PASS 在后）──
+    // 标签不止一种写法：2026-10-20 真机 BM-2602 天权写的是
+    // 「【审查结论】初审 PASS。…」，而这里原来只认「【天权二审结论】」——
+    // 结果跑完整轮，深潜舱中栏一句判词都没有（Leo 截图："怎么还是只显示个开头"）。
     let mut verdict_text = String::new();
     let mut verdict_by = String::new();
     let mut strikes: Vec<serde_json::Value> = Vec::new();
     for row in hops {
         let blob = hop_blob(row);
         for (label, body) in label_segments(&blob) {
-            if !label.contains("天权二审结论") {
+            // 二审 / 复审 / 初审 / 链路异常通报都算判词位；标签必须带「结论」或
+            // 「裁定」这种判词词根，别把随便一个「审查」小标题当判词。
+            let is_verdict_slot = label.contains("天权二审结论")
+                || label.contains("审查结论")
+                || label.contains("初审结论")
+                || label.contains("复审结论")
+                || label.contains("天权结论");
+            if !is_verdict_slot {
                 continue;
             }
             let line = body
@@ -1245,14 +1283,18 @@ fn harvest_episode_content(
                 continue;
             }
             let at = hop_verdict_ms(row);
-            // 同一跳里贴了【复审报告】= 这是复审判词；只有【二审报告】= 二审判词
+            // 同一跳里贴了【复审报告】= 这是复审判词；只有【二审报告】= 二审判词；
+            // 明写「初审」= 门禁一的判词。
             let is_recheck = blob.contains("复审报告");
+            let round = if label.contains("初审") || line.contains("初审") {
+                "初审"
+            } else if is_recheck {
+                "复审"
+            } else {
+                "二审"
+            };
             verdict_text = line.clone();
-            verdict_by = format!(
-                "天权 · {}判词 · {}",
-                if is_recheck { "复审" } else { "二审" },
-                fmt_ts(at)
-            );
+            verdict_by = format!("天权 · {round}判词 · {}", fmt_ts(at));
             if line.contains("打回") {
                 let (level, sev) = strike_level_and_sev(&line);
                 let detail = strike_elaboration(&watch_rows);
@@ -1432,6 +1474,23 @@ fn harvest_episode_content(
     if !formal_title.is_empty() {
         content.insert("formalTitle".into(), Value::String(formal_title));
     }
+    let mut candidate_rows: Vec<Value> = candidates
+        .iter()
+        .map(|(title, score, champion)| {
+            serde_json::json!({ "title": title, "score": score, "champion": champion })
+        })
+        .collect();
+    if candidate_rows.is_empty() {
+        // 这一轮没解析出候选：沿用旧值（同一案换段重跑时，上一段可能解析到过）。
+        candidate_rows = old
+            .get("candidates")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+    }
+    if !candidate_rows.is_empty() {
+        content.insert("candidates".into(), Value::Array(candidate_rows));
+    }
     if !verdict_text.is_empty() {
         content.insert("verdictText".into(), Value::String(verdict_text));
     }
@@ -1485,6 +1544,188 @@ fn book_titles(text: &str) -> Vec<String> {
             continue;
         }
         i += 1;
+    }
+    out
+}
+
+/// 阶段 → 泳道列号（0..=6）。与前端 cockpit.js 的 STAGE_TO_STEP 同一套语义
+/// 顺序：建档 0、研究 1、定题 2、母稿 3、二审 4、视听并行 5、分发关单 6。
+/// **不能按字符串前缀数字比**：真机库里的编号本身就是错位的
+/// （05_母稿 / 06_二审 / 07_关单 / 08_已关单 对应列 3/4/6/-）。
+fn stage_step(stage: &str) -> u8 {
+    let body: String = stage
+        .trim()
+        .trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '_' | '-' | '.' | ' '))
+        .to_owned();
+    if body.contains("建档") || body.contains("接单") {
+        return 0;
+    }
+    if body.contains("二审") || body.contains("审稿") || body.contains("冻结") {
+        return 4;
+    }
+    if body.contains("审题") || body.contains("定题") || body.contains("五轴") {
+        return 2;
+    }
+    if body.contains("研究") || body.contains("选题") {
+        return 1;
+    }
+    if body.contains("母稿") || body.contains("创作") {
+        return 3;
+    }
+    if body.contains("视觉")
+        || body.contains("配图")
+        || body.contains("视频")
+        || body.contains("生图")
+        || body.contains("并行")
+    {
+        return 5;
+    }
+    if body.contains("分发") || body.contains("运营") || body.contains("关单") {
+        return 6;
+    }
+    0
+}
+
+/// 阶段推进（只进不退）。账本原先只有「建档」和「已关单」两个写入点，中间六列
+/// 从来没人写过——飞书里跑到玉衡的案，泳道还挂在「01 建档」。Leo 2026-10-20
+/// 截图实锤："我 BM-2602 那轮都跑完了，app 怎么还是只显示个开头"。
+///
+/// 只用接力文本里的硬证据往后推，推不动就不推：
+///   · 有玉衡/开阳跳，或文本写到视听并行/图文包/出图 → 07_视听并行
+///   · 写「二审 PASS」「复审 PASS」或「天权阶段已全部完成」 → 06_二审
+///   · 写「母稿…完成/收尾/落盘/定稿/FROZEN」 → 05_母稿
+/// 关单仍由原来的话术规则推 08_已关单，这里不会把它降级。
+fn promote_stage(
+    connection: &Connection,
+    case_id: &str,
+    hops: &[&SessionHarvestRow],
+    now_ms: i64,
+) -> rusqlite::Result<()> {
+    // 玉衡/开阳真在这一段里跑过 = 已经进视听并行（最硬的证据，比话术可靠）。
+    let production_star = hops
+        .iter()
+        .any(|row| matches!(row.1.as_deref(), Some("yuheng") | Some("kaiyang")));
+    let mut target = 0u8;
+    for row in hops {
+        let blob = hop_blob(row);
+        if blob.contains("视听并行") || blob.contains("图文包") || blob.contains("出图") {
+            target = target.max(5);
+        }
+        if (blob.contains("二审") && blob.contains("PASS"))
+            || (blob.contains("复审") && blob.contains("PASS"))
+            || blob.contains("天权阶段已全部完成")
+        {
+            target = target.max(4);
+        }
+        if blob.contains("母稿")
+            && (blob.contains("已完成")
+                || blob.contains("已收尾")
+                || blob.contains("落盘")
+                || blob.contains("定稿")
+                || blob.contains("FROZEN"))
+        {
+            target = target.max(3);
+        }
+    }
+    if production_star {
+        target = target.max(5);
+    }
+    let next = match target {
+        5 => "07_视听并行",
+        4 => "06_二审",
+        3 => "05_母稿",
+        _ => return Ok(()),
+    };
+    let current: String = connection
+        .query_row(
+            "SELECT COALESCE(stage, '') FROM beidou_cases WHERE case_id = ?1",
+            rusqlite::params![case_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    if stage_step(&current) >= stage_step(next) {
+        return Ok(());
+    }
+    // `COALESCE(stage,'') = ?4`：同一批账本重复收割时不重复写（幂等）；
+    // 老库 stage 可能是 NULL，直接 `stage = ?4` 会漏写。
+    connection.execute(
+        "UPDATE beidou_cases SET stage = ?2, updated_at_ms = ?3
+         WHERE case_id = ?1 AND COALESCE(stage, '') = ?4",
+        rusqlite::params![case_id, next, now_ms, current],
+    )?;
+    Ok(())
+}
+
+/// 候选标题与五轴总分（天权定题卡）。
+///
+/// 2026-10-20 真机 BM-2602 天权写的是：
+///   「4 个候选打分：候选1 家务动线 455（Top 1）、候选2 五行色系 418、
+///     候选3 阳台禅意 404、候选4 适宠化 393，全部五轴 ≥60」
+/// 账本此前**根本没有候选这条线**，所以深潜舱左栏「定题结论」永远是那句
+/// 「候选标题与五轴定题分都存在飞书主表」的空态——数据就在眼前却没人取。
+///
+/// 只在「候选N + 名字 + 三位数总分」三件齐时收：另一种写法
+/// 「五轴评分 Top 1：候选1 = 455」只有序号没名字，收进来就是一行对不上标题
+/// 的分数，比不收更糟。名字取 2..=12 个非数字非标点字符。
+fn extract_candidates(text: &str) -> Vec<(String, u32, bool)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<(String, u32, bool)> = Vec::new();
+    let mut i = 0usize;
+    while i + 2 < chars.len() {
+        if !(chars[i] == '候' && chars[i + 1] == '选') {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 2;
+        let num_start = j;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == num_start {
+            i += 2; // 「候选」后面不跟序号：不是打分行
+            continue;
+        }
+        while j < chars.len()
+            && (chars[j].is_whitespace() || chars[j] == '=' || chars[j] == '：' || chars[j] == ':')
+        {
+            j += 1;
+        }
+        let mut name = String::new();
+        while j < chars.len() && name.chars().count() < 12 {
+            let ch = chars[j];
+            if ch.is_ascii_digit()
+                || ch.is_whitespace()
+                || matches!(ch, '（' | '(' | '、' | '，' | ',' | '。' | '.' | '；' | ';' | '|' | '｜')
+            {
+                break;
+            }
+            name.push(ch);
+            j += 1;
+        }
+        if name.chars().count() < 2 {
+            i += 2;
+            continue;
+        }
+        while j < chars.len() && (chars[j].is_whitespace() || chars[j] == '=') {
+            j += 1;
+        }
+        let score_start = j;
+        let mut score = 0u32;
+        while j < chars.len() && chars[j].is_ascii_digit() && j - score_start < 4 {
+            score = score * 10 + chars[j].to_digit(10).unwrap_or(0);
+            j += 1;
+        }
+        if j == score_start || !(100..=999).contains(&score) {
+            i += 2; // 没分数就是没打分，别硬凑
+            continue;
+        }
+        let tail: String = chars[j..(j + 10).min(chars.len())].iter().collect();
+        let champion = tail.to_ascii_lowercase().contains("top 1");
+        if !out.iter().any(|(t, _, _)| t == &name) {
+            out.push((name, score, champion));
+        }
+        i = j;
     }
     out
 }
@@ -2788,6 +3029,68 @@ mod dispatch_helper_tests {
         let again = list_cases(&db, None).expect("list");
         assert_eq!(again[0].last_activity_ms, activity, "活动时间不许被重复读顶到此刻");
         assert_eq!(again[0].updated_at_ms, updated, "updated_at_ms 不许被重复读刷新");
+    }
+
+    #[test]
+    fn harvest_promotes_stage_and_reads_candidates() {
+        // 真机 BM-2602 形态（Leo 2026-10-20 截图：跑到玉衡了泳道还写「01 建档」）：
+        // 天权写「【审查结论】初审 PASS」+ 候选打分，天玑母稿收尾，玉衡进场出图。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianquan",
+            "初审 [CASE_ID: BM-9001]",
+            Some(
+                "【审查结论】初审 PASS。五轴竞优自动定题完成，无一票否决项。\n\n\
+                 4 个候选打分：候选1 家务动线 455（Top 1）、候选2 五行色系 418、\
+                 候选3 阳台禅意 404，全部五轴 ≥60。",
+            ),
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianji",
+            "母稿",
+            Some("BM-9001 母稿环节已完成收尾，落盘 docx。"),
+            base + 10 * min,
+        );
+        harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list.len(), 1);
+        let row = &list[0];
+        assert_eq!(row.case_id, "BM-9001");
+        assert_eq!(row.stage, "05_母稿", "母稿收尾要推进阶段，不能停在 01_建档");
+        let content: serde_json::Value =
+            serde_json::from_str(&row.content_json).expect("content json");
+        assert!(
+            content["verdictText"]
+                .as_str()
+                .unwrap_or("")
+                .contains("初审 PASS"),
+            "【审查结论】也是判词位"
+        );
+        let cands = content["candidates"].as_array().expect("candidates");
+        assert_eq!(cands.len(), 3, "只收「候选N + 名字 + 分数」三件齐的行");
+        assert_eq!(cands[0]["title"], "家务动线");
+        assert_eq!(cands[0]["score"], 455);
+        assert_eq!(cands[0]["champion"], true, "（Top 1）就是钦定");
+        assert_eq!(cands[1]["champion"], false);
+        // 玉衡进场 = 视听并行（星跳比话术硬）。
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "yuheng",
+            "出图中",
+            None,
+            base + 20 * min,
+        );
+        harvest_links_from_sessions(&db).expect("harvest again");
+        let list = list_cases(&db, None).expect("list");
+        assert_eq!(list[0].stage, "07_视听并行");
     }
 
     fn gateway_task_db() -> Connection {

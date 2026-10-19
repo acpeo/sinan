@@ -593,6 +593,9 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
                     <div className={`pl-cand${x.champion ? " is-champion" : ""}`} key={i}>
                       <span className="pl-cand-no">{i + 1}</span>
                       <span className="pl-cand-title">{x.title}</span>
+                      {/* 五轴总分：天权定题卡写的是「候选1 家务动线 455」，
+                          账本提出来就摆在这儿；提不到就不摆分。 */}
+                      {x.score ? <span className="cp-mono pl-cand-score">{x.score}</span> : null}
                       {x.champion ? <span className="pl-badge pl-badge--bronze">🏆 钦定</span> : null}
                     </div>
                   ))}

@@ -10056,6 +10056,7 @@ button.pl-badge { cursor: pointer; }
 .pl-cand.is-champion { border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); background: var(--cp-bronze-bg); }
 .pl-cand.is-champion .pl-cand-no { background: var(--cp-bronze); border-color: var(--cp-bronze); color: #fff; }
 .pl-cand.is-champion .pl-cand-title { color: var(--cp-ink); font-weight: 600; }
+.pl-cand-score { flex: none; font-size: 10px; color: var(--cp-meta); font-variant-numeric: tabular-nums; }
 
 /* 自愈终端 */
 .pl-term { margin-top: 5px; padding: 10px 11px; border-radius: 10px; background: var(--cp-slot); border: 1px solid var(--cp-hair); font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-size: 10.5px; line-height: 1.75; color: var(--cp-body); white-space: pre-wrap; word-break: break-all; }
