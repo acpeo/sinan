@@ -9719,6 +9719,8 @@ button.pl-badge { cursor: pointer; }
 .pl-loop { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 3; }
 .pl-loop-path { fill: none; stroke: var(--cp-cinnabar); stroke-width: 1.6; stroke-dasharray: 5 4; stroke-linecap: round; opacity: 0.85; }
 .pl-loop-dot { fill: var(--cp-cinnabar); }
+/* 落点箭头：7.6×7.2 是量出来的——1× 屏幕上 5px 的三角形读不出方向。 */
+.pl-loop-head { fill: var(--cp-cinnabar); }
 /* 「🔁 打回重审 n/3」标签已按 Leo 2026-10-16 第 ④ 条口径删除
    （回环只留动线、零文字）。打回次数去深潜舱「打回链」看。 */
 .pl-colhead-row {
@@ -9756,10 +9758,9 @@ button.pl-badge { cursor: pointer; }
 .pl-colhead-role { font-size: 9.5px; color: var(--cp-meta); }
 .pl-colhead-model { font-size: 9px; color: var(--cp-meta); opacity: 0.85; }
 
-/* 有回环的行多留 30px 底部：弧线向下扎 + 标签都占这块，
-   不挤到下一行头上（Leo 2026-10-15：标签要贴目标格，弧线就得往下走）。 */
+/* 有回环的行**不再多留底高**：v20.2 的 S 动线整条待在两张卡的侧面空档里
+   （早先是往下绕的 U + 标签，每行多留 34px；标签已删、形状已换，那 34px 一起收掉）。 */
 .pl-lane-row { padding: 4px 0; border-bottom: 1px dashed var(--cp-hair); }
-.pl-lane-row:has(.pl-loop) { padding-bottom: 34px; }
 .pl-lane-row.is-on { background: color-mix(in srgb, var(--cp-bronze) 4%, transparent); }
 /* 账本为空时的占位行：虚线方块，保持"矩阵"的骨架，不摆假数据 */
 /* 空行只保留行高与发丝分隔线：画虚线方块太吵（2026-10-17 试过一版，满天格子），

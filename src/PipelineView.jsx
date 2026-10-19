@@ -264,19 +264,27 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
         const rr = row.getBoundingClientRect();
         const a = from.getBoundingClientRect();
         const b = to.getBoundingClientRect();
-        // 弧线走位：从审稿格底部中点向下扎，绕到创作格正下方，再向上收进创作格底缘。
-        // 早先的弧线在两点之间拉一条大 C，标签被放到起点格下方——
-        // 看着像"审稿中"自己被打回，而不是"回创作中"（Leo 2026-10-15 问的）。
-        const x1 = a.left - rr.left + a.width / 2;
-        const y1 = a.top - rr.top + a.height;
-        const x2 = b.left - rr.left + b.width / 2;
-        const y2 = b.top - rr.top + b.height;
-        const dip = Math.max(26, y1 - y2 + 22);
+        // v20.2 定稿形状（Leo 2026-10-16 第 ④ 条：回环只留一条 S 动线、零文字）：
+        // 锚在两张卡**相对的两条侧边**（离上缘 12px / 离下缘 14px，避开 10px 圆角），
+        // 跨度正好是格子之间那条 32px 空档（gap 6 + 格子 padding-left 26），
+        // 整条待在行高里，不再往下绕、也就不需要额外留底高。
+        // 早先那版是"从审稿格底部中点向下扎、绕到创作格正下方"的 U，
+        // 每行要多留 34px 空带，标签删掉之后那条空带就只剩一条悬着的弧。
+        const x1 = a.left - rr.left;              // 发起：审稿格左缘
+        const y1 = a.top - rr.top + 12;
+        const x2 = b.right - rr.left;             // 落点：创作格右缘
+        const y2 = b.bottom - rr.top - 14;
+        const dx = (x1 - x2) * 0.46;              // smooth-step：两端切线都水平
+        const TAIL = 3.4;                         // 线尾回缩，别让圆头磨钝箭尖
         const path = svg.querySelector(".pl-loop-path");
-        path.setAttribute("d", `M ${x1} ${y1} C ${x1} ${y1 + dip}, ${x2} ${y2 + dip}, ${x2} ${y2 - 3}`);
+        path.setAttribute("d", `M ${x1} ${y1} C ${x1 - dx} ${y1}, ${x2 + dx} ${y2}, ${x2 + TAIL} ${y2}`);
         const dot = svg.querySelector(".pl-loop-dot");
-        dot.setAttribute("cx", x2);
-        dot.setAttribute("cy", y2 - 3);
+        dot.setAttribute("cx", x1);
+        dot.setAttribute("cy", y1);
+        const head = svg.querySelector(".pl-loop-head");
+        const HL = 7.6;
+        const HW = 3.6;
+        head.setAttribute("d", `M ${x2 + HL} ${y2 - HW} L ${x2 + HL} ${y2 + HW} L ${x2} ${y2} Z`);
         svg.setAttribute("viewBox", `0 0 ${rr.width} ${rr.height}`);
       });
     };
@@ -445,7 +453,8 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             {item.secondStrikes > 0 ? (
               <svg className="pl-loop" aria-hidden="true">
                 <path d="M 0 0" className="pl-loop-path" />
-                <circle className="pl-loop-dot" r="3.5" />
+                <circle className="pl-loop-dot" r="2" />
+                <path d="M 0 0" className="pl-loop-head" />
               </svg>
             ) : null}
           </div>
