@@ -3272,13 +3272,21 @@ function buildTasksFeedModel({ rows, episodes, now }) {
     // 此前这里把 tone 归一成 failed/done，还在跑的轮次被硬写成"done"——
     // 星盘拿到的永远是收班态，呼吸圈与绿点从来没机会亮。现在按原状态分色：
     // 进行中=绿（活的事）、失败=红、其余=收班蓝。
+    // 轮次标题取**轮内最早一条带有派活原话**的跳（Leo 自己在群里打的那句），
+    // 不是末跳：末跳多是收尾/交接卡，title 列是空的，卡片会一律叫「天璇 的派活」
+    // ——2026-10-20 实测他认不出那张卡就是自己刚派的活。
+    const speaking = ep.runs.find((run) => {
+      const text = cleanSessionTitle(run?.title ?? "");
+      return text && !/^(ou|oc|om)_[0-9a-f]{16,}$/i.test(text.trim());
+    });
+    const episodeTitle = (speaking ? hopTitleOf(speaking) : "") || hopTitleOf(latest);
     cards.push({
       key, type: "episode", episode: ep, agentId: epAgent,
       agent: starNameOf(epAgent), kind: "接力",
       at,
       tone: tone === "failed" ? "fail" : tone === "done" ? "done" : "live",
       color: tone === "failed" ? DIAL_TONE.fail : tone === "done" ? DIAL_TONE.done : DIAL_TONE.live,
-      title: hopTitleOf(latest) || `${starNameOf(epAgent)} 的派活`,
+      title: episodeTitle || `${starNameOf(epAgent)} 的派活`,
       slug: false,
       summary, cjk: cjkRatioOf(summary) > 0.3,
       status: latest.status, error: latest.error, decayed: false,
@@ -4867,6 +4875,18 @@ export function App() {
       cancelled = true;
     };
   }, [beidouCasesVersion]);
+  // 案账本定时重读：此前它只在挂载和「发车/追投」后读一次，而读取顺带跑的
+  // 收割线（harvest_links_from_sessions/tasks）是**飞书里跑出来的案唯一入口**——
+  // 不重读就永远捞不到。2026-10-20 00:05 Leo 在群里派活，BM-2602 在会话里真的
+  // 跑起来了（session_run 里 10 跳、交接卡写着 BM-2602），app 里却一点动静没有，
+  // 就是因为账本那次读取停在 00:02。15 秒一拍，成本是两条几十行级的 SQL 扫描，
+  // 没变化时不写库（收割线自带"内容没变不 UPDATE"）。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setBeidouCasesVersion((v) => v + 1);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
   // 顶栏右侧两枚 chip 的数（外壳统一后从 PipelineTopBar 挪上来）。账本只写真数据：
   // 在途 = 没关单的案；待你裁决 = 打回满 3 次的案。
   const cockpitPending = beidouCases.filter((item) => (item.secondStrikes ?? 0) >= 3).length;
