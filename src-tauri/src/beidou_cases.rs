@@ -4028,7 +4028,9 @@ mod dispatch_helper_tests {
             "cli:main:group:oc_beidou",
             "watchdog",
             "巡检简报",
-            Some("BM-2601｜已关单：reset 6 个群会话、删除 watchdog job"),
+            // 案号必须跟第一跳一致：这条线现在按案号切跳，写成别的案号
+            // 就等于"用别人的关单话术关这一单"（串案），不该再算数。
+            Some("BM-9997｜已关单：reset 6 个群会话、删除 watchdog job"),
             base + 10 * 60_000,
         );
         harvest_links_from_sessions(&db).expect("harvest");
