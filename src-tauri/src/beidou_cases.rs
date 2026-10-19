@@ -1790,7 +1790,16 @@ fn says_closed(text: &str) -> bool {
                 let negated = chars[start..i]
                     .iter()
                     .any(|c| matches!(c, '非' | '未' | '不' | '没'));
-                if !negated {
+                // 还要往后看 6 个字符：巡检的五分支是「分支1（已关单）未命中」
+                // 这种写法——否定词在**后面**。2026-10-20 01:48 真机就是靠这句
+                // 把还在玉衡出图的 BM-2602 关成了已关单，前面只判"往前看"漏了。
+                let tail_end = (i + needle.chars().count() + 6).min(chars.len());
+                let tail: String = chars[i..tail_end].iter().collect();
+                let refuted = tail.contains("未命中")
+                    || tail.contains("不命中")
+                    || tail.contains("未关单")
+                    || tail.contains("否");
+                if !negated && !refuted {
                     return true;
                 }
             }
@@ -3413,6 +3422,11 @@ mod dispatch_helper_tests {
         assert!(says_closed("关单完成，归档"));
         assert!(!says_closed("阶段=玉衡出图中，非已关单"), "非已关单不是关单");
         assert!(!says_closed("尚未关单"), "尚未关单不是关单");
+        assert!(
+            !says_closed("分支1（已关单）未命中"),
+            "五分支里的判断句不是关单（否定词在后面）"
+        );
+        assert!(!says_closed("分支 1 关单：阶段非「已关单」→ 不命中"));
         assert!(!says_closed("还没关单，继续跑"), "还没关单不是关单");
         assert!(
             says_closed("分支1 未命中：阶段=玉衡出图中，非已关单。分支5 已关单，已归档"),
