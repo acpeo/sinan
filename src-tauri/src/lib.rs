@@ -839,8 +839,14 @@ fn beidou_auto_heal(
     params: AutoHealParams,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    if beidou_dispatch::is_protected_session(&params.session_key) {
-        return Err(format!("会话 {} 受保护，不能被重置", params.session_key));
+    // session_key 是**可选守卫**，不是重置目标：本命令从头到尾不 reset
+    // （清的时机归北斗 watchdog，铁律三只管"要清就 reset 别 compact"），
+    // 真正的发送目标由下面的 send_wakeup_to_star 按 agent_id=tianji + ":group:"
+    // 自己解析。所以传空 = "调用方不知道目标群键"，不该被当成"要重置 main/cron"
+    // 而直接拒掉（is_protected_session("") 返回 true）；只有真传了受保护的键才拦。
+    let guard = params.session_key.trim();
+    if !guard.is_empty() && beidou_dispatch::is_protected_session(guard) {
+        return Err(format!("会话 {guard} 受保护，不能被重置"));
     }
     // 铁律三之一：自愈只走 reset。compact 会留着旧的错误判词上下文，
     // 天玑重修时还在照着错的结论写。

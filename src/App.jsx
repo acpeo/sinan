@@ -4004,6 +4004,7 @@ function TasksSection({
   onStatus,
   onLaunch,
   onAppendVideo,
+  onAutoHeal,
   launchBusy,
   toast,
   cases,
@@ -4350,6 +4351,7 @@ function TasksSection({
           busy={busy}
           onLaunch={onLaunch}
           onAppendVideo={onAppendVideo}
+          onAutoHeal={onAutoHeal}
           launchBusy={launchBusy}
           toast={toast}
           cases={cases}
@@ -4432,6 +4434,7 @@ function PipelineTelemetry({
   busy,
   onLaunch,
   onAppendVideo,
+  onAutoHeal,
   launchBusy,
   toast,
   cases,
@@ -4534,6 +4537,7 @@ function PipelineTelemetry({
         onRetryConn={onRefresh}
         onLaunch={onLaunch}
         onAppendVideo={onAppendVideo}
+        onAutoHeal={onAutoHeal}
         busy={launchBusy}
         tabs={tabs}
         activeTab={activeTab}
@@ -4833,10 +4837,12 @@ export function App() {
     [gateways],
   );
   const handleBeidouAutoHeal = useCallback(
-    async ({ caseId, sessionKey }) => {
+    async ({ caseId }) => {
       setBeidouBusy(true);
       try {
-        const result = await beidouAutoHeal(caseId, sessionKey, gateways);
+        // 不传 session_key：3/3 自愈从来不 reset（清时机归 watchdog），
+        // 后端按 agent_id=tianji 自己解析群会话键去发。
+        const result = await beidouAutoHeal(caseId, "", gateways);
         setBeidouToast(
           result?.sent
             ? { tone: "ok", text: `${caseId} 已派局部重修给天玑` }
@@ -4980,6 +4986,7 @@ export function App() {
             onStatus={setConsoleStatus}
             onLaunch={handleBeidouLaunch}
             onAppendVideo={handleBeidouAppendVideo}
+            onAutoHeal={handleBeidouAutoHeal}
             launchBusy={beidouBusy}
             toast={beidouToast}
             cases={beidouCases}

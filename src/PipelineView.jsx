@@ -488,6 +488,10 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
 
 /* ═══════════ 单案深潜舱 ═══════════ */
 function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
+  // 自愈是真会发指令出去，所以两步确认：第一下上膛、第二下才发。换案自动收回
+  // （用 ref 记住上膛的是哪一案，不额外跑 effect，也不多一次渲染）。
+  const [armedHeal, setArmedHeal] = useState(false);
+  const armedHealCaseRef = useRef(null);
   if (!caseItem) {
     // 两种「没内容」不是一回事：账本真空 vs 有案但没选中。
     // 之前一律写「本地账本还没有案件」—— 有案没选中时这句话就是假话。
@@ -513,6 +517,8 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
   // （frozen && secondStrikes === 0）让这种案显示「母稿未冻结」，
   // 还憋回追投按钮（真机截图实锤，Leo 2026-10-21 批的 mock21 同口径）。
   const frozen = Boolean(c.masterFrozen);
+  // 换了案就把"上膛"状态收回，别让上一案的确认态带到下一案头上。
+  const armedHealForThisCase = armedHeal && armedHealCaseRef.current === c.caseId;
   // 已关单的案不亮 strip：strip 说的是「这一步正在办」，关完的案没有正在办的步
   // （在跑的是别的案的摇光）。Leo 2026-10-16 第 3 问前半句问的就是这个歧义。
   const liveWho = caseClosed(c)
@@ -686,14 +692,35 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
           </div>
           {c.secondStrikes >= 3 ? (
             <div>
-              <div className="pl-kicker">💻 天枢自愈终端（3/3 熔断）</div>
-              <div className="pl-term">
-                <span className="pl-term-prompt">$</span> openclaw reset --session agent:tianji:feishu:group:oc_b15…<br />
-                <span className="pl-term-ok">  ✓ session cleared (ctx flushed)</span><br />
-                <span className="pl-term-prompt">$</span> sessions_send --to tianji --profile tianji --as bot<br />
-                <span className="pl-term-warn">  ⚠ 保留母稿骨架，仅重写被打回段落</span><br />
-                <span className="pl-term-ok">  ✓ dispatched (no human approval required)</span>
-              </div>
+              <div className="pl-kicker">♻️ 3/3 已熔断 · 派局部重修</div>
+              {/* 这段原来是一个写死的假终端：摆着 `openclaw reset …` 和
+                  `✓ session cleared` / `✓ dispatched`，但没绑任何动作，也没接
+                  beidouAutoHeal —— 3/3 的案会看到"已重置并派发"，其实什么都没发生
+                  （Leo 2026-10-19 盘账抓出，违反"不摆假数据"）。现在接真的是：
+                  后端只发一条"仅重写被打回段落、母稿骨架不动"的指令给天玑，
+                  会话重置的时机仍归 watchdog，这里不代劳。 */}
+              <p className="pl-note">
+                按 SOP，打回满 3 次转自愈：给天玑下「仅重写被打回段落、母稿骨架与已通过小节不动」的指令。
+                会话重置由北斗 watchdog 在网关侧决定时机，这里不代劳。
+              </p>
+              {c.onAutoHeal ? (
+                <button
+                  type="button"
+                  className={`pl-btn pl-btn--sm${armedHealForThisCase ? " pl-btn--primary" : ""}`}
+                  onClick={() => {
+                    if (!armedHealForThisCase) {
+                      armedHealCaseRef.current = c.caseId;
+                      setArmedHeal(true);
+                      return;
+                    }
+                    armedHealCaseRef.current = null;
+                    setArmedHeal(false);
+                    c.onAutoHeal?.();
+                  }}
+                >
+                  {armedHealForThisCase ? "再点一次：确认派给天玑" : "⚡ 派局部重修给天玑"}
+                </button>
+              ) : null}
             </div>
           ) : null}
         </article>
@@ -788,6 +815,7 @@ export function PipelineView({
   onRetryConn,
   onLaunch,
   onAppendVideo,
+  onAutoHeal,
   busy = false,
   tabs = null,
   activeTab = "cockpit",
@@ -858,8 +886,12 @@ export function PipelineView({
   }, [onDragMove]);
 
   const withActions = useMemo(
-    () => cases.map((item) => ({ ...item, onAppendVideo: () => onAppendVideo?.(item) })),
-    [cases, onAppendVideo],
+    () => cases.map((item) => ({
+      ...item,
+      onAppendVideo: () => onAppendVideo?.(item),
+      onAutoHeal: () => onAutoHeal?.(item),
+    })),
+    [cases, onAppendVideo, onAutoHeal],
   );
   const activeWithActions = withActions.find((item) => item.caseId === active?.caseId);
 
