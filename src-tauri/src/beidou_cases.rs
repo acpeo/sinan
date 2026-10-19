@@ -857,6 +857,47 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
     if rows.is_empty() {
         return Ok(0);
     }
+    // 全局产出旁证：本案在全历史任何一跳里写过 出图/图文包/视听并行。
+    // 证据回落（promote_stage 里 07→05 那一退）要靠它认「07 是真到过的」，
+    // 否则旧段的母稿证据会把误关自愈翻回来的 07 再砸回 05，两个段交替
+    // 收割就成了震荡。
+    let mut production_seen: std::collections::BTreeMap<String, bool> =
+        std::collections::BTreeMap::new();
+    for row in &rows {
+        if hop_stage_target(row) != 5 {
+            continue;
+        }
+        for id in hop_case_ids(row) {
+            production_seen.insert(id, true);
+        }
+    }
+    // 巡检行（gateway_task）也算产出旁证：误关自愈的活动证据本来就兼看它，
+    // 这里不兼看的话，凭巡检行翻回 07 的案会被旧段证据回落砸下去（震荡）。
+    let has_task_table: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gateway_task'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if has_task_table.is_some() {
+        let mut stmt = connection.prepare(
+            "SELECT COALESCE(terminal_summary, '') FROM gateway_task
+             WHERE COALESCE(terminal_summary, '') != ''",
+        )?;
+        let texts: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|item| item.ok())
+            .collect();
+        for text in &texts {
+            if stage_target_of_text(text) != 5 {
+                continue;
+            }
+            for id in extract_bm_case_ids(text) {
+                production_seen.insert(id, true);
+            }
+        }
+    }
     // 分群聊 → 按 started 倒序切段（链内最旧一跳的开始 vs 候选跳的结束，
     // 沉默超限即切段）——与 groupSessionEpisodes 同一比较。
     let mut by_chat: std::collections::BTreeMap<&str, Vec<&SessionHarvestRow>> =
@@ -911,10 +952,15 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
                 if case_hops.is_empty() {
                     continue;
                 }
-                harvested += harvest_one_case(connection, &case_id, &case_hops, now)?;
+                let global_production = production_seen.get(&case_id).copied().unwrap_or(false);
+                harvested += harvest_one_case(connection, &case_id, &case_hops, now, global_production)?;
             }
         }
     }
+    // 逐案提炼完之后，全局修一遍误关（见 repair_false_closures 注释里的
+    // 01:49 真机事故）。放在这里：一段的 hops 只覆盖 60 分钟窗口，误关的
+    // 关单证据和翻案的活动证据常散在不同段，必须全局看。
+    repair_false_closures(connection)?;
     Ok(harvested)
 }
 
@@ -929,6 +975,7 @@ fn harvest_one_case(
     case_id: &str,
     hops: &[&SessionHarvestRow],
     now: i64,
+    global_production: bool,
 ) -> rusqlite::Result<usize> {
     let mut harvested = 0usize;
     // 兜底归案时案行可能还不存在（VPS 先跑、本地没发过车）。
@@ -1009,7 +1056,7 @@ fn harvest_one_case(
         )
         .optional()?
         .is_some();
-    promote_stage(connection, case_id, hops, now, has_asset)?;
+    promote_stage(connection, case_id, hops, now, has_asset, global_production)?;
     Ok(harvested)
 }
 
@@ -1527,10 +1574,13 @@ fn harvest_episode_content(
         )?;
     }
     // ── 打回次数：以段内数出来的为准，只增不减。──
+    // `second_strike < ?2` 守卫：不加的话，段里只要还有打回文本，每轮收割
+    // （前端 15 秒一拍）都重写一遍，updated_at 永远刷新——真机 BM-2601
+    // 02:12 之后内容零变化，updated_at 却一直被刷成"刚刚"。
     if !strikes.is_empty() {
         connection.execute(
             "UPDATE beidou_cases SET second_strike = MAX(second_strike, ?2), updated_at_ms = ?3
-             WHERE case_id = ?1",
+             WHERE case_id = ?1 AND second_strike < ?2",
             rusqlite::params![case_id, strikes.len() as i64, now],
         )?;
     }
@@ -1633,9 +1683,10 @@ fn harvest_episode_content(
             break;
         }
     }
+    let has_labelled_title = !labelled_title.is_empty();
     let formal_title = {
         // 权威度：【正式标题】标签 > 交接卡《》 > 全段重复两次的《》 > 旧值。
-        let raw = if !labelled_title.is_empty() {
+        let raw = if has_labelled_title {
             labelled_title
         } else if !handoff_title.is_empty() {
             handoff_title
@@ -1649,13 +1700,23 @@ fn harvest_episode_content(
     // （BM-2603 一度顶着 BM-2602 的名字），这一条把它改回自己的。发车/主表
     // 写进来的独立标题两个条件都不满足，不会被覆盖。
     if !formal_title.is_empty() {
-        connection.execute(
+        // 【正式标题】标签是最高权威（"已回写任务表「内容标题」，不得自拟"）：
+        // 它一出现就必须盖上。真机 BM-2601 的标题槽被发车卡的通用名「室内设计」
+        // 占着——不是案号占位、也不是别的案的名，原来两条件都不占，正式标题
+        // 《家的气场，是我一手调出来的｜100个适我主义提案》永远盖不过它。
+        // 没有标签时（只有《》证据）才走原来的两条件，防混段串名。
+        // 标签路径也防串名：新标题已经是别的案在用的名字时不写。
+        let sql = if has_labelled_title {
+            "UPDATE beidou_cases SET title = ?2, updated_at_ms = ?3
+             WHERE case_id = ?1
+               AND ?2 NOT IN (SELECT title FROM beidou_cases WHERE case_id != ?1)"
+        } else {
             "UPDATE beidou_cases SET title = ?2, updated_at_ms = ?3
              WHERE case_id = ?1
                AND (title = ?1
-                    OR title IN (SELECT title FROM beidou_cases WHERE case_id != ?1))",
-            rusqlite::params![case_id, formal_title, now],
-        )?;
+                    OR title IN (SELECT title FROM beidou_cases WHERE case_id != ?1))"
+        };
+        connection.execute(sql, rusqlite::params![case_id, formal_title, now])?;
     }
     let verdict_text = pick(&verdict_text, "verdictText");
     let verdict_by = pick(&verdict_by, "verdictBy");
@@ -1678,9 +1739,16 @@ fn harvest_episode_content(
     for row in timeline {
         let at = row.get("atMs").and_then(Value::as_i64);
         let what = row.get("what").and_then(Value::as_str);
+        let star = row.get("star").and_then(Value::as_str);
+        // 同文就算重复：要么同一时刻（atMs 相同），要么同一个星位复读同一句
+        // （rebound 会话重建行、不同构建的 what 剪辑口径不同，atMs 会对不上）。
+        // 真机 BM-2602 时间线里「母稿环节已完成收尾。现状汇总：」挂了两条，
+        // 就是只按 (atMs, what) 去重漏进来的。
         tl_rows.retain(|o| {
-            o.get("atMs").and_then(Value::as_i64) != at
-                || o.get("what").and_then(Value::as_str) != what
+            let same_at = o.get("atMs").and_then(Value::as_i64) == at;
+            let same_what = o.get("what").and_then(Value::as_str) == what;
+            let same_star = o.get("star").and_then(Value::as_str) == star;
+            !(same_what && (same_at || same_star))
         });
         tl_rows.push(row);
     }
@@ -1848,6 +1916,40 @@ fn stage_step(stage: &str) -> u8 {
     0
 }
 
+/// 一跳文本能把案子推到哪一级（0 = 推不动）。promote_stage 与误关自愈共用
+/// 同一套判据——两处各写一份，迟早对不上。
+fn stage_target_of_text(blob: &str) -> u8 {
+    let mut target = 0u8;
+    if blob.contains("视听并行") || blob.contains("图文包") || blob.contains("出图") {
+        target = target.max(5);
+    }
+    if (blob.contains("二审") && blob.contains("PASS"))
+        || (blob.contains("复审") && blob.contains("PASS"))
+        || blob.contains("天权阶段已全部完成")
+    {
+        target = target.max(4);
+    }
+    if blob.contains("初审 PASS") || blob.contains("初审PASS") {
+        // 初审 PASS = 定题完成、进母稿创作（泳道没有单独"初审"列，定题那一列
+        // 由研究/定题证据覆盖，这里直接推下一步）。
+        target = target.max(3);
+    }
+    if blob.contains("母稿")
+        && (blob.contains("已完成")
+            || blob.contains("已收尾")
+            || blob.contains("落盘")
+            || blob.contains("定稿")
+            || blob.contains("FROZEN"))
+    {
+        target = target.max(3);
+    }
+    target
+}
+
+fn hop_stage_target(row: &SessionHarvestRow) -> u8 {
+    stage_target_of_text(&hop_blob(row))
+}
+
 /// 阶段推进（只进不退）。账本原先只有「建档」和「已关单」两个写入点，中间六列
 /// 从来没人写过——飞书里跑到玉衡的案，泳道还挂在「01 建档」。Leo 2026-10-20
 /// 截图实锤："我 BM-2602 那轮都跑完了，app 怎么还是只显示个开头"。
@@ -1863,37 +1965,16 @@ fn promote_stage(
     hops: &[&SessionHarvestRow],
     now_ms: i64,
     has_asset: bool,
+    global_production: bool,
 ) -> rusqlite::Result<()> {
     // 判据只用**文本证据**。曾经用「段里有玉衡/开阳跳」当最硬证据——2026-10-20
     // 02:13 实测它把新单推进了视听并行：玉衡那一跳是上一单的，跳里一个字都没有
     // （只有 exec），按"跟随上一归属"被算到了新单头上。星跳不等于案，文本才等于案。
-    let mut target = 0u8;
-    for row in hops {
-        let blob = hop_blob(row);
-        if blob.contains("视听并行") || blob.contains("图文包") || blob.contains("出图") {
-            target = target.max(5);
-        }
-        if (blob.contains("二审") && blob.contains("PASS"))
-            || (blob.contains("复审") && blob.contains("PASS"))
-            || blob.contains("天权阶段已全部完成")
-        {
-            target = target.max(4);
-        }
-        if blob.contains("初审 PASS") || blob.contains("初审PASS") {
-            // 初审 PASS = 定题完成、进母稿创作（泳道没有单独"初审"列，定题那一列
-            // 由研究/定题证据覆盖，这里直接推下一步）。
-            target = target.max(3);
-        }
-        if blob.contains("母稿")
-            && (blob.contains("已完成")
-                || blob.contains("已收尾")
-                || blob.contains("落盘")
-                || blob.contains("定稿")
-                || blob.contains("FROZEN"))
-        {
-            target = target.max(3);
-        }
-    }
+    let target = hops
+        .iter()
+        .map(|row| hop_stage_target(row))
+        .max()
+        .unwrap_or(0);
     let next = match target {
         5 => "07_视听并行",
         4 => "06_二审",
@@ -1912,7 +1993,14 @@ fn promote_stage(
         // 证据回落：账本里停在「07_视听并行」、可 visual/video 两个槽都是空的，
         // 说明它从来没真的出过图——那是被别的案的玉衡跳推上去的（真机 02:13）。
         // 只退这一种，且必须 next 比 07 低，其余情况维持"只进不退"。
-        if current == "07_视听并行" && next != "07_视听并行" && !has_asset {
+        // `!global_production`：本案在全历史任何一跳里写过 出图/图文包/视听并行，
+        // 07 就是真到过的——别退。否则旧段的母稿证据会把误关自愈翻回来的 07
+        // 再砸回 05，两个段交替收割就成了震荡。
+        if current == "07_视听并行"
+            && next != "07_视听并行"
+            && !has_asset
+            && !global_production
+        {
             connection.execute(
                 "UPDATE beidou_cases SET stage = ?2, updated_at_ms = ?3
                  WHERE case_id = ?1 AND stage = ?4",
@@ -1931,6 +2019,127 @@ fn promote_stage(
     Ok(())
 }
 
+/// 误关自愈：否定词修复（58d21d9 / 1a1b4ed）只防**新的**误关，已经误关的单
+/// 要能按最新证据翻回来。
+///
+/// 2026-10-20 01:49 真机事故：天枢巡检写「五分支按序：分支 1（已关单）未命中」，
+/// 旧 says_closed 只往前看否定词（「（」不是否定词），没看到后面的「未命中」，
+/// 把还在玉衡出图的 BM-2602 关成了 08_已关单——飞书侧它又实跑了两个半小时
+/// （03:14 图文包才落盘、03:15 才进摇光发布）。账本「只进不退」，没人翻就一直
+/// 挂着已关单，和 Leo 截图锤过的「跑完了还显示开头」是同一类谎言。
+///
+/// 判据（全局视角，一个案的跳散在多个 60 分钟段里）：
+///   · 关单证据 = 显式提到案号的跳里，says_closed 或 watchdog 分支判「关单」
+///   · 活动证据 = 显式提到案号的跳里，最新一条能推出阶段的（hop_stage_target>0）
+///   · 活动证据比关单证据新 → 关早了，按活动证据退回对应阶段
+/// 真正的关单判词落下来后（比活动证据新），下一轮收割自然重新推回 08，
+/// 不会震荡。只认**显式提到案号**的跳：空转跳跟随归属的不算——BM-2601
+/// 10-20 00:02 的天枢群聊跳引用过「玉衡出图中」，那是别案的闲话。
+fn repair_false_closures(connection: &Connection) -> rusqlite::Result<()> {
+    let closed: Vec<String> = {
+        let mut stmt =
+            connection.prepare("SELECT case_id FROM beidou_cases WHERE stage LIKE '08%'")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.filter_map(|item| item.ok()).collect()
+    };
+    if closed.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<SessionHarvestRow> = {
+        let mut stmt = connection.prepare(
+            "SELECT session_key, agent_id, title, terminal_summary, progress_summary,
+                    started_at_ms, ended_at_ms
+             FROM session_run
+             WHERE COALESCE(title, '') != '' OR COALESCE(terminal_summary, '') != ''
+                OR COALESCE(progress_summary, '') != ''",
+        )?;
+        let mapped = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
+        })?;
+        mapped.filter_map(|item| item.ok()).collect()
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    // 证据有两个出处，都要看：
+    //   session_run —— agent 会话跳（交接卡、汇报）
+    //   gateway_task —— watchdog 巡检行：关单判词常常**只**在这里。真机
+    //                   BM-2601 10-18 19:12 的关单在 session_run 里一个字
+    //                   都没有，只以「看门狗巡检：关单」动作行活在 gateway_task
+    //                   ——漏了它，合法关单的 BM-2601 会被误翻（活动证据
+    //                   18:12 的图文包比"不存在的关单"新）。
+    let mut evidence: Vec<(String, i64)> = Vec::new();
+    for row in &rows {
+        evidence.push((hop_blob(row), hop_at_ms(row)));
+    }
+    let has_task_table: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gateway_task'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if has_task_table.is_some() {
+        let mut stmt = connection.prepare(
+            "SELECT COALESCE(terminal_summary, ''), COALESCE(started_at_ms, 0),
+                    COALESCE(ended_at_ms, 0)
+             FROM gateway_task
+             WHERE COALESCE(terminal_summary, '') != ''",
+        )?;
+        let mapped = stmt.query_map([], |row| {
+            let text = row.get::<_, String>(0)?;
+            let started = row.get::<_, i64>(1)?;
+            let ended = row.get::<_, i64>(2)?;
+            Ok((text, if ended > 0 { ended } else { started }))
+        })?;
+        for item in mapped {
+            let (text, at) = item?;
+            evidence.push((text, at));
+        }
+    }
+    for case_id in &closed {
+        let mut closed_at = 0i64;
+        let mut activity_at = 0i64;
+        let mut activity_target = 0u8;
+        for (blob, at) in &evidence {
+            if !blob.contains(case_id.as_str()) {
+                continue;
+            }
+            if says_closed(blob) || watchdog_branch(blob).as_deref() == Some("关单") {
+                closed_at = closed_at.max(*at);
+            }
+            // 活动证据取**最新一条**能推阶段的（不是历史最高级）：案子退到
+            // 哪一阶，应该听最后一条实况，而不是听它这辈子到过的最高处。
+            let target = stage_target_of_text(blob);
+            if target > 0 && *at >= activity_at {
+                activity_at = *at;
+                activity_target = target;
+            }
+        }
+        if activity_target == 0 || activity_at <= closed_at {
+            continue;
+        }
+        let next = match activity_target {
+            5 => "07_视听并行",
+            4 => "06_二审",
+            3 => "05_母稿",
+            _ => continue,
+        };
+        connection.execute(
+            "UPDATE beidou_cases SET stage = ?2, updated_at_ms = ?3
+             WHERE case_id = ?1 AND stage LIKE '08%'",
+            rusqlite::params![case_id, next, now],
+        )?;
+    }
+    Ok(())
+}
+
 /// 候选标题与五轴总分（天权定题卡）。
 ///
 /// 2026-10-20 真机 BM-2602 天权写的是：
@@ -1942,7 +2151,13 @@ fn promote_stage(
 /// 只在「候选N + 名字 + 三位数总分」三件齐时收：另一种写法
 /// 「五轴评分 Top 1：候选1 = 455」只有序号没名字，收进来就是一行对不上标题
 /// 的分数，比不收更糟。名字取 2..=12 个非数字非标点字符。
+///
+/// 2026-10-20 真机 BM-2603：天权判词写「候选1 玄关收纳三层次 **455**（Top 1 钦定）」，
+/// 分数上的 markdown 加粗让名字后面的分数扫描直接撞墙（`*` 不是空白也不是数字），
+/// 整条候选被当"没分数"丢弃——带钦定标记的那跳全废，候选只能来自没有标记的
+/// 另一跳，champion 于是全是 false。所以先剥星号再扫。
 fn extract_candidates(text: &str) -> Vec<(String, u32, bool)> {
+    let text: String = text.chars().filter(|c| *c != '*').collect();
     let chars: Vec<char> = text.chars().collect();
     let mut out: Vec<(String, u32, bool)> = Vec::new();
     let mut i = 0usize;
@@ -4148,5 +4363,244 @@ mod dispatch_helper_tests {
         let list = list_cases(&db, None).expect("list");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].stage, "08_已关单");
+    }
+
+    #[test]
+    fn extract_candidates_survives_markdown_bold_scores() {
+        // 真机 BM-2603 01:48 天权汇报原样：分数带 ** 加粗、钦定标记在括号里。
+        // 星号不剥的话，名字后面的分数扫描直接撞墙（`*` 不是空白也不是数字），
+        // 整条候选被当"没分数"丢弃——带钦定标记的那跳全废，候选只能来自没有
+        // 标记的另一跳，champion 于是全是 false（真机账本实锤）。
+        let cands = extract_candidates(
+            "3 个候选五轴打分：候选1 玄关收纳三层次 **455**（Top 1 钦定）、候选2 宋式审美 425、候选3 三层光 414，全部五轴 ≥60，无一票否决项。",
+        );
+        assert_eq!(cands.len(), 3, "加粗不能把候选整条吃掉");
+        assert_eq!(cands[0].0, "玄关收纳三层次");
+        assert_eq!(cands[0].1, 455);
+        assert!(cands[0].2, "（Top 1 钦定）就是钦定");
+        assert!(!cands[1].2 && !cands[2].2, "只有 Top 1 是钦定");
+    }
+
+    #[test]
+    fn timeline_dedups_same_star_same_line_across_rebuilt_rows() {
+        // 真机 BM-2602：「母稿环节已完成收尾。现状汇总：」在时间线里挂了两条。
+        // rebound 会话重建行 started 对不上，只按 (atMs, what) 去重漏了它；
+        // 同一个星位复读同一句话，不管时刻一不一样都只留一条。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session_span(
+            &db,
+            "cli:main:group:oc_tl",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7778]",
+            None,
+            base,
+            base + min,
+        );
+        for at in [10 * min, 40 * min] {
+            insert_session_span(
+                &db,
+                "cli:main:group:oc_tl",
+                "tianji",
+                "",
+                Some("任务 BM-7778\n当前阶段：母稿环节已完成收尾。现状汇总："),
+                base + at,
+                base + at + 2 * min,
+            );
+        }
+        harvest_links_from_sessions(&db).expect("harvest");
+        let content: String = db
+            .query_row(
+                "SELECT COALESCE(content_json, '') FROM beidou_cases WHERE case_id = 'BM-7778'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("content");
+        let parsed: serde_json::Value = serde_json::from_str(&content).expect("json");
+        let timeline = parsed["timeline"].as_array().expect("timeline array");
+        let hits = timeline
+            .iter()
+            .filter(|entry| entry["what"].as_str() == Some("母稿环节已完成收尾。现状汇总："))
+            .count();
+        assert_eq!(hits, 1, "同星同文只留一条，不管 atMs 一不一样");
+    }
+
+    #[test]
+    fn labelled_formal_title_overwrites_generic_slot_title() {
+        // 真机 BM-2601：标题槽被发车卡的通用名「室内设计」占着——不是案号占位、
+        // 也不是别的案的名，旧回填两条件都不占，正式标题《家的气场，是我一手调出来
+        // 的｜100个适我主义提案》永远盖不过它。【正式标题】标签是最高权威
+        // （"已回写任务表「内容标题」，不得自拟"），必须无条件盖上。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_ti",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7779]",
+            None,
+            base,
+        );
+        harvest_links_from_sessions(&db).expect("first");
+        db.execute(
+            "UPDATE beidou_cases SET title = '室内设计' WHERE case_id = 'BM-7779'",
+            [],
+        )
+        .expect("preset generic title");
+        insert_session(
+            &db,
+            "cli:main:group:oc_ti",
+            "tianquan",
+            "",
+            Some(
+                "【交接卡｜天权 → 天玑｜BM-7779】\n\
+                 【审查结论】初审 PASS。\n\
+                 【正式标题（已回写任务表「内容标题」，不得自拟）】\n\
+                 家的气场，是我一手调出来的",
+            ),
+            base + 10 * min,
+        );
+        harvest_links_from_sessions(&db).expect("second");
+        let list = list_cases(&db, None).expect("list");
+        let row = list.iter().find(|r| r.case_id == "BM-7779").expect("case");
+        assert_eq!(
+            row.title.as_deref(),
+            Some("家的气场，是我一手调出来的"),
+            "【正式标题】标签盖过发车卡的通用名"
+        );
+    }
+
+    #[test]
+    fn false_closure_repairs_on_newer_activity_but_keeps_real_closures() {
+        // 真机 BM-2602 01:49 事故缩比：巡检跳写「五分支按序：分支 1（已关单）
+        // 未命中」——否定词在括号里、话术又贴在「未命中」前，旧 says_closed
+        // 只往前看，把还在玉衡出图的它关成了 08；飞书侧它又实跑了两个半小时
+        // （03:14 图文包落盘、03:15 才进摇光发布）。否定词修复只防新的误关，
+        // 已经误关的靠这条全局自愈翻回来。对照组：真关单的案不许翻。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        // ── 误关案 BM-7780 ──
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7780]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "tianji",
+            "",
+            Some("【交接卡｜天玑 → 天权】BM-7780\n当前阶段：母稿环节已完成收尾，已落盘 docx"),
+            base + 10 * min,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "tianshu",
+            "",
+            Some("【BM-7780 watchdog 巡检报告】五分支按序：分支 1（已关单）未命中、分支 2（漏派）未命中。"),
+            base + 20 * min,
+        );
+        // ── 真关单案 BM-7781：出图（活动）在关单之前 ──
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7781]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "yuheng",
+            "",
+            Some("【玉衡阶段完成汇总】BM-7781 图文包已产出"),
+            base + 15 * min,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "watchdog",
+            "巡检简报",
+            Some("BM-7781｜已关单：交付物留痕完毕，watchdog 自删"),
+            base + 25 * min,
+        );
+        harvest_links_from_sessions(&db).expect("first");
+        // 新 says_closed 已不认误关判词 → BM-7780 停在 05；模拟旧包把它误关成 08
+        db.execute(
+            "UPDATE beidou_cases SET stage = '08_已关单' WHERE case_id = 'BM-7780'",
+            [],
+        )
+        .expect("preset false closure");
+        // 误关之后的实况：图文包落盘 + 玉衡出图中（活动证据更新）
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "tianshu",
+            "",
+            Some("【任务状态】BM-7780 全链路落盘实测｜玉衡出图中\nfolder_token 内新增「玉衡图文包-BM7780」，已代发摇光"),
+            base + 200 * min,
+        );
+        // ── 真关单案 BM-7782：关单判词只在 gateway_task 巡检行里（真机 BM-2601
+        //    10-18 19:12 的真身形态——session_run 里一个字都没有），出图在它之前 ──
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-7782]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc",
+            "yuheng",
+            "",
+            Some("【玉衡阶段完成汇总】BM-7782 图文包已产出"),
+            base + 15 * min,
+        );
+        db.execute(
+            "INSERT INTO gateway_task (task_id, gateway, agent_id, terminal_summary,
+                                       started_at_ms, ended_at_ms)
+             VALUES ('cronrun:test:bm7782', 'vps', 'watchdog',
+                     'BM-7782｜已关单：reset 6 个群会话、删除 watchdog job', ?1, ?2)",
+            rusqlite::params![base + 25 * min, base + 27 * min],
+        )
+        .expect("insert gateway watchdog row");
+        // 模拟旧包经巡检行把它关成 08（本测试只调 session 收割线，不走
+        // gateway 关单路径——要验的是自愈会去翻巡检行的关单证据）。
+        // 先建档再预设：BM-7782 的跳都在第一次收割之后才插，案行是收割时
+        // ensure_case_row 才建的——直接 UPDATE 会静默摸 0 行（不报错），
+        // 预设假生效，第二次收割把它从 01 直接推到 07，自愈的 08 名单里
+        // 根本没有它。真机这一行建档时就有，这里照真机补上。
+        ensure_case_row(&db, "BM-7782").expect("ensure BM-7782 case row");
+        db.execute(
+            "UPDATE beidou_cases SET stage = '08_已关单' WHERE case_id = 'BM-7782'",
+            [],
+        )
+        .expect("preset closure from watchdog row");
+        harvest_links_from_sessions(&db).expect("second");
+        let list = list_cases(&db, None).expect("list");
+        let repaired = list.iter().find(|r| r.case_id == "BM-7780").expect("BM-7780");
+        assert_eq!(repaired.stage, "07_视听并行", "活动证据比误关新 → 翻回 07");
+        let kept = list.iter().find(|r| r.case_id == "BM-7781").expect("BM-7781");
+        assert_eq!(kept.stage, "08_已关单", "真关单的案不许翻");
+        let kept2 = list.iter().find(|r| r.case_id == "BM-7782").expect("BM-7782");
+        assert_eq!(
+            kept2.stage, "08_已关单",
+            "关单判词只在巡检行里的也不许翻（BM-2601 真身形态）"
+        );
+        // 再收一轮：旧段的母稿证据不许把 07 砸回 05（全局产出旁证护着）
+        harvest_links_from_sessions(&db).expect("third");
+        let list = list_cases(&db, None).expect("list again");
+        let stable = list.iter().find(|r| r.case_id == "BM-7780").expect("BM-7780 again");
+        assert_eq!(stable.stage, "07_视听并行", "翻回来就稳住，不被旧段拖下去");
     }
 }
