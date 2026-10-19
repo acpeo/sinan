@@ -1795,10 +1795,11 @@ fn says_closed(text: &str) -> bool {
                 // 把还在玉衡出图的 BM-2602 关成了已关单，前面只判"往前看"漏了。
                 let tail_end = (i + needle.chars().count() + 6).min(chars.len());
                 let tail: String = chars[i..tail_end].iter().collect();
+                // 只认这三种"判断句"：裸「否」太宽（"已关单，是否归档？"会被判成
+                // 没关单，那才是真的漏关）。
                 let refuted = tail.contains("未命中")
                     || tail.contains("不命中")
-                    || tail.contains("未关单")
-                    || tail.contains("否");
+                    || tail.contains("未关单");
                 if !negated && !refuted {
                     return true;
                 }
