@@ -524,11 +524,15 @@ fn harvest_bare_case(connection: &Connection, case_id: &str, text: &str) -> rusq
         )?;
         acted = true;
     }
-    connection.execute(
-        "UPDATE beidou_cases SET last_activity_ms = ?2, updated_at_ms = ?2
-         WHERE case_id = ?1",
-        rusqlite::params![case_id, now],
-    )?;
+    // 真有动作才推活动时间，且只进不退：收割线被前端 15 秒一拍的账本重读
+    // 反复跑，无条件写"此刻"会把该案永久钉在卷宗顶上。
+    if acted {
+        connection.execute(
+            "UPDATE beidou_cases SET last_activity_ms = ?2, updated_at_ms = ?2
+             WHERE case_id = ?1 AND COALESCE(last_activity_ms, 0) < ?2",
+            rusqlite::params![case_id, now],
+        )?;
+    }
     Ok(acted)
 }
 
@@ -851,11 +855,19 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
                     rusqlite::params![case_id, now],
                 )?;
             }
-            // 这一轮有案号 = 该案今天有活动：刷新活动时间，卷宗排序不冻。
+            // 这一轮有案号 = 该案有活动：把活动时间推到**轮内最新一跳的结束**，
+            // 不是"此刻"。这条线被前端 15 秒一拍的账本重读反复调用，写"此刻"
+            // 等于让该案永远显示刚刚有活动、永远排在卷宗顶上。只进不退：
+            // 更旧的轮次（历史回补）不把时间倒退回去。
+            let episode_end = hops
+                .iter()
+                .filter_map(|row| row.6.or(row.5))
+                .max()
+                .unwrap_or(now);
             connection.execute(
                 "UPDATE beidou_cases SET last_activity_ms = ?2, updated_at_ms = ?2
-                 WHERE case_id = ?1",
-                rusqlite::params![case_id, now],
+                 WHERE case_id = ?1 AND COALESCE(last_activity_ms, 0) < ?2",
+                rusqlite::params![case_id, episode_end],
             )?;
             // ④ episode 内容提取：正式标题 / 天权判词 / 打回链 / 研究编号注 /
             //    产出时间线，写进 content_json（深潜舱三栏的真内容，
@@ -1037,8 +1049,14 @@ fn apply_labeled_claims(
     let now = chrono::Utc::now().timestamp_millis();
     let mut applied = 0usize;
     for (slot, link) in claims {
-        let sql =
-            format!("UPDATE beidou_cases SET {slot} = ?2, updated_at_ms = ?3 WHERE case_id = ?1");
+        // 值没变就不写：收割线现在被前端 15 秒一拍的账本重读反复调用，
+        // 无条件 UPDATE 会把 updated_at_ms 一直顶到"此刻"，该列还是卷宗排序的
+        // 第二关键词（list_cases: COALESCE(last_activity_ms, updated_at_ms)），
+        // 写一次是刷新，写一百次就是把排序钉死。
+        let sql = format!(
+            "UPDATE beidou_cases SET {slot} = ?2, updated_at_ms = ?3
+             WHERE case_id = ?1 AND COALESCE({slot}, '') != ?2"
+        );
         applied += connection.execute(&sql, rusqlite::params![case_id, link, now])?;
     }
     Ok(applied)
@@ -2713,6 +2731,53 @@ mod dispatch_helper_tests {
         assert_eq!(list.len(), 1, "只有带标签那一段建案");
         assert_eq!(list[0].case_id, "BM-9998");
         assert_eq!(list[0].research_doc_url, "", "跨段的链接不收");
+    }
+
+    #[test]
+    fn session_harvest_is_idempotent_across_repeated_reads() {
+        // 前端账本改成 15 秒一拍重读（Leo 2026-10-20 实测：飞书里跑完的案
+        // 泳道不出现，因为账本只在启动读一次）。收割线挂在读取命令里，于是
+        // 它会每分钟被调 4 次——**第二遍起必须一个字节都不写**，否则
+        // last_activity_ms / updated_at_ms 被顶到"此刻"，卷宗排序永远钉死。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianshu",
+            "派发天玑创作 [CASE_ID: BM-8888]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_beidou",
+            "tianji",
+            "母稿",
+            Some("母稿已冻结 https://my.feishu.cn/docx/GfNndXZsdef"),
+            base + 5 * min,
+        );
+        assert!(
+            harvest_links_from_sessions(&db).expect("first") > 0,
+            "第一遍要有动作"
+        );
+        let list = list_cases(&db, None).expect("list");
+        let activity = list[0].last_activity_ms;
+        let updated = list[0].updated_at_ms;
+        assert!(
+            activity.unwrap_or(0) >= base + 5 * min,
+            "活动时间取轮内最新一跳的结束（或更新的建案时刻），不是'此刻'"
+        );
+        // 第二遍：同一批零新信息的行，必须零动作、零写入。
+        assert_eq!(
+            harvest_links_from_sessions(&db).expect("second"),
+            0,
+            "同一批账本重复收割不该再有动作"
+        );
+        let again = list_cases(&db, None).expect("list");
+        assert_eq!(again[0].last_activity_ms, activity, "活动时间不许被重复读顶到此刻");
+        assert_eq!(again[0].updated_at_ms, updated, "updated_at_ms 不许被重复读刷新");
     }
 
     fn gateway_task_db() -> Connection {
