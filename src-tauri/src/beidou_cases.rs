@@ -723,7 +723,7 @@ fn handoff_case_id(blob: &str) -> Option<String> {
     for line in blob.lines() {
         let text = line
             .trim()
-            .trim_start_matches(|c: char| matches!(c, '*' | ' ' | '\t'))
+            .trim_start_matches(['*', ' ', '\t'])
             .trim();
         let rest = match text.strip_prefix("任务：").or_else(|| text.strip_prefix("任务:")) {
             Some(rest) => rest,
@@ -882,7 +882,7 @@ pub fn harvest_links_from_sessions(connection: &Connection) -> rusqlite::Result<
                 [row.3.as_deref(), row.4.as_deref(), row.2.as_deref()]
                     .into_iter()
                     .flatten()
-                    .any(|text| says_closed(text))
+                    .any(says_closed)
             });
             if closed_text {
                 connection.execute(
