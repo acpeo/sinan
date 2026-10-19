@@ -3334,9 +3334,13 @@ mod dispatch_helper_tests {
         );
         harvest_links_from_sessions(&db).expect("harvest");
         let list = list_cases(&db, None).expect("list");
-        assert_eq!(list.len(), 1, "这一段只归最后一单");
-        let row = &list[0];
-        assert_eq!(row.case_id, "BM-2603");
+        // 2026-10-20 02:40 起：一段里**每一单**都各自成行（以前只归于"这一段
+        // 的主角"，同段里更早的案就永远不再更新）。
+        assert_eq!(list.len(), 2, "段里两单，各归各的行");
+        let row = list
+            .iter()
+            .find(|r| r.case_id == "BM-2603")
+            .expect("BM-2603 必须在");
         assert_eq!(
             row.title.as_deref(),
             Some("进门第一眼决定家的秩序：玄关收纳"),
@@ -3385,14 +3389,20 @@ mod dispatch_helper_tests {
         );
         harvest_links_from_sessions(&db).expect("harvest");
         let list = list_cases(&db, None).expect("list");
-        assert_eq!(list.len(), 1, "只归这一单");
+        // 一段两单 → 两行；关键不是"只归谁"，而是**每行只吃自己的跳**：
+        // 巡检里的旧案号赢不到研究文档，交接卡也不会去认别人的东西。
+        let mine = list
+            .iter()
+            .find(|r| r.case_id == "BM-2603")
+            .expect("BM-2603 必须在");
         assert_eq!(
-            list[0].case_id, "BM-2603",
-            "交接卡的任务行赢过巡检里的旧案号"
+            mine.research_doc_url, "https://my.feishu.cn/docx/VUOabc123"
         );
-        assert_eq!(
-            list[0].research_doc_url, "https://my.feishu.cn/docx/VUOabc123"
-        );
+        let other = list
+            .iter()
+            .find(|r| r.case_id == "BM-2602")
+            .expect("BM-2602 也在段里");
+        assert_eq!(other.research_doc_url, "", "别人的研究文档不许串到这一行");
     }
 
     #[test]
