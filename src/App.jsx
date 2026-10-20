@@ -35,7 +35,7 @@ import piAppIcon from "./assets/pi-app-icon.png";
 import qwenAppIcon from "./assets/qwen-app-icon.png";
 import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
-import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
+import { GLASS_MODES, glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
@@ -1813,7 +1813,7 @@ function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassT
     <div className="settings-card">
       <h2>外观与缩放</h2>
       <p className="settings-muted">
-        大窗口的明暗主题，「自动」跟随系统；小组件不受影响。
+        主窗明暗，「自动」跟随系统。主窗选「全玻璃」时与下面的「窗口外观」联动——切亮暗会连三窗一起切，四窗保持同一档；纸感档只影响主窗。
       </p>
       <div className="theme-toggle" role="group" aria-label="完整视图主题">
         {THEME_OPTIONS.map((option) => (
@@ -1834,7 +1834,7 @@ function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassT
       <div className="settings-subsection">
         <h3>主窗材质</h3>
         <p className="settings-muted">
-          全玻璃让主窗与小组件、胶囊、角标同一套材质，直接透出桌面；纸感是宣纸白的实底，适合长时间逐字读矩阵。
+          全玻璃让主窗与小组件、胶囊、角标同一套材质，直接透出桌面；深浅跟随上面的「窗口外观」档位。纸感是宣纸白的实底，适合长时间逐字读矩阵。
         </p>
         <div className="theme-toggle" role="group" aria-label="主窗材质">
           <button
@@ -1855,15 +1855,15 @@ function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassT
           </button>
         </div>
       </div>
-      {/* macOS 面板材质跟随系统 vibrancy，不提供组件外观选项；
+      {/* macOS 面板材质跟随系统 vibrancy，不提供窗口外观选项；
           深/浅配色用于 Windows 与 Linux 的卡片和胶囊。 */}
       {!IS_MAC && (
         <div className="settings-subsection">
-          <h3>组件外观</h3>
+          <h3>窗口外观</h3>
           <p className="settings-muted">
-            深色是 HUD 玻璃；浅色是透亮白磨砂；透明会直接透出桌面与后方窗口，并叠加轻霜和边缘高光。
+            四窗同一档（主窗与小组件、胶囊、角标）：深色是 HUD 玻璃；浅色是透亮白磨砂；透明直接透出桌面，并叠加轻霜和边缘高光。主窗选「纸感」时不跟本档。
           </p>
-          <div className="theme-toggle" role="group" aria-label="组件外观">
+          <div className="theme-toggle" role="group" aria-label="窗口外观">
             {GLASS_TINT_OPTIONS.map((option) => (
               <button
                 key={option.id}
@@ -4813,10 +4813,6 @@ export function App() {
     const stored = localStorage.getItem("metrik:theme");
     return stored === "light" || stored === "dark" || stored === "auto" ? stored : "dark";
   });
-  const handleThemeChange = useCallback((next) => {
-    setTheme(next);
-    localStorage.setItem("metrik:theme", next);
-  }, []);
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
@@ -4828,15 +4824,40 @@ export function App() {
     return () => media.removeEventListener?.("change", update);
   }, []);
   const darkTheme = theme === "auto" ? systemDark : theme === "dark";
-  // data-theme 只挂任务台窗（明暗主题）；玻璃窗不带该属性（玻璃 CSS 独立）。
+  const handleThemeChange = useCallback((next) => {
+    setTheme(next);
+    localStorage.setItem("metrik:theme", next);
+    // 玻璃档时"明暗"就是"玻璃档位"（四窗同一块玻璃）：顶栏切亮暗必须连三窗
+    // 一起切，否则主窗变浅、小组件还是深色，"四窗统一"当场破功。纸感档不动三窗。
+    if (mainGlass) {
+      handleGlassTint(next === "auto" ? (systemDark ? "dark" : "light") : next);
+    }
+  }, [mainGlass, systemDark, handleGlassTint]);
+  // 「自动」在玻璃档下的含义 = 档位跟随系统明暗。只在系统**真的**换主题时
+  // 同步一次：若按 systemDark 无条件跑，用户在玻璃档里手选「透明」会被立刻
+  // 拉回深/浅档（effect 依赖里 systemDark 没变，但下一轮渲染又命中）。
+  const lastSystemDarkRef = useRef(systemDark);
+  useEffect(() => {
+    const changed = lastSystemDarkRef.current !== systemDark;
+    lastSystemDarkRef.current = systemDark;
+    if (!changed || !mainGlass || theme !== "auto") return;
+    handleGlassTint(systemDark ? "dark" : "light");
+  }, [systemDark, mainGlass, theme, handleGlassTint]);
+  // 主窗内容层的明暗：玻璃档跟**玻璃档位**走，纸感档仍听明暗主题。
+  // 深色档 → 深色 HUD token；浅色档 → 沿用纸感浅色 token（白霜玻璃上的现行
+  // 浅色界面，等于纸感没被消灭，只是多了"可透明"形态）；透明档看字色。
+  const consoleDark = mainGlass
+    ? glassTint === "dark" || (glassTint === "clear" && glassInk === "light")
+    : darkTheme;
+  // data-theme 只挂任务台窗；玻璃窗/预览窗不带该属性（玻璃 CSS 独立）。
   useLayoutEffect(() => {
     const root = document.documentElement;
     if (viewMode === "main") {
-      root.dataset.theme = darkTheme ? "dark" : "light";
+      root.dataset.theme = consoleDark ? "dark" : "light";
     } else {
       delete root.dataset.theme;
     }
-  }, [viewMode, darkTheme]);
+  }, [viewMode, consoleDark]);
   // Windows 桌面端初始直接选 alpha，避免 WebView 背景确认前闪一帧 CSS fallback。
   const [glassMode, setGlassMode] = useState(() =>
     resolveGlassMode({
@@ -4880,6 +4901,23 @@ export function App() {
   const handleCycleAppearance = useCallback(() => {
     handleGlassTint(nextGlassTint(glassTintRef.current));
   }, [handleGlassTint]);
+
+  // 主窗玻璃壳：与小组件/胶囊走同一个 glassShellAppearance（同一套 tint 档、
+  // 同一个浓度、同一组前景规则），差异只有圆角与"透明档不做边缘穿透"。
+  // Windows 桌面窗口本身 transparent: true，CSS 半透直接透出壁纸；浏览器预览
+  // 没有窗口层，走 --glass-css 近实心回落（否则一处 rgba 会露出预览页白底）。
+  const consoleShell = useMemo(
+    () =>
+      glassShellAppearance("console", {
+        transparent: mainGlass,
+        glassMode: isDesktop() && IS_WINDOWS ? GLASS_MODES.alpha : GLASS_MODES.css,
+        glassTint,
+        glassInk,
+        glassAlpha: shellGlassAlpha,
+        isMac: IS_MAC,
+      }),
+    [mainGlass, glassTint, glassInk, shellGlassAlpha],
+  );
 
   // 星卡伴随窗：独立置顶穿透小窗，只渲染悬停星卡本体（载荷由胶囊窗经
   // Rust static 下发，take 即清空；画完一帧回 ready 才显形）。
@@ -5010,8 +5048,8 @@ export function App() {
 
   return (
     <div
-      className={`console-root${mainGlass ? " console-root--glass" : ""}`}
-      style={mainGlass ? { "--glass-alpha": shellGlassAlpha } : undefined}
+      className={`console-root${mainGlass ? ` ${consoleShell.className}` : ""}`}
+      style={mainGlass ? consoleShell.style : undefined}
     >
       <div className="expanded-drag-region" data-tauri-drag-region aria-hidden="true" />
 

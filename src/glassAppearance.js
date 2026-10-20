@@ -52,11 +52,14 @@ export function glassShellAppearance(
     loading = false,
   } = {},
 ) {
-  if (kind !== "widget" && kind !== "strip") {
+  if (kind !== "widget" && kind !== "strip" && kind !== "console") {
     throw new TypeError(`Unsupported glass shell kind: ${kind}`);
   }
 
-  const prefix = kind === "widget" ? "widget-shell" : "strip-shell";
+  // 主窗（console）与小组件/胶囊同一只锅：同一套 tint 档、同一个浓度变量、
+  // 同一组前景规则。四窗摆在一起必须是同一块玻璃，不是"另一种玻璃"。
+  const prefix =
+    kind === "widget" ? "widget-shell" : kind === "strip" ? "strip-shell" : "console-shell";
   const classes = [prefix];
   if (kind === "strip") {
     classes.push(`${prefix}--${vertical ? "vertical" : "horizontal"}`);
@@ -80,12 +83,17 @@ export function glassShellAppearance(
   if (isMac) classes.push(`${prefix}--mac`);
   if (kind === "widget" && loading) classes.push("is-loading");
 
+  // 主窗是常驻工作区，不是氛围层：透明档不做边缘穿透（edgeInteractive），
+  // 也不声称 true-alpha——大窗要完整接收指针事件（点空白也要能拖窗/选中），
+  // clear 档只换材质不换交互。这是 console 与 widget/strip 唯一的实质差异。
   const edgeInteractive =
-    transparent
+    kind !== "console"
+    && transparent
     && !isMac
     && glassTint === "clear";
   const trueAlpha =
-    edgeInteractive
+    kind !== "console"
+    && edgeInteractive
     && glassMode === GLASS_MODES.alpha;
 
   return {

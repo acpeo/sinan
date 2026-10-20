@@ -142,6 +142,69 @@ test("browser clear fallback keeps the edge interaction without claiming true al
   assert.match(appearance.className, /widget-shell--glass-light/);
 });
 
+test("the console shell shares the widget material without the edge interaction", () => {
+  for (const glassTint of ["dark", "light", "clear"]) {
+    const appearance = glassShellAppearance("console", {
+      transparent: true,
+      glassMode: GLASS_MODES.alpha,
+      glassTint,
+    });
+
+    assert.match(appearance.className, /console-shell--transparent/);
+    assert.doesNotMatch(appearance.className, /--glass-css/);
+    assert.equal(appearance.style["--glass-alpha"], 0.82);
+    // 主窗是工作区：任何档位都不做边缘穿透，也不声称 true-alpha——
+    // 点空白要能拖窗、能选中，透明档只换材质不换交互。
+    assert.equal(appearance.edgeInteractive, false);
+    assert.equal(appearance.trueAlpha, false);
+  }
+});
+
+test("the console shell keeps the same tint/ink pairing as the other three windows", () => {
+  const base = { transparent: true, glassMode: GLASS_MODES.alpha };
+  // 深色档 = 小组件那块 HUD 玻璃（三窗默认档），主窗必须同色。
+  const dark = glassShellAppearance("console", { ...base, glassTint: "dark" });
+  assert.doesNotMatch(dark.className, /console-shell--glass-light/);
+  assert.doesNotMatch(dark.className, /console-shell--glass-clear/);
+
+  const light = glassShellAppearance("console", { ...base, glassTint: "light" });
+  assert.match(light.className, /console-shell--glass-light/);
+
+  // clear + 深字 → 白霜（挂 --glass-light）；clear + 白字 → 深色薄罩。
+  const clearInkDark = glassShellAppearance("console", { ...base, glassTint: "clear", glassInk: "dark" });
+  assert.match(clearInkDark.className, /console-shell--glass-light/);
+  assert.match(clearInkDark.className, /console-shell--glass-clear/);
+  assert.doesNotMatch(clearInkDark.className, /console-shell--glass-ink-light/);
+
+  const clearInkLight = glassShellAppearance("console", { ...base, glassTint: "clear", glassInk: "light" });
+  assert.match(clearInkLight.className, /console-shell--glass-ink-light/);
+  assert.doesNotMatch(clearInkLight.className, /console-shell--glass-light/);
+});
+
+test("the console shell falls back to near-solid CSS glass in the browser preview", () => {
+  const appearance = glassShellAppearance("console", {
+    transparent: true,
+    glassMode: GLASS_MODES.css,
+    glassTint: "dark",
+  });
+
+  assert.match(appearance.className, /console-shell--glass-css/);
+  assert.equal(appearance.trueAlpha, false);
+});
+
+test("a non-transparent console carries no material class at all", () => {
+  // 纸感档：mainGlass=false 时 App 根本不挂 console-shell，但函数本身也得
+  // 守住——transparent=false 不许泄漏 --glass-alpha 或任何玻璃类。
+  const appearance = glassShellAppearance("console", {
+    transparent: false,
+    glassMode: GLASS_MODES.alpha,
+    glassTint: "dark",
+  });
+
+  assert.equal(appearance.className, "console-shell");
+  assert.deepEqual(appearance.style, {});
+});
+
 test("macOS ignores a stored Windows clear tint", () => {
   const appearance = glassShellAppearance("widget", {
     transparent: true,

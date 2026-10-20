@@ -8409,125 +8409,248 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
 }
 
 /* 浅色主题边缘定义：浅底（白墙/白网页）上主窗轮廓会融掉——一圈细边 + 落地
-   投影把窗从背景里托出来。深色自带反差不需要。 */
-html:not([data-theme="dark"]) .console-root {
+   投影把窗从背景里托出来。深色自带反差不需要。
+   四窗全玻璃后主窗恒挂 console-shell（2026-10-20 Leo 拍板），纸感边缘定义
+   只对不带玻璃壳的渲染（纸感档 / 预览页）生效，故整组排除 .console-shell。 */
+html:not([data-theme="dark"]) .console-root:not(.console-shell) {
   box-shadow:
     inset 0 0 0 1px rgba(31, 33, 36, 0.14),
     0 22px 56px rgba(15, 18, 25, 0.26),
     0 4px 14px rgba(15, 18, 25, 0.14);
 }
 
-html[data-theme="dark"] .console-root {
+html[data-theme="dark"] .console-root:not(.console-shell) {
   background: #101013;
   color: #e8e8ec;
 }
 
-/* ===== 主窗玻璃皮（Leo 2026-10-20 拍板「四窗全玻璃」）=====
-   只换皮不动结构：主窗本来就是 transparent 窗口（tauri.conf.json），
-   只是 .console-root 一直盖着实底 #f7f6f2——这里换半透明 tint。
-   配方与小组件同一套（冷色偏置 + --glass-alpha 浓度 + 髮丝边 + 内高光），
-   浓度由设置页「玻璃浓度」滑杆驱动，四窗一档。
-   可读性纪律（设计对话的代价提醒）：文字一律实色，不随玻璃降透明度；
-   卡片/表格/泳道行各保留自己的半透层，深色下比纸感再加深一档兜底。 */
-html[data-theme="dark"] .console-root.console-root--glass {
-  /* 与 .widget-shell--transparent 同一组色标（27 32 45 → 11 14 22，冷色偏置
-     0.1），浓度同吃 --glass-alpha——四窗摆在一起是同一块玻璃。 */
+/* ===== 四窗全玻璃 · 主窗壳（console-shell，Leo 2026-10-20 拍板）=====
+   主窗与任务小组件/胶囊/角标同一套玻璃配方：同一个 glassShellAppearance
+   生成类名、同一个 --glass-alpha 浓度滑杆、同一组 tint 档（深/浅/透明）。
+   差异只有两处：圆角 16（三窗是 8/10/11），以及透明档不做边缘穿透
+   ——主窗是工作区，点空白要能拖窗、能选中，clear 档只换材质不换交互。
+
+   内容层的明暗由档位决定（App 侧 consoleDark）：深色档 → 既有深色 HUD
+   token；浅色档 → 沿用纸感浅色 token（白霜玻璃上的浅色界面，纸感没被
+   消灭，只是多了"可透明"形态）；透明档看字色。 */
+.console-root.console-shell {
+  border-radius: 16px;
+  transition-property: background-color, box-shadow;
+  transition-duration: 280ms;
+  transition-timing-function: var(--motion, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.console-root.console-shell--transparent {
+  /* 与 .widget-shell--transparent 逐位同色（27 32 45 → 11 14 22，冷色偏置
+     0.1），浓度同吃 --glass-alpha（App 经 inline style 写入）——四窗摆一起
+     是同一块玻璃，不是"另一种玻璃"。 */
+  --glass-alpha: 0.82;
   background:
     radial-gradient(130% 100% at 14% 0%, rgba(178, 200, 255, 0.1), transparent 48%),
     linear-gradient(
       168deg,
-      rgb(27 32 45 / calc(var(--glass-alpha, 0.82) + 0.03)),
-      rgb(11 14 22 / var(--glass-alpha, 0.82))
+      rgb(27 32 45 / calc(var(--glass-alpha) + 0.03)),
+      rgb(11 14 22 / var(--glass-alpha))
     );
-  color: #e9e9ee;
+  border: 1px solid rgba(0, 0, 0, 0.38);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.1),
-    inset 0 1px rgba(255, 255, 255, 0.14);
+    inset 0 1px rgba(255, 255, 255, 0.15),
+    0 12px 28px rgba(0, 0, 0, 0.3),
+    0 4px 10px rgba(0, 0, 0, 0.2);
 }
 
-/* 浅色玻璃 = 透亮白磨砂（同小组件 --glass-light 一族）：白 tint + 深色字，
-   色标与 widget 浅色档逐位相同（252 253 255 → 236 240 247），
-   浓度同样吃滑杆。 */
-html:not([data-theme="dark"]) .console-root.console-root--glass {
+/* 玻璃拟态回落：真实窗口 Alpha 不可用（浏览器预览 / 某些 release 环境）时，
+   同一套深色 HUD 加深到近实心，外观不塌、也不会露出一片白底。 */
+.console-root.console-shell--glass-css {
   background:
-    radial-gradient(130% 100% at 14% 0%, rgba(255, 255, 255, 0.5), transparent 48%),
+    radial-gradient(120% 90% at 12% 0%, rgba(255, 255, 255, 0.09), transparent 46%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 55%),
+    rgba(28, 30, 36, 0.95);
+}
+
+/* 浅色档：透亮白磨砂（同小组件 --glass-light 一族）。内容层沿用纸感浅色
+   token（不挂 data-theme），所以文字仍是深墨，不用另配前景。 */
+.console-root.console-shell--glass-light {
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(255, 255, 255, 0.9), transparent 48%),
     linear-gradient(
       168deg,
-      rgb(252 253 255 / calc(var(--glass-alpha, 0.82) + 0.06)),
-      rgb(236 240 247 / calc(var(--glass-alpha, 0.82) - 0.05))
+      rgb(252 253 255 / calc(var(--glass-alpha) + 0.06)),
+      rgb(236 240 247 / calc(var(--glass-alpha) - 0.05))
     );
-  color: #1c1c20;
+  border: 1px solid rgba(31, 33, 36, 0.14);
   box-shadow:
-    inset 0 0 0 1px rgba(31, 33, 36, 0.12),
-    0 22px 56px rgba(15, 18, 25, 0.26),
-    0 4px 14px rgba(15, 18, 25, 0.14);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+    inset 0 1px rgba(255, 255, 255, 0.9),
+    0 12px 28px rgba(15, 18, 25, 0.22),
+    0 4px 10px rgba(15, 18, 25, 0.14);
+}
+
+/* 透明档：直接透出桌面与后方窗口。深色字配白霜（glass-light 同时挂上），
+   白色字换深色薄罩（glass-ink-light）。 */
+.console-root.console-shell--glass-clear {
+  --glass-alpha: 0.82;
+  background: rgb(255 255 255 / calc(var(--glass-alpha) * 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    inset 0 1px rgba(255, 255, 255, 0.35),
+    0 12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.console-root.console-shell--glass-ink-light {
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(178, 200, 255, 0.08), transparent 48%),
+    rgb(14 17 24 / var(--glass-alpha));
+  border: 1px solid rgba(0, 0, 0, 0.32);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px rgba(255, 255, 255, 0.12),
+    0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+/* macOS：材质交给系统 vibrancy（hudWindow），WebView 只叠一层适度 tint。 */
+.console-root.console-shell--mac:not(.console-shell--glass-css) {
+  border-radius: 16px;
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(178, 200, 255, 0.07), transparent 52%),
+    linear-gradient(168deg, rgba(30, 34, 46, 0.2), rgba(12, 15, 22, 0.28));
+  border: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px rgba(255, 255, 255, 0.12);
 }
 
 /* --- 玻璃下的表面层：卡片不再实底，透出桌面但保住文字对比 --- */
-html[data-theme="dark"] .console-root.console-root--glass .v7card {
-  background: rgba(19, 26, 38, 0.66);
+html[data-theme="dark"] .console-root.console-shell .v7card {
+  background: rgba(19, 26, 38, 0.62);
   border-color: rgba(255, 255, 255, 0.09);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
 }
-html:not([data-theme="dark"]) .console-root.console-root--glass .v7card {
-  background: rgba(255, 255, 255, 0.62);
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .v7card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .v7card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .v7card {
+  background: rgba(255, 255, 255, 0.58);
   border-color: rgba(31, 33, 36, 0.1);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.7);
 }
-html[data-theme="dark"] .console-root.console-root--glass .settings-card {
-  background: rgba(24, 30, 41, 0.66);
+html[data-theme="dark"] .console-root.console-shell .settings-card {
+  background: rgba(24, 30, 41, 0.62);
 }
-html:not([data-theme="dark"]) .console-root.console-root--glass .settings-card {
-  background: rgba(252, 251, 249, 0.6);
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .settings-card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .settings-card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .settings-card {
+  background: rgba(252, 251, 249, 0.56);
 }
-html[data-theme="dark"] .console-root.console-root--glass .cron-board-row {
+html[data-theme="dark"] .console-root.console-shell .cron-board-row {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(240, 240, 240, 0.12);
 }
-html:not([data-theme="dark"]) .console-root.console-root--glass .cron-board-row {
-  background: rgba(255, 255, 255, 0.52);
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .cron-board-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .cron-board-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .cron-board-row {
+  background: rgba(255, 255, 255, 0.5);
   border-color: rgba(31, 33, 36, 0.1);
 }
-/* 顶栏不再吃 86% 纸色——玻璃上一块实底会把"一整块窗"切断；
-   它自带 blur(12px) 与底部髮丝线，交给下面的玻璃透上来。 */
-.console-root--glass .console-topbar {
-  background: transparent;
+
+/* --- 指挥舱 / 案卷宗：换 --cp-* 的底/面两枚 token，组件层一行不动 ---
+   注意特异性：--cp-* 定义在 .pl-root/.cp-root/.ca-root **自身**上（见文末
+   深色主题那组），所以覆盖必须落在同一元素且比它更强——多挂 .console-root
+   这一级正好压过。玻璃下 canvas 不再是 #f7f6f2 / #1a1917 实底，换成
+   0.55~0.62 的半透：太透字飘、太实就不是玻璃，这个值在真机壁纸上调过。 */
+html[data-theme="dark"] .console-root.console-shell .pl-root,
+html[data-theme="dark"] .console-root.console-shell .cp-root,
+html[data-theme="dark"] .console-root.console-shell .ca-root {
+  --cp-canvas: rgba(20, 24, 33, 0.55);
+  --cp-surface: rgba(255, 255, 255, 0.05);
+  --cp-slot: rgba(255, 255, 255, 0.07);
+  --cp-standby-bg: rgba(255, 255, 255, 0.03);
+  --cp-hair: rgba(255, 255, 255, 0.09);
+  --cp-hair-strong: rgba(255, 255, 255, 0.14);
+  --cp-shadow-hover: 0 4px 20px -2px rgba(0, 0, 0, 0.3);
+  --cp-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -6px rgba(0, 0, 0, 0.35);
+  --cp-shadow-pop: 0 12px 40px -8px rgba(0, 0, 0, 0.5);
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .ca-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .ca-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .ca-root {
+  --cp-canvas: rgba(247, 246, 242, 0.6);
+  --cp-surface: rgba(255, 255, 255, 0.62);
+  --cp-slot: rgba(31, 33, 36, 0.04);
+}
+/* 透明档要真的透：上面那条 0.6 的宣纸白会把桌面糊掉，"透明"就名存实亡
+   （壳透、内容区不透 = 假透明）。压到 0.42 让壁纸读得出来，字仍然压得住。 */
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .ca-root {
+  --cp-canvas: rgba(255, 255, 255, 0.42);
+  --cp-surface: rgba(255, 255, 255, 0.52);
 }
 
-/* --- 指挥舱：换 --cp-* 的底/面两枚 token，组件层不动 ---
-   泳道矩阵的行、格本来就是透明+髮丝线；canvas 透明后桌面直接透上来，
-   行上再垫一层极淡的 tint 兜字（深色 0.035 / 浅色 0.38），
-   与设计稿「每格半透明加深兜底」同一条纪律。IS-ON 行的铜金染色保留。 */
-html[data-theme="dark"] .console-root.console-root--glass .pl-root,
-html[data-theme="dark"] .console-root.console-root--glass .ca-root {
-  --cp-canvas: transparent;
-  --cp-surface: rgba(22, 27, 38, 0.82);
-}
-html:not([data-theme="dark"]) .console-root.console-root--glass .pl-root,
-html:not([data-theme="dark"]) .console-root.console-root--glass .ca-root {
-  --cp-canvas: transparent;
-  --cp-surface: rgba(255, 255, 255, 0.78);
-}
-html[data-theme="dark"] .console-root.console-root--glass .pl-lane-row {
+/* 泳道行垫一层极淡 tint 兜字（深 0.035 / 浅 0.38），与设计稿
+   「每格半透明加深兜底」同一条纪律。IS-ON 行的铜金染色保留。 */
+html[data-theme="dark"] .console-root.console-shell .pl-lane-row {
   background: rgba(255, 255, 255, 0.035);
 }
-html:not([data-theme="dark"]) .console-root.console-root--glass .pl-lane-row {
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-lane-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-lane-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-lane-row {
   background: rgba(255, 255, 255, 0.38);
 }
-html[data-theme="dark"] .console-root.console-root--glass .pl-lane-row.is-on {
+html[data-theme="dark"] .console-root.console-shell .pl-lane-row.is-on {
   background: color-mix(in srgb, var(--cp-bronze) 5%, rgba(255, 255, 255, 0.035));
 }
-html:not([data-theme="dark"]) .console-root.console-root--glass .pl-lane-row.is-on {
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-lane-row.is-on,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-lane-row.is-on,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-lane-row.is-on {
   background: color-mix(in srgb, var(--cp-bronze) 6%, rgba(255, 255, 255, 0.38));
 }
 /* 深潜舱三列：贴一层淡底，长判词不直接压在壁纸上。这里给得比泳道行重
-   （0.05/0.5）——设计稿的代价清单点明"逐字读的长文本"最吃玻璃，
-   判词、验收标准都在这一区。 */
-html[data-theme="dark"] .console-root.console-root--glass .pl-insp-col {
+   （0.05/0.5）——判词、验收标准这类逐字读的长文本最吃玻璃，这一区给最厚。 */
+html[data-theme="dark"] .console-root.console-shell .pl-insp-col {
   background: rgba(255, 255, 255, 0.05);
 }
-html:not([data-theme="dark"]) .console-root.console-root--glass .pl-insp-col {
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-insp-col,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-insp-col,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-insp-col {
   background: rgba(255, 255, 255, 0.5);
+}
+
+/* --- 玻璃深色内容层的逐处补丁 ---
+   token 覆盖不到的单点：sticky 列头必须近乎实底（半透明会被滚上来的行
+   透穿、字叠字）、角标描边要用不透明深色（--cp-surface 此时是半透的）、
+   选中页签的字色、滚动条与焦点环。 */
+html[data-theme="dark"] .console-root.console-shell .pl-colhead-row {
+  background: rgb(23 27 37 / 0.94);
+}
+html[data-theme="dark"] .console-root.console-shell .pl-gate-mark,
+html[data-theme="dark"] .console-root.console-shell .pl-strike-mark {
+  border-color: #1b1f2b;
+}
+html[data-theme="dark"] .console-root.console-shell .pl-tabs button.is-on {
+  background: var(--cp-ink);
+  color: #14171f;
+}
+html[data-theme="dark"] .console-root.console-shell .console-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
+}
+html[data-theme="dark"] .console-root.console-shell .console-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+}
+html[data-theme="dark"] .console-root.console-shell button:focus-visible {
+  outline-color: rgba(158, 193, 245, 0.45);
+}
+/* 顶栏不再吃 86% 纸色——玻璃上一块实底会把"一整块窗"切断；它自带
+   blur(12px) 与底部髮丝线，交给玻璃透上来即可。 */
+.console-root.console-shell .console-topbar {
+  background: transparent;
 }
 
 .console-scroll {
