@@ -10059,6 +10059,34 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
   border-bottom: 1px solid var(--cp-hair);
   background: var(--cp-surface);
 }
+/* 列头单元：连接轴线要画在卡片**外面**（卡片为了压 nowrap 文本是
+   overflow:hidden，自己的 ::after 会被裁掉），所以每列包一层定位 wrapper。
+   第一列前面是「案件 / CASE」，用相邻选择器自然跳过，不跟案名列连线。 */
+.pl-colhead-cell { position: relative; display: flex; min-width: 0; }
+.pl-colhead-cell > .pl-colhead { flex: 1 1 auto; min-width: 0; }
+/* 列头之间的流水线轴：平时一条发丝线，把 7 个星位串成一条链而不是 7 个孤岛
+   （Leo 2026-10-20 第 1 条："上一位到下一位中间有没有连接的跑马灯"）。
+   上一颗星在跑时这一段变成跑马灯——活儿正从这一位手里递给下一位。 */
+.pl-colhead-cell + .pl-colhead-cell::before {
+  content: "";
+  position: absolute;
+  left: -6px;   /* 跨过 grid 的 6px gap，接到上一张卡片的右缘 */
+  top: 50%;
+  width: 32px;
+  height: 1px;
+  margin-top: -0.5px;
+  /* 比发丝线重一档：0.08 的灰在纸底上截图里根本读不出来，等于没画。
+     22% ink 是"看得见但不抢戏"，深浅两档都成立（16% 在深色底上又糊了）。 */
+  background: color-mix(in srgb, var(--cp-ink) 22%, transparent);
+}
+.pl-colhead-cell.is-handoff::before {
+  height: 2px;
+  margin-top: -1px;
+  background: repeating-linear-gradient(90deg, var(--cp-amber) 0 7px, transparent 7px 14px);
+  background-size: 14px 2px;
+  animation: pl-linkmove 0.45s linear infinite;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--cp-amber) 55%, transparent));
+}
 .pl-colhead-lead { align-self: end; padding-bottom: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; color: var(--cp-meta); }
 .pl-colhead {
   display: flex;
@@ -10093,9 +10121,9 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
 .pl-colhead-row .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: var(--cp-bronze); }
 .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
 .pl-colhead-star { display: flex; align-items: center; gap: 5px; line-height: 1; }
-.pl-colhead-star b { font-size: 11px; font-weight: 600; }
-.pl-colhead-role { font-size: 9px; line-height: 1.25; color: var(--cp-meta); }
-.pl-colhead-model { font-size: 8.5px; line-height: 1.2; color: var(--cp-meta); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-colhead-star b { font-size: 12.5px; font-weight: 600; }
+.pl-colhead-role { font-size: 10.5px; line-height: 1.3; color: var(--cp-meta); }
+.pl-colhead-model { font-size: 10px; line-height: 1.25; color: var(--cp-meta); opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 有回环的行**不再多留底高**：v20.2 的 S 动线整条待在两张卡的侧面空档里
    （早先是往下绕的 U + 标签，每行多留 34px；标签已删、形状已换，那 34px 一起收掉）。 */
@@ -10149,7 +10177,10 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
 }
 /* 天权两度门禁那一列是链路分界，分隔线提亮一档（第 6 个 grid 子元素：
    第 1 个是案名列，星位列从第 2 个起数，审稿中=第 6 个子元素）。 */
-.pl-lane-grid > :nth-child(6)::before { background: var(--cp-hair-active); }
+/* 只压泳道格子。列头那行也是 .pl-lane-grid，第 6 个子元素现在是列头单元
+   （pl-colhead-cell）——写宽了会把它前面那段流水线轴线染成琥珀色，
+   看起来像「门禁列在跑」（2026-10-20 加轴线时踩到）。 */
+.pl-lane-grid > .pl-cell:nth-child(6)::before { background: var(--cp-hair-active); }
 /* 斑马纹：**已按设计稿去掉**。设计稿的泳道格子是白卡 + 发丝线，没有隔列刷底；
    而且这条规则是 `.pl-lane-grid > :nth-child(...)`，列头那一行的第 1 个子元素
    是「案件 / CASE」，也跟着被刷成一块灰底 —— 0 案时看起来像个坏掉的输入框。
@@ -10179,7 +10210,7 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
   left: 0;
   top: 50%;
   width: 26px;
-  height: 2px;
+  height: 3px;
   transform: translateY(-50%);
   border-radius: 999px;
   pointer-events: none;
@@ -10191,13 +10222,35 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
   border-radius: 999px;
 }
 /* 只有流动一种态：上一格交付、这一格正在干活。已走完的段不画线
-   （Leo 2026-10-15 第二轮："已经完成的两个 agent 中间就不要再有横线了"）。 */
+   （Leo 2026-10-15 第二轮："已经完成的两个 agent 中间就不要再有横线了"）。
+   2026-10-20 第 1 条：2px / 12px 周期在 26px 的空档里只够两段，看着像脏点；
+   加到 3px 周期 14px，再补一颗沿线跑的白芯光点——"跑马灯"要有头有尾。 */
 .has-link.is-flowing > .pl-link::after {
-  background: repeating-linear-gradient(90deg, var(--cp-amber) 0 6px, transparent 6px 12px);
-  background-size: 12px 2px;
-  animation: pl-linkmove 0.5s linear infinite;
+  background: repeating-linear-gradient(90deg, var(--cp-amber) 0 7px, transparent 7px 14px);
+  background-size: 14px 3px;
+  animation: pl-linkmove 0.45s linear infinite;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--cp-amber) 60%, transparent));
 }
-@keyframes pl-linkmove { to { background-position: 12px 0; } }
+.has-link.is-flowing > .pl-link::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 0 6px 2px var(--cp-amber);
+  animation: pl-linkdot 0.9s linear infinite;
+}
+@keyframes pl-linkmove { to { background-position: 14px 0; } }
+@keyframes pl-linkdot {
+  0% { left: 0; opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { left: 21px; opacity: 0; }
+}
 /* 并列入线的两股竖肩也要跑：一股进来、两股分给玉衡/开阳，
    三段都是同一趟走在路上的活儿——只有横线在跑、竖肩静着，
    看起来就像分流到一半卡住了。 */

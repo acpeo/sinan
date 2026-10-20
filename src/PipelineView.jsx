@@ -307,10 +307,18 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
           被读成"都在活动"（Leo 2026-10-18），绿点语义歧义，删。 */}
       <div className="pl-lane-grid pl-colhead-row">
         <div className="pl-colhead-lead">案件 / CASE</div>
-        {STAGE_COLS.map((col) => {
+        {STAGE_COLS.map((col, index) => {
         const star = col.key.replace(/2$/, "");
         const tele = starTelemetry?.[col.star] ?? {};
-        const live = liveStars.has(col.star) || (col.parallel && (liveStars.has("yuheng") || liveStars.has("kaiyang")));
+        // 这一列此刻有没有星在跑。并行列入线看两股里的任意一股——
+        // 母稿冻结点只有一个出口，玉衡/开阳谁先动都算"这条路在走"。
+        const starLive = (c) =>
+          c.parallel ? liveStars.has("yuheng") || liveStars.has("kaiyang") : liveStars.has(c.star);
+        const live = starLive(col);
+        // 本列的星在跑 = 活儿正在从上一颗星手里递给它：这一列**前面**那段
+        // 列头轴线要走灯（与泳道里 `.pl-link` 的判据同一口径：本格当前且在跑）。
+        // 第一列前面是「案件 / CASE」，没有"上一位"，不亮。
+        const handoff = index > 0 && live;
         // 并行列（玉衡 // 开阳）各自有遥测，不能拿单颗星的 tele 顶两行。
         const parTele = col.parallel
           ? {
@@ -320,8 +328,8 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             }
           : null;
           return (
+            <div className={`pl-colhead-cell${handoff ? " is-handoff" : ""}`} key={col.key}>
             <button
-              key={col.key}
               type="button"
               className={`pl-colhead${colFilter === star ? " is-on" : ""}`}
               onClick={() => onColFilter(colFilter === star ? null : star)}
@@ -336,15 +344,11 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
                 <div className="pl-colhead-star">
                   <StarChip star={col.star} size={20} />
                   <b>{starNameOf(col.star)}</b>
-                  {col.gate
-                    ? (
-                      <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3 }}>
-                        🔒{live ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}
-                      </span>
-                    )
-                    : live
-                      ? <span className="pl-dot pl-dot--amber pl-breathe" style={{ marginLeft: "auto" }} />
-                      : null}
+                  {/* 列头**不挂** 🔒。锁是格子的「母稿冻结」角标（pl-gate-mark，
+                      跟着单个案走），搬到门禁列头上就成了"这一列被锁住/不可用"
+                      的错觉——Leo 2026-10-20 第 3 条直接问"为什么天权都有个锁"。
+                      冻结状态在格子里、在深潜舱里都有，列头只留"在跑"呼吸点。 */}
+                  {live ? <span className="pl-dot pl-dot--amber pl-breathe" style={{ marginLeft: "auto" }} /> : null}
                 </div>
               )}
               <div className="pl-colhead-role cp-mono">{col.role}</div>
@@ -361,6 +365,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
                   : `${tele.model ?? "—"} · 上次 ${tele.lastRun ?? "—"}`}
               </div>
             </button>
+            </div>
           );
         })}
       </div>
