@@ -41,6 +41,23 @@ use tungstenite::Message;
 const RPC_TIMEOUT: Duration = Duration::from_secs(8);
 /// 握手总预算（含 challenge 等待）。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 底层 TCP 的读超时。取 500ms：既能让 `wait_*` 循环顶部的 deadline 及时
+/// 生效，又不会把正常的慢响应误判成断线（真正的超时由 deadline 兜）。
+const SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// 读超时（`set_read_timeout` 到点）在读循环里**不是错误**——它只是让循环
+/// 回到顶部判断 deadline。tungstenite 把它包成 `Io`，kind 在 Windows 上是
+/// `TimedOut`、类 Unix 上常见 `WouldBlock`，两个都要认。
+fn is_read_timeout(error: &tungstenite::Error) -> bool {
+    matches!(
+        error,
+        tungstenite::Error::Io(io)
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            )
+    )
+}
 
 // ---------------------------------------------------------------------------
 // 采集配置与身份
@@ -305,6 +322,16 @@ impl GatewayClient {
             .context("bad gateway url")?;
         let (mut socket, _response) = tungstenite::connect(request)
             .map_err(|error| anyhow!("gateway connect failed: {error}"))?;
+        // 给底层 TCP 加读超时。没有它，`socket.read()` 会永久阻塞在半开连接上
+        // （网关重启 / 断网 / NAT 超时）：线程挂死 → 它持有的 `scan_gate`
+        // 全局锁永远不放 → **所有**网关扫描（sessions / tasks / cron / agents）
+        // 一起停摆，而本地账本收割不走那把锁，于是"账本还在动、新数据全停"。
+        // 2026-10-20 21:07 真机实测：session_run.last_seen 停在 21:07:06，
+        // 同时 beidou_cases.updated_at 还在每 15 秒刷新，就是这个形态。
+        // 超时值取 500ms：`wait_*` 循环顶部的 deadline 判断要能轮到。
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_ref() {
+            let _ = stream.set_read_timeout(Some(SOCKET_READ_TIMEOUT));
+        }
 
         // 1) 等待 connect.challenge，取 nonce
         let nonce = Self::wait_challenge(&mut socket, start)?;
@@ -399,8 +426,8 @@ impl GatewayClient {
             if start.elapsed() > HANDSHAKE_TIMEOUT {
                 bail!("timed out waiting for connect.challenge");
             }
-            match socket.read()? {
-                Message::Text(text) => {
+            match socket.read() {
+                Ok(Message::Text(text)) => {
                     let value: Value =
                         serde_json::from_str(&text).context("non-JSON gateway frame")?;
                     if value.get("type").and_then(Value::as_str) == Some("event")
@@ -414,11 +441,16 @@ impl GatewayClient {
                     }
                     // 其它 pre-connect 帧忽略
                 }
-                Message::Ping(data) => socket.send(Message::Pong(data))?,
-                Message::Close(frame) => {
+                Ok(Message::Ping(data)) => socket.send(Message::Pong(data))?,
+                Ok(Message::Close(frame)) => {
                     bail!("gateway closed during challenge: {frame:?}")
                 }
-                _ => {}
+                Ok(_) => {}
+                // 读超时不是错误，只是"这一拍没东西"：回到循环顶部让 deadline
+                // 判断有机会执行（没有这条，`?` 会把一次正常的空闲等待变成
+                // 握手失败，而连接其实还活着）。
+                Err(error) if is_read_timeout(&error) => {}
+                Err(error) => return Err(error.into()),
             }
         }
     }
@@ -445,8 +477,8 @@ impl GatewayClient {
             if start.elapsed() > HANDSHAKE_TIMEOUT + RPC_TIMEOUT {
                 bail!("gateway response timed out");
             }
-            match socket.read()? {
-                Message::Text(text) => {
+            match socket.read() {
+                Ok(Message::Text(text)) => {
                     let value: Value =
                         serde_json::from_str(&text).context("non-JSON gateway frame")?;
                     let is_ours = value.get("type").and_then(Value::as_str) == Some("res")
@@ -456,9 +488,13 @@ impl GatewayClient {
                     }
                     // event / 其它 id 的 res（本协议串行调用，罕见）忽略
                 }
-                Message::Ping(data) => socket.send(Message::Pong(data))?,
-                Message::Close(frame) => bail!("gateway closed mid-call: {frame:?}"),
-                _ => {}
+                Ok(Message::Ping(data)) => socket.send(Message::Pong(data))?,
+                Ok(Message::Close(frame)) => bail!("gateway closed mid-call: {frame:?}"),
+                Ok(_) => {}
+                // 同 wait_challenge：读超时只是"这一刻还没回"，回到循环顶部
+                // 让 deadline 判断执行，不能当成调用失败。
+                Err(error) if is_read_timeout(&error) => {}
+                Err(error) => return Err(error.into()),
             }
         }
     }
@@ -2257,6 +2293,28 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         ensure_session_run_table(&connection).unwrap();
         connection
+    }
+
+    /// 读超时是"这一刻没数据"，不是断线。
+    /// 2026-10-20 21:07 真机：网关连接半开，`socket.read()` 没有读超时 →
+    /// 线程永久阻塞 → 它持有的 `scan_gate` 锁不放 → 所有网关扫描一起停摆
+    /// （app 里表现为"账本还在刷新，但会话/任务/新案全停"）。这条守住
+    /// "超时不许被当成失败"——否则加了读超时反而会把正常空转判成握手失败。
+    #[test]
+    fn read_timeout_is_not_a_connection_failure() {
+        let timed_out =
+            tungstenite::Error::Io(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        let would_block =
+            tungstenite::Error::Io(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+        assert!(is_read_timeout(&timed_out));
+        assert!(is_read_timeout(&would_block));
+
+        // 真断线不能被当成超时吞掉——那会让同步"假活"。
+        let reset =
+            tungstenite::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+        assert!(!is_read_timeout(&reset));
+        let closed = tungstenite::Error::ConnectionClosed;
+        assert!(!is_read_timeout(&closed));
     }
 
     fn task(id: &str, status: &str, ended: Option<i64>) -> GatewayTask {
