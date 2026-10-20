@@ -2006,6 +2006,120 @@ pub fn says_closed_pub(text: &str) -> bool {
     says_closed(text)
 }
 
+// ---------------------------------------------------------------------------
+// Workboard 卡片镜像（SOP 第十一节 / 2026-10-20）
+//
+// 北斗侧 watchdog 把飞书任务表状态镜像成 workboard 卡片（labels 带 bm: 案号）。
+// 司南只读卡片，把它当结构化状态源：卡片 done = 关单信号，不再依赖
+// chat.history 里分行字段块的文本猜谜。
+// ---------------------------------------------------------------------------
+
+pub fn ensure_workboard_cards_table(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workboard_cards (
+            card_id            TEXT PRIMARY KEY,
+            title              TEXT,
+            status             TEXT,
+            labels             TEXT,
+            case_id            TEXT,
+            claim_agent        TEXT,
+            claim_heartbeat_ms INTEGER,
+            updated_at_ms      INTEGER,
+            synced_at_ms       INTEGER NOT NULL,
+            raw                TEXT
+        )",
+    )
+}
+
+/// 卡片 labels 里取案号：北斗镜像卡必带 `bm:<案号>`；其他卡返回 None。
+pub fn workboard_case_id(labels: &[String]) -> Option<String> {
+    labels
+        .iter()
+        .find_map(|label| label.strip_prefix("bm:"))
+        .map(str::trim)
+        .filter(|case| !case.is_empty())
+        .map(str::to_owned)
+}
+
+/// 落一张卡片：upsert 到 workboard_cards，若是 bm: 卡且 status=done，
+/// 顺路作为关单证据（confirm_closure 幂等，已关的返回 false）。
+/// 返回 (是否新写入/更新, 是否触发关单)。
+pub fn apply_workboard_card(
+    connection: &Connection,
+    card: &serde_json::Value,
+    synced_at_ms: i64,
+) -> rusqlite::Result<(bool, bool)> {
+    let Some(card_id) = card.get("id").and_then(serde_json::Value::as_str) else {
+        return Ok((false, false));
+    };
+    let title = card.get("title").and_then(serde_json::Value::as_str).unwrap_or("");
+    let status = card
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let labels: Vec<String> = card
+        .get("labels")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let case_id = workboard_case_id(&labels);
+    let updated_at_ms = card.get("updatedAt").and_then(serde_json::Value::as_i64);
+    let claim_agent = card
+        .pointer("/metadata/claim/agentId")
+        .and_then(serde_json::Value::as_str);
+    let claim_heartbeat_ms = ["heartbeatAt", "heartbeatAtMs", "updatedAt"]
+        .iter()
+        .find_map(|key| card.pointer(&format!("/metadata/claim/{key}")).and_then(serde_json::Value::as_i64));
+
+    ensure_workboard_cards_table(connection)?;
+    let changed = connection.execute(
+        "INSERT INTO workboard_cards
+            (card_id, title, status, labels, case_id, claim_agent, claim_heartbeat_ms,
+             updated_at_ms, synced_at_ms, raw)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(card_id) DO UPDATE SET
+            title = excluded.title,
+            status = excluded.status,
+            labels = excluded.labels,
+            case_id = excluded.case_id,
+            claim_agent = excluded.claim_agent,
+            claim_heartbeat_ms = excluded.claim_heartbeat_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            synced_at_ms = excluded.synced_at_ms,
+            raw = excluded.raw
+         WHERE workboard_cards.status IS NOT excluded.status
+            OR workboard_cards.claim_agent IS NOT excluded.claim_agent
+            OR workboard_cards.updated_at_ms IS NOT excluded.updated_at_ms",
+        rusqlite::params![
+            card_id,
+            title,
+            status,
+            serde_json::to_string(&labels).unwrap_or_default(),
+            case_id,
+            claim_agent,
+            claim_heartbeat_ms,
+            updated_at_ms,
+            synced_at_ms,
+            card.to_string(),
+        ],
+    )?;
+
+    // 关单信号：bm: 卡走到 done，直接关案（幂等；08 的案 update 0 行）。
+    let mut closed = false;
+    if status == "done" {
+        if let Some(case_id) = &case_id {
+            let at = updated_at_ms.unwrap_or(synced_at_ms);
+            closed = confirm_closure(connection, case_id, at, "workboard: 卡片 done")?;
+        }
+    }
+    Ok((changed > 0, closed))
+}
+
 pub fn closure_mention(text: &str, case_id: &str) -> bool {
     if case_id.is_empty() {
         return false;

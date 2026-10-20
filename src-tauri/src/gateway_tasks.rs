@@ -970,10 +970,39 @@ pub fn fetch_agents_snapshot(
         );
     }
 
+    // Workboard 卡片镜像同步（SOP 第十一节）：北斗 watchdog 把任务表状态
+    // 镜像成 bm: 卡片，这里拉下来落 workboard_cards 表；卡片 done 直接当
+    // 关单信号。60 秒一拍：cards.list 是轻调用，但也不必 15 秒都拉。
+    if let Some(connection) = connection {
+        let due = WORKBOARD_SYNC_AT
+            .lock()
+            .map(|guard| {
+                guard
+                    .map(|at: Instant| at.elapsed() >= WORKBOARD_SYNC_MIN_INTERVAL)
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false);
+        if due {
+            if let Ok(mut guard) = WORKBOARD_SYNC_AT.lock() {
+                *guard = Some(Instant::now());
+            }
+            match sync_workboard_cards(connection, &mut client) {
+                Ok((cards, closed)) => {
+                    if closed > 0 {
+                        eprintln!("sinan workboard sync: {closed} case(s) closed from card done");
+                    }
+                    let _ = cards;
+                }
+                // 卡片同步失败不拖垮快照——它是结构化状态源，不是主路径。
+                Err(error) => eprintln!("sinan workboard sync skipped: {error}"),
+            }
+        }
+    }
+
     // 关单对账：飞书的关单改的是任务表字段，不产生带文本的会话跳——账本
     // 靠 session_run / gateway_task 永远等不到那一跳。顺路拉一次群会话原文
-    // （工具调用结果里有天枢的「记录复核 ['已关单']」）。5 分钟一次：
-    // chat.history(limit 200) 是唯一的重活，不能挂在 15 秒快照上无脑跑。
+    // （工具调用结果里有天枢的「记录复核 ['已关单']」）。90 秒一次：
+    // chat.history(limit 300) 是唯一的重活，不能挂在 15 秒快照上无脑跑。
     if let Some(connection) = connection {
         let due = CLOSURE_RECONCILE_AT
             .lock()
@@ -1897,6 +1926,36 @@ static CLOSURE_RECONCILE_AT: std::sync::LazyLock<Mutex<Option<Instant>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 const CLOSURE_RECONCILE_MIN_INTERVAL: Duration = Duration::from_secs(90);
 
+/// Workboard 卡片同步的全局节流：cards.list 是轻调用（实测 <100ms），
+/// 但 15 秒一拍也没必要——卡片镜像由 watchdog 每 5 分钟纠偏，60 秒足够新。
+static WORKBOARD_SYNC_AT: std::sync::LazyLock<Mutex<Option<Instant>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+const WORKBOARD_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// 拉 workboard.cards.list 落本地表；返回 (卡片数, 由卡片 done 触发的关单数)。
+fn sync_workboard_cards(connection: &Connection, client: &mut GatewayClient) -> Result<(usize, usize)> {
+    let payload = client.call("workboard.cards.list", json!({}))?;
+    let cards = payload
+        .pointer("/cards")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut closed = 0usize;
+    let mut changed = 0usize;
+    for card in &cards {
+        match crate::beidou_cases::apply_workboard_card(connection, card, now) {
+            Ok((updated, did_close)) => {
+                changed += usize::from(updated);
+                closed += usize::from(did_close);
+            }
+            // 单卡坏了不拖垮整批。
+            Err(error) => eprintln!("sinan workboard card skipped: {error}"),
+        }
+    }
+    Ok((changed, closed))
+}
+
 /// 判定该台账行这一拍是否该拉 chat.history，并把"该拉"的这一拍登记进节流表。
 /// 锁中毒时按"不拉"处理（宁可少一次进度刷新，不赌并发）。
 fn chat_pull_due(row_id: i64, now_ms: i64) -> bool {
@@ -2304,6 +2363,110 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         ensure_session_run_table(&connection).unwrap();
         connection
+    }
+
+    /// 卡片镜像落库 + done 关单（SOP 第十一节）。
+    fn workboard_card_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "id": "card-1",
+            "title": "BM-2605 落盘实测第四轮",
+            "status": "running",
+            "labels": ["bm:BM-2605", "mode:图文", "beidou"],
+            "updatedAt": 1792509264724_i64,
+            "metadata": {"claim": {"agentId": "tianshu", "heartbeatAt": 1792509260000_i64}}
+        })
+    }
+
+    #[test]
+    fn workboard_case_id_reads_bm_label_only() {
+        let labels = vec!["bm:BM-2605".to_owned(), "mode:图文".to_owned()];
+        assert_eq!(
+            crate::beidou_cases::workboard_case_id(&labels).as_deref(),
+            Some("BM-2605")
+        );
+        assert_eq!(crate::beidou_cases::workboard_case_id(&[]), None);
+        let no_bm = vec!["mode:图文".to_owned(), "bm:".to_owned()];
+        assert_eq!(crate::beidou_cases::workboard_case_id(&no_bm), None);
+    }
+
+    #[test]
+    fn workboard_done_card_closes_case_and_is_idempotent() {
+        let connection = memory_db();
+        crate::beidou_cases::ensure_case_tables(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO beidou_cases (case_id, gateway, title, stage, updated_at_ms)
+                 VALUES ('BM-2605', 'test', '落盘实测第四轮', '06_二审', 1792509000000)",
+                [],
+            )
+            .unwrap();
+
+        // running 卡：落库，不关单。
+        let mut card = workboard_card_fixture();
+        let (changed, closed) =
+            crate::beidou_cases::apply_workboard_card(&connection, &card, 1000).unwrap();
+        assert!(changed, "首拍要写入");
+        assert!(!closed);
+        let claim: Option<String> = connection
+            .query_row(
+                "SELECT claim_agent FROM workboard_cards WHERE card_id = 'card-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(claim.as_deref(), Some("tianshu"));
+
+        // done 卡：关单，且 confirm_closure 幂等（第二遍不再动案行）。
+        card["status"] = serde_json::json!("done");
+        card["metadata"] = serde_json::json!({"claim": null});
+        let (changed, closed) =
+            crate::beidou_cases::apply_workboard_card(&connection, &card, 2000).unwrap();
+        assert!(changed, "状态变了要更新");
+        assert!(closed, "done 卡要关单");
+        let stage: String = connection
+            .query_row(
+                "SELECT stage FROM beidou_cases WHERE case_id = 'BM-2605'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stage, "08_已关单");
+        let (_, closed_again) =
+            crate::beidou_cases::apply_workboard_card(&connection, &card, 3000).unwrap();
+        assert!(!closed_again, "已关的案不允许重复关");
+    }
+
+    #[test]
+    fn workboard_non_bm_card_never_touches_ledger() {
+        let connection = memory_db();
+        crate::beidou_cases::ensure_case_tables(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO beidou_cases (case_id, gateway, title, stage, updated_at_ms)
+                 VALUES ('BM-2605', 'test', '落盘实测第四轮', '06_二审', 1792509000000)",
+                [],
+            )
+            .unwrap();
+        // 联测卡（无 bm: label）：即使 status=done 也不关任何案。
+        let card = serde_json::json!({
+            "id": "card-smoke",
+            "title": "Workboard 联测卡",
+            "status": "done",
+            "labels": ["smoke-test"],
+            "updatedAt": 1792509280302_i64
+        });
+        let (changed, closed) =
+            crate::beidou_cases::apply_workboard_card(&connection, &card, 1000).unwrap();
+        assert!(changed);
+        assert!(!closed, "没有 bm: 标签的卡不许碰账本");
+        let stage: String = connection
+            .query_row(
+                "SELECT stage FROM beidou_cases WHERE case_id = 'BM-2605'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stage, "06_二审");
     }
 
     /// 读超时是"这一刻没数据"，不是断线。
