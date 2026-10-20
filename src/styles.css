@@ -10067,6 +10067,9 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
 /* 列头之间的流水线轴：平时一条发丝线，把 7 个星位串成一条链而不是 7 个孤岛
    （Leo 2026-10-20 第 1 条："上一位到下一位中间有没有连接的跑马灯"）。
    上一颗星在跑时这一段变成跑马灯——活儿正从这一位手里递给下一位。 */
+/* 第一列的线连的是「案件 / CASE」——天枢接单是活儿进流水线的第一棒，
+   少了这段，7 段轴线里永远有一段是不走的。 */
+.pl-colhead-lead + .pl-colhead-cell::before,
 .pl-colhead-cell + .pl-colhead-cell::before {
   content: "";
   position: absolute;

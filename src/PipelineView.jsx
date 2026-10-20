@@ -315,10 +315,12 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
         const starLive = (c) =>
           c.parallel ? liveStars.has("yuheng") || liveStars.has("kaiyang") : liveStars.has(c.star);
         const live = starLive(col);
-        // 本列的星在跑 = 活儿正在从上一颗星手里递给它：这一列**前面**那段
-        // 列头轴线要走灯（与泳道里 `.pl-link` 的判据同一口径：本格当前且在跑）。
-        // 第一列前面是「案件 / CASE」，没有"上一位"，不亮。
-        const handoff = index > 0 && live;
+        // 本列的星在跑 = 活儿正在递给它：这一列**前面**那段列头轴线要走灯
+        // （与泳道里 `.pl-link` 的判据同一口径：本格当前且在跑）。
+        // 第一列也亮：天枢接单那一刻，"案件 / CASE"→天枢这段就是活儿刚进流水线
+        // 的第一棒。原先把 index>0 当条件，等于 7 段里第一段永远不走灯——
+        // 而天枢恰恰是每单的必经入口（Leo 2026-10-20 19:47 追问时发现的）。
+        const handoff = live;
         // 并行列（玉衡 // 开阳）各自有遥测，不能拿单颗星的 tele 顶两行。
         const parTele = col.parallel
           ? {
