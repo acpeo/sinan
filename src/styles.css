@@ -8721,6 +8721,26 @@ html[data-theme="dark"] .console-root.console-shell button:focus-visible {
 }
 .cron-orphans b { display: block; color: var(--warn); }
 .cron-orphans > span { display: block; margin-top: 2px; color: var(--fg-faint, #6a6b73); }
+/* 折叠态（Leo 2026-10-20 17:20）：真机 11 条里 9 条是历史删除，摊满半屏
+   看久了变墙纸。收成一行标题 + 最新时刻，点开才看清单。 */
+.cron-orphans--collapsed { padding: 7px 14px 7px 16px; }
+.cron-orphans-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.cron-orphans-toggle b { flex: 1 1 auto; }
+.cron-orphans-hint { flex: 0 0 auto; font-size: 11px; color: var(--fg-faint, #6a6b73); white-space: nowrap; }
+.cron-orphans-toggle:hover .cron-orphans-hint { color: inherit; }
+.cron-orphans--collapsed .cron-orphans-hint { margin-left: auto; }
 .cron-orphans ul { margin: 6px 0 0; padding: 0; list-style: none; }
 .cron-orphans li { display: flex; gap: 8px; align-items: baseline; }
 .cron-orphans li em { font-style: normal; font-weight: 600; min-width: 3em; }
@@ -9960,7 +9980,7 @@ button.pl-badge { cursor: pointer; }
 
 /* ---------- 主体两段 ---------- */
 .pl-main { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-.pl-section-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 14px 20px 10px; }
+.pl-section-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 10px 20px 8px; }
 .pl-section-head h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.02em; }
 .pl-section-sub { font-size: 11px; color: var(--cp-meta); }
 /* 段头四态图例 —— 设计稿 mock20 有、落地时漏了；四态与泳道节点一一对应：
@@ -10005,16 +10025,16 @@ button.pl-badge { cursor: pointer; }
   position: sticky;
   top: 0;
   z-index: 2;
-  padding-bottom: 8px;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--cp-hair);
   background: var(--cp-surface);
 }
-.pl-colhead-lead { align-self: end; padding-bottom: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; color: var(--cp-meta); }
+.pl-colhead-lead { align-self: end; padding-bottom: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; color: var(--cp-meta); }
 .pl-colhead {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 7px;
+  gap: 1px;
+  padding: 4px 6px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
@@ -10031,10 +10051,10 @@ button.pl-badge { cursor: pointer; }
 .pl-colhead-row .pl-colhead:hover { background: var(--cp-surface); border-color: var(--cp-hair-strong); }
 .pl-colhead-row .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: var(--cp-bronze); }
 .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
-.pl-colhead-star { display: flex; align-items: center; gap: 6px; }
-.pl-colhead-star b { font-size: 11.5px; font-weight: 600; }
-.pl-colhead-role { font-size: 9.5px; color: var(--cp-meta); }
-.pl-colhead-model { font-size: 9px; color: var(--cp-meta); opacity: 0.85; }
+.pl-colhead-star { display: flex; align-items: center; gap: 5px; line-height: 1; }
+.pl-colhead-star b { font-size: 11px; font-weight: 600; }
+.pl-colhead-role { font-size: 9px; line-height: 1.25; color: var(--cp-meta); }
+.pl-colhead-model { font-size: 8.5px; line-height: 1.2; color: var(--cp-meta); opacity: 0.85; white-space: nowrap; }
 
 /* 有回环的行**不再多留底高**：v20.2 的 S 动线整条待在两张卡的侧面空档里
    （早先是往下绕的 U + 标签，每行多留 34px；标签已删、形状已换，那 34px 一起收掉）。 */

@@ -324,12 +324,12 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             >
               {col.parallel ? (
                 <>
-                  <div className="pl-colhead-star"><StarChip star="yuheng" size={24} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
-                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={24} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="yuheng" size={20} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={20} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
                 </>
               ) : (
                 <div className="pl-colhead-star">
-                  <StarChip star={col.star} size={24} />
+                  <StarChip star={col.star} size={20} />
                   <b>{starNameOf(col.star)}</b>
                   {col.gate
                     ? (

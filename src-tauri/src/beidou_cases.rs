@@ -1925,6 +1925,80 @@ fn says_closed(text: &str) -> bool {
     false
 }
 
+/// 在一段会话原文里找「某案已关单」的证据。
+///
+/// 为什么需要它：飞书的关单是**直接改任务表字段**（天枢用 lark-cli 调
+/// bitable 接口），这个动作不产生带文本的 agent 会话跳——app 的两张证据表
+/// （session_run / gateway_task）都读不到。2026-10-20 真机就是这个形态：
+/// BM-2603/BM-2604 在 07:2x 就被改成「已关单」，app 到 17:20 还挂在
+/// 07_视听并行 / 06_二审，Leo 去问天枢才发现早就关完了。
+///
+/// 唯一能拿到那份证据的地方是 `chat.history`（工具调用结果里有天枢的
+/// 「记录复核 … ['已关单']」）。判定放在**行内**做：同一行里既要有案号、
+/// 又要 says_closed —— 不能开窗口跨行比，否则
+/// 「BM-2603 未关单 / BM-2604 已关单」两行会把 BM-2603 也判成已关。
+pub fn closure_mention(text: &str, case_id: &str) -> bool {
+    if case_id.is_empty() {
+        return false;
+    }
+    for line in text.lines() {
+        if !line.contains(case_id) {
+            continue;
+        }
+        // 这一行里如果还提到别的案，要求"已关单"离本案号更近——多案并排的
+        // 复核输出（一行一案）本来就是最常见的形态，防的是拼接成一行的日志。
+        let others = line.matches("BM-").count();
+        if others <= 1 {
+            if says_closed(line) {
+                return true;
+            }
+            continue;
+        }
+        let Some(anchor) = line.find(case_id) else { continue };
+        for marker in ["已关单", "关单完成"] {
+            let mut from = 0usize;
+            while let Some(rel) = line[from..].find(marker) {
+                let pos = from + rel;
+                // says_closed 的否定词规则在这里逐字复用：切出标记附近的一小段
+                let lo = pos.saturating_sub(4);
+                let hi = (pos + marker.len() + 8).min(line.len());
+                let local = &line[lo..hi];
+                let near_case = pos.abs_diff(anchor) <= 40;
+                if near_case && says_closed(local) {
+                    return true;
+                }
+                from = pos + marker.len();
+            }
+        }
+    }
+    false
+}
+
+/// 网关侧确认关单的落点：飞书任务表已改「已关单」，但该动作不产生会话跳。
+/// 由 gateway_tasks 拉 chat.history 找到证据后回调这里收案。
+/// 幂等：已经是 08 的返回 false（不刷 updated_at，避免每轮都写）。
+pub fn confirm_closure(
+    connection: &Connection,
+    case_id: &str,
+    closed_at_ms: i64,
+    evidence: &str,
+) -> rusqlite::Result<bool> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let changed = connection.execute(
+        "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2, \
+         last_activity_ms = MAX(COALESCE(last_activity_ms, 0), ?3) \
+         WHERE case_id = ?1 AND stage NOT LIKE '08%'",
+        rusqlite::params![case_id, now, closed_at_ms],
+    )?;
+    if changed > 0 {
+        eprintln!(
+            "sinan closure reconciled: {case_id} → 08_已关单（飞书任务表证据: {}）",
+            evidence.chars().take(80).collect::<String>()
+        );
+    }
+    Ok(changed > 0)
+}
+
 /// 阶段 → 泳道列号（0..=6）。与前端 cockpit.js 的 STAGE_TO_STEP 同一套语义
 /// 顺序：建档 0、研究 1、定题 2、母稿 3、二审 4、视听并行 5、分发关单 6。
 /// **不能按字符串前缀数字比**：真机库里的编号本身就是错位的
@@ -4649,6 +4723,85 @@ mod dispatch_helper_tests {
         assert_eq!(row.review_doc_url, "", "重复槽清空");
         assert_eq!(row.visual_url, "", "重复槽清空");
         assert_eq!(row.ops_doc_url, "", "重复槽清空");
+    }
+
+    /// 飞书任务表的关单复核行是 app 唯一读得到的关单证据（关单动作本身
+    /// 不产生会话跳）。这条判据必须**只认本案**：多案并排的复核输出里
+    /// 「BM-2603 未关单 / BM-2604 已关单」绝不能把两案都判成已关。
+    #[test]
+    fn closure_mention_reads_the_task_table_review_line() {
+        // 真机 08:28 的复核输出原样（8 条并列，一行一案）
+        let review = "\
+=== 记录复核 === 记录总数: 8
+- reczz28Onl8gNnnQ | BM-2601 | ['已关单'] | ['已完成'] | 归档 True
+- reczz28PKVFHydU3 | BM-2602 全链路落盘实测 | ['已关单'] | ['已完成'] | 归档 True
+- reczz28PLsvuHcNT | BM-2603 落盘实测第二轮 | ['已关单'] | ['已完成'] | 归档 True
+- reczz28PMGM0xNGt | BM-2604 落盘实测第三轮 | ['已关单'] | ['已完成'] | 归档 True";
+        for case_id in ["BM-2601", "BM-2602", "BM-2603", "BM-2604"] {
+            assert!(
+                closure_mention(review, case_id),
+                "{case_id} 在复核行里明明是已关单"
+            );
+        }
+        // 不在列表里的案一个都不许沾
+        assert!(!closure_mention(review, "BM-2609"));
+    }
+
+    #[test]
+    fn closure_mention_refuses_negated_and_cross_line_evidence() {
+        // ① 未关单 → 不许判成已关
+        assert!(!closure_mention("BM-2603 落盘实测第二轮 | ['未关单']", "BM-2603"));
+        // ② Leo 的问句（2026-10-20 15:23 原话）不许判成关单
+        assert!(!closure_mention(
+            "检查一下，看看还有未关单的任务吗？如果有就关掉",
+            "BM-2603"
+        ));
+        // ③ 跨行：BM-2603 未关、BM-2604 已关 —— 各判各的，不许串
+        let mixed = "BM-2603 落盘实测第二轮 | ['未关单']\nBM-2604 落盘实测第三轮 | ['已关单']";
+        assert!(!closure_mention(mixed, "BM-2603"), "跨行串证据：BM-2603 被 BM-2604 的已关单带走");
+        assert!(closure_mention(mixed, "BM-2604"));
+        // ④ 巡检「分支1（已关单）未命中」的老坑：不许判成已关
+        assert!(!closure_mention(
+            "分支 1（已关单）未命中，按分支 5 走无事分支",
+            "BM-2603"
+        ));
+    }
+
+    #[test]
+    fn confirm_closure_is_idempotent_and_only_closes_upward() {
+        let db = session_run_db();
+        ensure_case_tables(&db).expect("schema");
+        ensure_case_row(&db, "BM-9001").expect("case row");
+        let closed_at = 1_792_470_000_000i64;
+
+        assert!(confirm_closure(&db, "BM-9001", closed_at, "复核行").expect("close"));
+        let stage: String = db
+            .query_row(
+                "SELECT stage FROM beidou_cases WHERE case_id = 'BM-9001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read stage");
+        assert_eq!(stage, "08_已关单");
+
+        // 再来一次不刷 updated_at（幂等），也不重复算"新关单"
+        let before: i64 = db
+            .query_row(
+                "SELECT updated_at_ms FROM beidou_cases WHERE case_id = 'BM-9001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read updated");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(!confirm_closure(&db, "BM-9001", closed_at, "复核行").expect("noop"));
+        let after: i64 = db
+            .query_row(
+                "SELECT updated_at_ms FROM beidou_cases WHERE case_id = 'BM-9001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read updated");
+        assert_eq!(before, after, "已关单的案不该被秒刷 updated_at");
     }
 
     #[test]

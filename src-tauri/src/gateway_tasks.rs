@@ -934,6 +934,34 @@ pub fn fetch_agents_snapshot(
         );
     }
 
+    // 关单对账：飞书的关单改的是任务表字段，不产生带文本的会话跳——账本
+    // 靠 session_run / gateway_task 永远等不到那一跳。顺路拉一次群会话原文
+    // （工具调用结果里有天枢的「记录复核 ['已关单']」）。5 分钟一次：
+    // chat.history(limit 200) 是唯一的重活，不能挂在 15 秒快照上无脑跑。
+    if let Some(connection) = connection {
+        let due = CLOSURE_RECONCILE_AT
+            .lock()
+            .map(|guard| {
+                guard
+                    .map(|at: Instant| at.elapsed() >= CLOSURE_RECONCILE_MIN_INTERVAL)
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false);
+        if due {
+            if let Ok(mut guard) = CLOSURE_RECONCILE_AT.lock() {
+                *guard = Some(Instant::now());
+            }
+            match reconcile_closures_from_chat(connection, &mut client) {
+                Ok(0) => {}
+                Ok(count) => {
+                    eprintln!("sinan closure reconcile: {count} case(s) closed from task-table evidence")
+                }
+                // 对账失败不能把整份快照带下去——它是附加能力，不是主路径。
+                Err(error) => eprintln!("sinan closure reconcile skipped: {error}"),
+            }
+        }
+    }
+
     Ok(AgentsSnapshot {
         collected_at_ms: chrono::Utc::now().timestamp_millis(),
         agents,
@@ -1451,6 +1479,95 @@ fn session_agent_id(session_key: &str) -> Option<String> {
     }
 }
 
+/// 关单对账：飞书的关单是**直接改任务表字段**（天枢用 lark-cli 调 bitable），
+/// 这个动作不产生带文本的 agent 会话跳——session_run / gateway_task 两张
+/// 证据表都读不到，账本因此永远停在关单前一格。
+///
+/// 2026-10-20 真机实况：BM-2603/BM-2604 在 07:2x 就被改成「已关单」，app 到
+/// 17:20 还挂在 07_视听并行 / 06_二审；Leo 去问天枢才知道早就关完了。
+/// 唯一拿得到那份证据的地方是 `chat.history`——天枢的「记录复核 … ['已关单']」
+/// 活在工具调用结果里。
+///
+/// 成本：一次 sessions.list + 一次 chat.history(limit 200)。调用方负责节流。
+pub fn reconcile_closures_from_chat(
+    connection: &Connection,
+    client: &mut GatewayClient,
+) -> Result<usize> {
+    // 待对账的案：还没到 08 的。一个都没有就别拉网。
+    let pending: Vec<String> = {
+        let mut stmt = connection.prepare(
+            "SELECT case_id FROM beidou_cases WHERE stage NOT LIKE '08%' ORDER BY case_id",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    // 天枢群会话键：北斗的任务表复核都发生在天枢名下（其余星位只报自己的段）。
+    let sessions = client.call("sessions.list", json!({}))?;
+    let list = sessions
+        .get("payload")
+        .and_then(|payload| payload.get("sessions"))
+        .or_else(|| sessions.get("sessions"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(group_key) = list.iter().find_map(|session| {
+        let key = session.get("key").and_then(Value::as_str)?;
+        let agent = session_agent_id(key)?;
+        (agent == "tianshu" && key.contains(":group:")).then(|| key.to_owned())
+    }) else {
+        return Ok(0);
+    };
+    // 用 chat.history 而不是 sessions.get：后者要把整段 transcript 序列化，
+    // 真机实测 90 秒起步直接超时（天枢当时还是空闲状态——不是负载，是接口
+    // 本身重）；chat.history(limit 100) 只要 237ms，且窗口正落在 07:38–08:29
+    // 这段关单复核上。群消息再涨、窗口滑走时的兜底见下方 closure_mention 失败
+    // 的静默路径——宁可这轮没对上，也不能把快照拖死。
+    let payload = client.call(
+        "chat.history",
+        json!({"sessionKey": group_key, "limit": 100}),
+    )?;
+    let messages = payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if messages.is_empty() {
+        return Ok(0);
+    }
+    let mut confirmed = 0usize;
+    for case_id in &pending {
+        // 从最新往回找：关单是一次性事件，找到就可以停。
+        for message in messages.iter().rev() {
+            let Some(raw) = session_content_text(message.get("content")) else {
+                continue;
+            };
+            if !crate::beidou_cases::closure_mention(&raw, case_id) {
+                continue;
+            }
+            let at = message
+                .get("timestamp")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            // 证据只取命中案号的那一行——日志里要能一眼看到"凭什么关的"。
+            let evidence = raw
+                .lines()
+                .find(|line| line.contains(case_id.as_str()))
+                .unwrap_or("")
+                .chars()
+                .take(160)
+                .collect::<String>();
+            if crate::beidou_cases::confirm_closure(connection, case_id, at, &evidence)? {
+                confirmed += 1;
+            }
+            break;
+        }
+    }
+    Ok(confirmed)
+}
+
 /// cron.runs 单条 → 任务账本行。字段宽容：网关版本间字段名可能漂移
 /// （runAtMs/ts、completionStatus/status、agentId/agent_id），逐个回退。
 fn cron_run_entry_to_task(entry: &Value) -> Option<GatewayTask> {
@@ -1726,6 +1843,12 @@ fn session_run_is_phantom(session: &SessionUsage) -> bool {
 static CHAT_PULL_THROTTLE: std::sync::LazyLock<Mutex<HashMap<i64, i64>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 const CHAT_PULL_MIN_INTERVAL_MS: i64 = 15_000;
+
+/// 关单对账的全局节流：一次 chat.history(limit 200) 是重活，挂在 15 秒
+/// 快照路径上必须限频。飞书侧关单是人的操作节奏（分钟级），5 分钟足够。
+static CLOSURE_RECONCILE_AT: std::sync::LazyLock<Mutex<Option<Instant>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+const CLOSURE_RECONCILE_MIN_INTERVAL: Duration = Duration::from_secs(300);
 
 /// 判定该台账行这一拍是否该拉 chat.history，并把"该拉"的这一拍登记进节流表。
 /// 锁中毒时按"不拉"处理（宁可少一次进度刷新，不赌并发）。

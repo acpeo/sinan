@@ -4203,6 +4203,10 @@ function TasksSection({
     () => listOrphanRuns(cronTasks, cronJobs),
     [cronJobs, cronTasks],
   );
+  // Leo 2026-10-20 17:20：这个告警块默认折叠。真机上 11 条里有 9 条是
+  // 10-13/10-18 的历史删除——每次都摊满半屏，看久了就变成"墙纸"，
+  // 真出事那天反而没人看。折叠成一行，点开才看清单。
+  const [orphanOpen, setOrphanOpen] = useState(false);
 
   const load = useCallback((filter) => {
     loadGatewayTasks(filter === "all" ? null : filter)
@@ -4463,24 +4467,36 @@ function TasksSection({
         />
       )}
       {showCron && orphanRuns.length > 0 && (
-        <div className="cron-orphans" role="note">
-          <b>
-            {orphanRuns.length} 个任务已从定时列表删除，账本里却还有它们的运行记录
-          </b>
-          <span>
-            被删的任务不会再生效；若其中是巡检/看门狗，流水线停滞时没有任何东西会推它——需要回网关恢复。
-          </span>
-          <ul>
-            {orphanRuns.slice(0, 5).map((orphan) => (
-              <li key={orphan.sourceId}>
-                <em>{starNameOf(orphan.agentId) || orphan.agentId || "未知星位"}</em>
-                <span>
-                  {orphan.runs} 次运行 · 最新 {formatHistoryTime(orphan.at, now)}
-                </span>
-              </li>
-            ))}
-            {orphanRuns.length > 5 && <li className="cron-orphans-more">另有 {orphanRuns.length - 5} 个</li>}
-          </ul>
+        <div className={`cron-orphans${orphanOpen ? "" : " cron-orphans--collapsed"}`} role="note">
+          <button
+            type="button"
+            className="cron-orphans-toggle"
+            aria-expanded={orphanOpen}
+            onClick={() => setOrphanOpen((open) => !open)}
+          >
+            <b>{orphanRuns.length} 个任务已从定时列表删除，账本里还留着运行记录</b>
+            <span className="cron-orphans-hint">
+              最新一次 {formatHistoryTime(orphanRuns[0]?.at, now)} · {orphanOpen ? "收起" : "展开看清单"}
+            </span>
+          </button>
+          {orphanOpen && (
+            <>
+              <span>
+                被删的任务不会再生效；若其中是巡检/看门狗，流水线停滞时没有任何东西会推它——需要回网关恢复。
+              </span>
+              <ul>
+                {orphanRuns.slice(0, 5).map((orphan) => (
+                  <li key={orphan.sourceId}>
+                    <em>{starNameOf(orphan.agentId) || orphan.agentId || "未知星位"}</em>
+                    <span>
+                      {orphan.runs} 次运行 · 最新 {formatHistoryTime(orphan.at, now)}
+                    </span>
+                  </li>
+                ))}
+                {orphanRuns.length > 5 && <li className="cron-orphans-more">另有 {orphanRuns.length - 5} 个</li>}
+              </ul>
+            </>
+          )}
         </div>
       )}
       {showCron && (cronBoard.length > 0 ? (
