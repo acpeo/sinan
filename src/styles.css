@@ -10077,12 +10077,17 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
   position: absolute;
   left: -6px;   /* 跨过 grid 的 6px gap，接到上一张卡片的右缘 */
   top: 50%;
-  width: 6px;
+  /* 9px：缝里的 6px 实心 + 探进卡片圆角区 3px 淡出。6px 纯缝里那版在
+     缩略图上读不出"一条横线"，只剩一个点；探进圆角区的那 3px 因为 mask
+     淡出，不会变成 Leo 20:01 说过的那种"卡片上的划痕"。 */
+  width: 9px;
   height: 1px;
   margin-top: -0.5px;
   /* 比发丝线重一档：0.08 的灰在纸底上截图里根本读不出来，等于没画。
-     22% ink 是"看得见但不抢戏"，深浅两档都成立（16% 在深色底上又糊了）。 */
-  background: color-mix(in srgb, var(--cp-ink) 22%, transparent);
+     26% ink 是"看得见但不抢戏"，深浅两档都成立（16% 在深色底上又糊了）。 */
+  background: color-mix(in srgb, var(--cp-ink) 26%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 0 6px, transparent 9px);
+  mask-image: linear-gradient(90deg, #000 0 6px, transparent 9px);
 }
 /* 走灯态：活儿正从上一颗星手里递给下一位。6px 的缝放不下一整个虚线周期，
    所以这段放长到 14px 并压住卡片前沿 8px，右端用 mask 淡出——
