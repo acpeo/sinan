@@ -559,6 +559,14 @@ fn gateway_task_list(
         .map_err(|error| error.to_string())
 }
 
+/// Workboard 卡片状态（北斗父卡 + 段卡的本地镜像，Phase 2）。
+/// 只读本地 workboard_cards 表，不联网；联网同步在快照循环里做。
+#[tauri::command]
+fn workboard_cards_list(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let connection = open_database_read_only(&state.database_path)?;
+    gateway_tasks::workboard_card_rows(&connection).map_err(|error| error.to_string())
+}
+
 /// 读本地会话工作台账（不联网）：群聊派活等会话 run 的结构化记录。
 #[tauri::command]
 fn session_run_list(
@@ -1355,6 +1363,7 @@ pub fn run() {
             gateway_cron_list,
             gateway_agents_snapshot,
             session_run_list,
+            workboard_cards_list,
             beidou_direct_launch,
             beidou_append_video,
             beidou_auto_heal,

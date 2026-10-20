@@ -255,6 +255,21 @@ export async function loadSessionRuns() {
   }
 }
 
+/// Workboard 卡片状态（Phase 2）：北斗父卡 + 段卡的本地镜像（workboard_cards 表）。
+/// 只读本地，不联网——联网同步在 Rust 快照循环里 60 秒一拍。
+/// 浏览器演示给空：卡片是执行留痕，演示环境没有真实执行，摆假卡违反账本诚实规则。
+export async function loadWorkboardCards() {
+  if (!isTauriRuntime()) {
+    return { demo: false, cards: [] };
+  }
+  try {
+    const cards = await invoke("workboard_cards_list");
+    return { demo: false, cards: Array.isArray(cards) ? cards : [] };
+  } catch (error) {
+    return { demo: false, cards: [], loadError: String(error) };
+  }
+}
+
 /// 定时任务看板（六案③）：cron.list 的本地镜像读回 + 触发拉取。
 /// 镜像在 Rust 侧 60 秒节流，前端每拍调用也只真连一次每分钟。
 /// 演示数据 = 北斗真实形态三例（巡检/心跳/停用的记忆整理），并自带

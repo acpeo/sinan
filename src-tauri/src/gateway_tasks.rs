@@ -1956,6 +1956,75 @@ fn sync_workboard_cards(connection: &Connection, client: &mut GatewayClient) -> 
     Ok((changed, closed))
 }
 
+/// 深潜舱/列头用的卡片状态：把 workboard_cards 展平成 JSON 行（父卡 + 段卡）。
+/// 段信息从 labels 解析（seg:/owner:/case:），proof/attempts/摘要从 raw 里取。
+pub fn workboard_card_rows(connection: &Connection) -> Result<Vec<Value>> {
+    crate::beidou_cases::ensure_workboard_cards_table(connection)?;
+    let mut statement = connection.prepare(
+        "SELECT card_id, title, status, labels, case_id, claim_agent, claim_heartbeat_ms, \
+                updated_at_ms, raw \
+         FROM workboard_cards ORDER BY COALESCE(updated_at_ms, synced_at_ms) DESC",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<i64>>(6)?,
+            row.get::<_, Option<i64>>(7)?,
+            row.get::<_, Option<String>>(8)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (card_id, title, status, labels_raw, case_id, claim_agent, heartbeat, updated, raw) =
+            row.map_err(|error| anyhow!("workboard card row: {error}"))?;
+        let labels: Vec<String> = labels_raw
+            .as_deref()
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or_default();
+        let find_label = |prefix: &str| {
+            labels
+                .iter()
+                .find_map(|label| label.strip_prefix(prefix).map(str::to_owned))
+        };
+        let is_parent = case_id.is_some();
+        // 段卡没有 bm: 标签，案号从 case: 标签取——深潜舱按案聚合要靠它。
+        let effective_case = case_id.clone().or_else(|| find_label("case:"));
+        let mut entry = json!({
+            "cardId": card_id,
+            "title": title,
+            "status": status,
+            "caseId": effective_case,
+            "role": if is_parent { "parent" } else { find_label("case:").map(|_| "segment").unwrap_or("other") },
+            "seg": find_label("seg:"),
+            "owner": find_label("owner:"),
+            "claimAgent": claim_agent,
+            "heartbeatMs": heartbeat,
+            "updatedAtMs": updated,
+        });
+        // proof / attempts / 摘要都在 raw 的 metadata 里，缺字段就缺省。
+        if let Some(raw_text) = raw.as_deref() {
+            if let Ok(card) = serde_json::from_str::<Value>(raw_text) {
+                let proofs = card.pointer("/metadata/proof").cloned().unwrap_or(json!([]));
+                let attempts = card.pointer("/metadata/attempts").cloned().unwrap_or(json!([]));
+                let summary = card
+                    .pointer("/metadata/automation/summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                entry["proofs"] = proofs;
+                entry["attemptCount"] = json!(attempts.as_array().map(Vec::len).unwrap_or(0));
+                entry["summary"] = json!(summary);
+            }
+        }
+        out.push(entry);
+    }
+    Ok(out)
+}
+
 /// 判定该台账行这一拍是否该拉 chat.history，并把"该拉"的这一拍登记进节流表。
 /// 锁中毒时按"不拉"处理（宁可少一次进度刷新，不赌并发）。
 fn chat_pull_due(row_id: i64, now_ms: i64) -> bool {

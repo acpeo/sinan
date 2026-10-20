@@ -10146,6 +10146,16 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
 .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
 .pl-colhead-star { display: flex; align-items: center; gap: 5px; line-height: 1; }
 .pl-colhead-star b { font-size: 12.5px; font-weight: 600; }
+/* Workboard 段卡在跑徽标（Phase 2 · B 路线）：只在有 running 段卡时出现。
+   字号压到与角色行同级，琥珀描边但不发亮——它在跑的信号呼吸点已经承担了，
+   这里只是把"几张卡"说清楚，不与呼吸点抢注意。 */
+.pl-colhead-wb { font-size: 10px; color: var(--cp-amber); border: 1px solid color-mix(in srgb, var(--cp-amber) 35%, transparent); border-radius: 999px; padding: 1px 6px; margin-left: 2px; }
+/* 深潜舱的卡片条：父卡 + 段卡 chips 一行排开，塞得下就一行，塞不下折行。
+   挂在 pl-insp-head 之下、三栏 body 之上，全宽但不另起卡片层（Leo 的克制令）。 */
+.pl-insp-cards { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px 20px 0; }
+.pl-wb-chip { display: inline-flex; align-items: center; gap: 5px; }
+.pl-wb-chip .pl-dot { margin-left: 0; }
+.pl-wb-proof { font-weight: 700; opacity: 0.85; }
 .pl-colhead-role { font-size: 10.5px; line-height: 1.3; color: var(--cp-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-colhead-model { font-size: 10px; line-height: 1.25; color: var(--cp-meta); opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

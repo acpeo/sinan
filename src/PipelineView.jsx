@@ -360,13 +360,18 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             >
               {col.parallel ? (
                 <>
-                  <div className="pl-colhead-star"><StarChip star="yuheng" size={20} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
-                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={20} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="yuheng" size={20} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}{wbRunningBySeg["06-出图"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-出图"]}卡在跑</span> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={20} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}{wbRunningBySeg["06-视频"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-视频"]}卡在跑</span> : null}</div>
                 </>
               ) : (
                 <div className="pl-colhead-star">
                   <StarChip star={col.star} size={20} />
                   <b>{starNameOf(col.star)}</b>
+                  {(() => {
+                    const segs = wbSegsOfCol(col);
+                    const n = segs.reduce((sum, seg) => sum + (wbRunningBySeg[seg] ?? 0), 0);
+                    return n ? <span className="pl-colhead-wb cp-mono">{n}卡在跑</span> : null;
+                  })()}
                   {/* 列头**不挂** 🔒。锁是格子的「母稿冻结」角标（pl-gate-mark，
                       跟着单个案走），搬到门禁列头上就成了"这一列被锁住/不可用"
                       的错觉——Leo 2026-10-20 第 3 条直接问"为什么天权都有个锁"。
@@ -537,7 +542,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
 }
 
 /* ═══════════ 单案深潜舱 ═══════════ */
-function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
+function Inspector({ caseItem, liveStars, liveAction, workboardCards = [], hasCases }) {
   // 自愈是真会发指令出去，所以两步确认：第一下上膛、第二下才发。换案自动收回
   // （用 ref 记住上膛的是哪一案，不额外跑 effect，也不多一次渲染）。
   const [armedHeal, setArmedHeal] = useState(false);
@@ -604,6 +609,39 @@ function Inspector({ caseItem, liveStars, liveAction, hasCases }) {
           {stageLabel} · {stageName}
         </span>
       </div>
+      {/* 工作板卡片条（Phase 2 · B 路线）：父卡 + 段卡的本地镜像。
+          空数组不渲染——没装新包/镜像还没同步时这里就是没有，不摆占位假条。 */}
+      {(() => {
+        const mine = workboardCards.filter(
+          (card) => card.caseId === c.caseId || card.title === c.name,
+        );
+        const parent = mine.find((card) => card.role === "parent");
+        const segments = mine
+          .filter((card) => card.role === "segment")
+          .sort((a, b) => String(a.seg ?? "").localeCompare(String(b.seg ?? ""), "zh-Hans-CN", { numeric: true }));
+        if (!parent && segments.length === 0) return null;
+        const STATUS_ZH = { todo: "排队", ready: "待认领", running: "在跑", review: "待验收", blocked: "受阻", done: "完成" };
+        const STATUS_TONE = { running: "bronze", done: "jade", blocked: "cinnabar", review: "indigo", todo: "slate", ready: "slate" };
+        const chip = (card, label) => {
+          const tone = STATUS_TONE[card.status] ?? "slate";
+          const zh = STATUS_ZH[card.status] ?? card.status;
+          const proofs = card.proofCount ?? (Array.isArray(card.proofs) ? card.proofs.length : 0);
+          return (
+            <span className={`pl-badge pl-badge--${tone} pl-wb-chip`} key={card.cardId ?? label} title={card.summary || undefined}>
+              {label} · {zh}
+              {card.status === "running" ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}
+              {proofs > 0 ? <b className="pl-wb-proof">✓{proofs}</b> : null}
+            </span>
+          );
+        };
+        return (
+          <div className="pl-insp-cards">
+            <span className="pl-kicker">工作板 · beidou</span>
+            {parent ? chip(parent, "父卡") : <span className="pl-badge pl-badge--slate pl-wb-chip">父卡未镜像</span>}
+            {segments.map((card) => chip(card, card.seg ?? card.title))}
+          </div>
+        );
+      })()}
       <div className="pl-insp-body">
         {/* 左栏：定题与背调依据（定题结论 + 研究文档 + 飞书云盘）*/}
         <article className="cp-card pl-insp-col">
@@ -864,6 +902,7 @@ export function PipelineView({
   starTelemetry = {},
   liveStars = new Set(),
   liveAction = {},
+  workboardCards = [],
   conn = { state: "error", text: "未连接", title: "" },
   onRetryConn,
   onLaunch,
@@ -879,6 +918,30 @@ export function PipelineView({
 }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [colFilter, setColFilter] = useState(null);
+  // Workboard 段卡在跑数（Phase 2 · B 路线）：按**段**聚合，不按星——
+  // 天权在链上有两列（03-初审 / 05-二审），按星聚合会把同一计数画到两列上。
+  // 列头只报「在跑」——done/todo 的数量是看板缩影，不该挤进星位遥测；
+  // claim 心跳做 live 判据是 Phase 2 后半段的事，这里先纯计数。
+  const wbRunningBySeg = useMemo(() => {
+    const out = {};
+    for (const card of workboardCards) {
+      if (card.role !== "segment" || card.status !== "running") continue;
+      const seg = card.seg;
+      if (!seg) continue;
+      out[seg] = (out[seg] ?? 0) + 1;
+    }
+    return out;
+  }, [workboardCards]);
+  // 列 → 段卡名：与 SOP 11.1 的段名枚举一字不差（同源口径，别造短别名）。
+  const wbSegsOfCol = (col) => {
+    if (col.key === "tianxuan") return ["02-选题"];
+    if (col.key === "tianquan") return ["03-初审"];
+    if (col.key === "tianji") return ["04-母稿"];
+    if (col.key === "tianquan2") return ["05-二审"];
+    if (col.key === "par") return ["06-出图", "06-视频"];
+    if (col.key === "yaoguang") return ["07-运营"];
+    return [];
+  };
   // 泳道区高度：null = 按内容（0 案时就是一排列头高，不留死空间）；
   // 拖过之后存**像素**。以前存比例（0.46），等于把「拖那一刻的主区高度」记死，
   // 换窗口尺寸就多出/少掉一截 —— 0 案的机器上就变成一大片白。
@@ -1019,6 +1082,7 @@ export function PipelineView({
               caseItem={activeWithActions}
               liveStars={liveStars}
               liveAction={liveAction}
+              workboardCards={workboardCards}
               hasCases={cases.length > 0}
             />
           </section>

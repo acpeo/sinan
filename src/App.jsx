@@ -36,7 +36,7 @@ import qwenAppIcon from "./assets/qwen-app-icon.png";
 import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { GLASS_MODES, glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
-import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
+import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, loadWorkboardCards, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
 import { CaseArchive } from "./CaseArchive.jsx";
@@ -4097,6 +4097,8 @@ function TasksSection({
   // 历史轮次（主窗"任务"页）：台账里的会话 run 按 gap 链分段回看；
   // expandedEpisode = 展开跳序回放的轮次下标（null = 全部收起）。
   const [sessionRuns, setSessionRuns] = useState([]);
+  // Workboard 卡片镜像（Phase 2）：北斗父卡/段卡本地镜像，随任务页同拍刷新。
+  const [workboardCards, setWorkboardCards] = useState([]);
   // 定时任务看板（六案③）：cron.list 本地镜像 + 任务账本对账"上次结果"。
   // cronTasks = 无状态过滤的全量任务行（sourceId join 用），与看板同拍刷新。
   const [cronJobs, setCronJobs] = useState([]);
@@ -4257,6 +4259,10 @@ function TasksSection({
       // 历史轮次同拍刷新：台账只读（不触发网关轮询），与任务列表同一节奏。
       loadSessionRuns()
         .then((data) => alive && setSessionRuns(data.runs ?? []))
+        .catch(() => {});
+      // Workboard 卡片同拍刷新：只读本地镜像（联网同步在 Rust 侧节流）。
+      loadWorkboardCards()
+        .then((data) => alive && setWorkboardCards(data.cards ?? []))
         .catch(() => {});
       // 定时任务看板同拍刷新：读回走本地镜像（不联网）；触发拉取由 Rust
       // 60 秒节流兜住，每拍调用也只真连一次每分钟。
@@ -4431,6 +4437,7 @@ function TasksSection({
         <PipelineTelemetry
           agentsSnap={boardAgentsFresh}
           sessionRuns={sessionRuns}
+          workboardCards={workboardCards}
           liveActiveIds={boardLiveActiveIds}
           live={live}
           onRefresh={handleRefresh}
@@ -4547,6 +4554,7 @@ function TasksSection({
 function PipelineTelemetry({
   agentsSnap,
   sessionRuns,
+  workboardCards,
   liveActiveIds,
   live,
   onRefresh,
@@ -4659,6 +4667,7 @@ function PipelineTelemetry({
         starTelemetry={telemetry}
         liveStars={liveActiveIds ?? new Set()}
         liveAction={liveAction}
+        workboardCards={workboardCards}
         conn={conn}
         onRetryConn={onRefresh}
         onLaunch={onLaunch}
