@@ -175,7 +175,16 @@ const CASES_TO_SHOW = ledgerMode
 // .console-scroll 定宽，没这问题；预览页这里把它掰直。
 document.getElementById("root").classList.add("pl-preview-host");
 
-createRoot(document.getElementById("root")).render(
+// ?shell=glass-light|glass-clear|paper —— 给预览页套上真机的玻璃壳
+// （.console-root.console-shell）。有几类毛病只在壳里现形：星位明细浮层的
+// 透底、发车按钮压在 --cp-ink 上的字色、滚动条宽度，都来自壳对 --cp-* 的
+// 覆盖。不套壳的预览永远是纸感档，看不出这些（Leo 2026-10-20 第 2/3/4 条）。
+const shellKind = new URLSearchParams(location.search).get("shell") ?? "";
+// ?stars=1 —— 直接把星位明细浮层摊开。产品里它由顶栏按钮切，无头截图点不到，
+// 预览页这里改成 URL 控制（浮层实底那条只能靠它验）。
+const starsOpen = new URLSearchParams(location.search).get("stars") === "1";
+
+const view = (
   <PipelineView
     cases={CASES_TO_SHOW}
     starTelemetry={TELEMETRY}
@@ -185,5 +194,15 @@ createRoot(document.getElementById("root")).render(
     onRetryConn={() => {}}
     onLaunch={() => {}}
     onAppendVideo={() => {}}
-  />,
+    starsOpen={starsOpen}
+    onToggleStars={() => {}}
+  />
+);
+
+createRoot(document.getElementById("root")).render(
+  shellKind ? (
+    <div className={`console-root console-shell console-shell--${shellKind}`}>
+      {view}
+    </div>
+  ) : view,
 );

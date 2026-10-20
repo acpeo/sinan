@@ -16,8 +16,8 @@
       {
         "label": "main",
         "title": "司南",
-        "width": 1080,
-        "height": 720,
+        "width": 1280,
+        "height": 840,
         "minWidth": 420,
         "minHeight": 560,
         "resizable": true,

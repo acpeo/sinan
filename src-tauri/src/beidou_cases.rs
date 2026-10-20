@@ -269,6 +269,12 @@ pub fn ensure_case_tables(connection: &Connection) -> rusqlite::Result<()> {
     for (name, ddl) in [
         ("content_json", "content_json TEXT"),
         ("recheck_doc_url", "recheck_doc_url TEXT"),
+        // 关单时刻（毫秒）。关单是终态，但误关自愈要能翻回来——判据是
+        // 「有没有比关单更新的实质活动」。证据表里的关单文本时间不一定
+        // 存在（真机 BM-2603/2604 的关单在飞书主表与群消息里，session_run
+        // 一个字都没有），所以关单这一刻必须落在案行上，否则自愈拿 0 当
+        // 关单时间，任何历史星位跳都"比它新"，每轮收割都把已关单翻回 07。
+        ("closed_at_ms", "closed_at_ms INTEGER NOT NULL DEFAULT 0"),
     ] {
         let exists: Option<i64> = connection
             .query_row(
@@ -520,7 +526,8 @@ fn harvest_bare_case(connection: &Connection, case_id: &str, text: &str) -> rusq
         // 用 rowcount 判断"真有动作"：这条 SQL 自带 NOT IN 守卫，重复收割时
         // 一行都改不到，但旧代码照样把 acted 置真 → 每 15 秒推一次活动时间。
         acted |= connection.execute(
-            "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
+            "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2, \
+             closed_at_ms = MAX(COALESCE(closed_at_ms, 0), ?2)
              WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
             rusqlite::params![case_id, now],
         )? > 0;
@@ -1023,10 +1030,15 @@ fn harvest_one_case(
             .any(says_closed)
     });
     if closed_text {
+        // 关单时刻取**这一段最晚一跳的时间**，不是收割时刻 now：now 是"我们
+        // 什么时候读到的"，不是"什么时候关的"。历史回补跑老段时用 now 会把
+        // 三天前的关单记成刚刚，之后同段的历史活动就永远翻不回来了。
+        let closed_at = hops.iter().filter_map(|row| row.6.or(row.5)).max().unwrap_or(now);
         connection.execute(
-            "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2
+            "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2, \
+             closed_at_ms = MAX(COALESCE(closed_at_ms, 0), ?3)
              WHERE case_id = ?1 AND stage NOT IN ('08_已关单', '08_关单完成')",
-            rusqlite::params![case_id, now],
+            rusqlite::params![case_id, now, closed_at],
         )?;
     }
     // 这一轮有案号 = 该案有活动：把活动时间推到**轮内最新一跳的结束**，
@@ -1640,9 +1652,27 @@ fn harvest_episode_content(
         || latest_hop_blob.contains("出图中")
         || latest_watch_blob.contains("进行中")
         || latest_watch_blob.contains("出图中");
-    if inflight && !says_closed(&latest_hop_blob) && !says_closed(&latest_watch_blob) {
+    // 只有比关单**更新**的活动证据才配翻案。关单时刻来自对账/看门狗写下的
+    // closed_at_ms —— 飞书主表改状态不产生会话跳，证据表里那一刻是空的；
+    // 不设这道门槛，16:28 的历史「出图中」会把 18:30 刚对上的关单翻回 05。
+    let recorded_closed_at: i64 = connection
+        .query_row(
+            "SELECT COALESCE(closed_at_ms, 0) FROM beidou_cases WHERE case_id = ?1",
+            rusqlite::params![case_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    let latest_evidence_at = hops
+        .iter()
+        .filter_map(|row| row.6.or(row.5))
+        .chain(watch_rows.last().and_then(|row| row.3.or(row.2)))
+        .max()
+        .unwrap_or(0);
+    let fresher_than_closure = recorded_closed_at == 0 || latest_evidence_at > recorded_closed_at;
+    if fresher_than_closure && inflight && !says_closed(&latest_hop_blob) && !says_closed(&latest_watch_blob) {
         connection.execute(
-            "UPDATE beidou_cases SET stage = '05_母稿', updated_at_ms = ?2
+            "UPDATE beidou_cases SET stage = '05_母稿', updated_at_ms = ?2, closed_at_ms = 0
              WHERE case_id = ?1 AND stage IN ('08_已关单', '08_关单完成')",
             rusqlite::params![case_id, now],
         )?;
@@ -1977,6 +2007,22 @@ pub fn closure_mention(text: &str, case_id: &str) -> bool {
 /// 网关侧确认关单的落点：飞书任务表已改「已关单」，但该动作不产生会话跳。
 /// 由 gateway_tasks 拉 chat.history 找到证据后回调这里收案。
 /// 幂等：已经是 08 的返回 false（不刷 updated_at，避免每轮都写）。
+fn normalize_epoch_ms(value: i64) -> i64 {
+    if value <= 0 {
+        return 0;
+    }
+    // 时间戳单位归一：网关不同接口给的 epoch 有秒也有毫秒（chat.history 的
+    // `timestamp` 与 sessions/usage 不是同一套）。秒级值乘 1000 再进库——
+    // 混着存会让「谁比谁新」的判据整体错位（1.7e9 秒永远小于 1.7e12 毫秒，
+    // 于是每一条活动都"比关单新"）。阈值取 1e11：它是 1973 年的毫秒数，
+    // 也是 5138 年的秒数，现实数据不可能落错边。
+    if value < 100_000_000_000 {
+        value.saturating_mul(1000)
+    } else {
+        value
+    }
+}
+
 pub fn confirm_closure(
     connection: &Connection,
     case_id: &str,
@@ -1984,9 +2030,15 @@ pub fn confirm_closure(
     evidence: &str,
 ) -> rusqlite::Result<bool> {
     let now = chrono::Utc::now().timestamp_millis();
+    // 关单时刻记进 closed_at_ms：对账读的是群消息，而群消息不会进 session_run
+    // ——不把这一刻落到案行上，下一轮 repair_false_closures 就会拿 0 当关单
+    // 时间，把 16:28 的历史星位跳判成"比关单新"，刚对上的 08 又被翻回 07
+    // （真机 2026-10-20 18:30 实测：2603/2604 对账后 15 秒内被翻回）。
+    let closed_at_ms = normalize_epoch_ms(closed_at_ms);
     let changed = connection.execute(
         "UPDATE beidou_cases SET stage = '08_已关单', updated_at_ms = ?2, \
-         last_activity_ms = MAX(COALESCE(last_activity_ms, 0), ?3) \
+         last_activity_ms = MAX(COALESCE(last_activity_ms, 0), ?3), \
+         closed_at_ms = MAX(COALESCE(closed_at_ms, 0), ?3) \
          WHERE case_id = ?1 AND stage NOT LIKE '08%'",
         rusqlite::params![case_id, now, closed_at_ms],
     )?;
@@ -2179,10 +2231,11 @@ fn is_pipeline_star(agent_id: &str) -> bool {
 /// 不会震荡。只认**显式提到案号**的跳：空转跳跟随归属的不算——BM-2601
 /// 10-20 00:02 的天枢群聊跳引用过「玉衡出图中」，那是别案的闲话。
 fn repair_false_closures(connection: &Connection) -> rusqlite::Result<()> {
-    let closed: Vec<String> = {
-        let mut stmt =
-            connection.prepare("SELECT case_id FROM beidou_cases WHERE stage LIKE '08%'")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let closed: Vec<(String, i64)> = {
+        let mut stmt = connection.prepare(
+            "SELECT case_id, COALESCE(closed_at_ms, 0) FROM beidou_cases WHERE stage LIKE '08%'",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
         rows.filter_map(|item| item.ok()).collect()
     };
     if closed.is_empty() {
@@ -2262,8 +2315,14 @@ fn repair_false_closures(connection: &Connection) -> rusqlite::Result<()> {
             closure_evidence.push((text, at));
         }
     }
-    for case_id in &closed {
-        let mut closed_at = 0i64;
+    for (case_id, recorded_closed_at) in &closed {
+        // 关单时刻有两个出处，取更晚的那个：
+        //   ① 证据表里带「已关单」话术的那一跳（session_run / gateway_task）
+        //   ② 案行上的 closed_at_ms —— 对账（chat.history）与看门狗关单走的
+        //      是飞书主表，改 bitable 不产生会话跳，①永远是 0。
+        // 少了②，BM-2603/2604 这种「群里说已关单、证据表无痕」的案会在每轮
+        // 收割里被 16:28 的历史星位跳反复翻回 07/06（真机 18:30 实测）。
+        let mut closed_at = *recorded_closed_at;
         let mut activity_at = 0i64;
         let mut activity_target = 0u8;
         for (blob, at) in &closure_evidence {
@@ -2296,7 +2355,7 @@ fn repair_false_closures(connection: &Connection) -> rusqlite::Result<()> {
             _ => continue,
         };
         connection.execute(
-            "UPDATE beidou_cases SET stage = ?2, updated_at_ms = ?3
+            "UPDATE beidou_cases SET stage = ?2, updated_at_ms = ?3, closed_at_ms = 0
              WHERE case_id = ?1 AND stage LIKE '08%'",
             rusqlite::params![case_id, next, now],
         )?;
@@ -4802,6 +4861,76 @@ mod dispatch_helper_tests {
             )
             .expect("read updated");
         assert_eq!(before, after, "已关单的案不该被秒刷 updated_at");
+    }
+
+    #[test]
+    fn reconciled_closure_survives_older_pipeline_activity() {
+        // 真机 2026-10-20 18:30 事故缩比：BM-2603/2604 在飞书任务表与天枢群里
+        // 早就「已关单」，本地账本靠 chat.history 对账写成 08。但那次关单不
+        // 产生任何会话跳——证据表里一个字都没有。于是 repair_false_closures
+        // 拿 0 当关单时刻，16:28 的历史星位跳（玉衡图文包）被判成"比关单新"，
+        // 15 秒内把 08 翻回 07_视听并行，界面上看就是"根本没关"。
+        // 修复后：对账把关单时刻写进 closed_at_ms，历史活动翻不动它。
+        let db = session_run_db();
+        let base = 1_800_000_000_000i64;
+        let min = 60_000i64;
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc2",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-9010]",
+            None,
+            base,
+        );
+        insert_session(
+            &db,
+            "cli:main:group:oc_rc2",
+            "yuheng",
+            "",
+            Some("【玉衡阶段完成汇总】BM-9010 图文包已产出"),
+            base + 15 * min,
+        );
+        ensure_case_row(&db, "BM-9010").expect("case row");
+        // 对账在 16:28 的活动之后发生（真机就是 18:30 才读到群消息）
+        assert!(confirm_closure(&db, "BM-9010", base + 120 * min, "群消息：BM-9010 已关单")
+            .expect("close"));
+        harvest_links_from_sessions(&db).expect("harvest");
+        let list = list_cases(&db, None).expect("list");
+        let row = list.iter().find(|r| r.case_id == "BM-9010").expect("case");
+        assert_eq!(
+            row.stage, "08_已关单",
+            "比关单更早的星位跳不许把关单翻回去（真机 2603/2604 形态）"
+        );
+
+        // 对照：活动**比关单新**时仍要能翻案——门槛不能一刀切禁掉自愈。
+        // 换一张库重来，这次关单时刻压在活动之前。
+        let db2 = session_run_db();
+        insert_session(
+            &db2,
+            "cli:main:group:oc_rc2",
+            "tianshu",
+            "派发天权初审 [CASE_ID: BM-9011]",
+            None,
+            base,
+        );
+        insert_session(
+            &db2,
+            "cli:main:group:oc_rc2",
+            "yuheng",
+            "",
+            Some("【玉衡阶段完成汇总】BM-9011 图文包已产出"),
+            base + 60 * min,
+        );
+        ensure_case_row(&db2, "BM-9011").expect("case row");
+        assert!(confirm_closure(&db2, "BM-9011", base + 10 * min, "群消息：BM-9011 已关单")
+            .expect("close"));
+        harvest_links_from_sessions(&db2).expect("harvest");
+        let list2 = list_cases(&db2, None).expect("list");
+        let row2 = list2.iter().find(|r| r.case_id == "BM-9011").expect("case");
+        assert_eq!(
+            row2.stage, "07_视听并行",
+            "关单之后又有新的星位交付，说明关早了，必须翻回来"
+        );
     }
 
     #[test]

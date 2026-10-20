@@ -17,6 +17,12 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, State};
 
 const DATABASE_FILE_NAME: &str = "sinan.sqlite3";
+/// 主窗目标尺寸（与 tauri.conf.json 的 width/height 同一对数字）。
+/// 1280 是深潜舱三栏断点（CSS max-width:1180 降两栏）之上的一点余量。
+/// 这里再写一份只为「小屏收口」时做比较——配置是首次建窗用的，建完之后
+/// 只能在代码里夹一次。
+const WINDOW_W: f64 = 1280.0;
+const WINDOW_H: f64 = 840.0;
 /// 旧 Metrik 的数据目录与账本名：首启时把旧任务台账搬过来，历史不断档。
 const LEGACY_APP_IDENTIFIER: &str = "app.metrik.desktop";
 const LEGACY_DATABASE_FILE_NAME: &str = "metrik.sqlite3";
@@ -1288,6 +1294,24 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(hwnd) = window.hwnd() {
                     disable_system_corner_rounding(hwnd.0 as isize);
+                }
+            }
+
+            // 初始尺寸按屏幕收口（Leo 2026-10-20 第 6 条：默认窗口太小，
+            // 深潜舱三栏被 1180px 断点降成两栏）。tauri.conf 给的是 1280×840
+            // ——那是「够放三栏」的目标值；小屏笔记本上直接照搬会顶出屏幕外，
+            // 所以这里按当前显示器的逻辑尺寸压一次，最少保到 720×560。
+            #[cfg(desktop)]
+            if let Some(window) = app.get_webview_window("main") {
+                if let (Ok(Some(monitor)), Ok(scale)) = (window.current_monitor(), window.scale_factor()) {
+                    let screen_w = monitor.size().width as f64 / scale;
+                    let screen_h = monitor.size().height as f64 / scale;
+                    let want_w = f64::min(WINDOW_W, screen_w * 0.94).max(720.0);
+                    let want_h = f64::min(WINDOW_H, screen_h * 0.90).max(560.0);
+                    if want_w < WINDOW_W || want_h < WINDOW_H {
+                        let _ = window.set_size(tauri::LogicalSize::new(want_w, want_h));
+                        let _ = window.center();
+                    }
                 }
             }
 

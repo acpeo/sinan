@@ -33,14 +33,19 @@ export const STAR_ICON = {
 
 /// SOP「当前阶段映射表」的规范阶段名。天权出现两次（审题 / 审稿）——
 /// 它是链路上唯一的两度门禁，所以给它两列，列头各自标清楚。
+///
+/// `label` 是「这一步正在办」，`done` 是「这一步已经办完」。两套文案是
+/// Leo 2026-10-20 第 5 问要的：以前所有格子无论走没走完都写「建档 / 研究中 /
+/// 审题中」，于是一张全案关单的泳道看上去跟刚开工一模一样。文案只由进度
+/// 下标推导（index < step 即该步已交付），不新造状态、不猜时间。
 export const STAGE_COLS = [
-  { key: "tianshu", star: "tianshu", label: "建档", role: "建档 · 巡检" },
-  { key: "tianxuan", star: "tianxuan", label: "研究中", role: "趋势 · 选题" },
-  { key: "tianquan", star: "tianquan", label: "审题中", role: "审题门禁" },
-  { key: "tianji", star: "tianji", label: "创作中", role: "母稿创作" },
-  { key: "tianquan2", star: "tianquan", label: "审稿中", role: "审稿门禁 · 冻结", gate: true },
-  { key: "par", star: "par", label: "视觉/视频", role: "图文 // 视频", parallel: true },
-  { key: "yaoguang", star: "yaoguang", label: "运营关单", role: "分发 · 关单" },
+  { key: "tianshu", star: "tianshu", label: "建档", done: "已建档", role: "建档 · 巡检" },
+  { key: "tianxuan", star: "tianxuan", label: "研究中", done: "已定题", role: "趋势 · 选题" },
+  { key: "tianquan", star: "tianquan", label: "审题中", done: "已过审", role: "审题门禁" },
+  { key: "tianji", star: "tianji", label: "创作中", done: "母稿已交", role: "母稿创作" },
+  { key: "tianquan2", star: "tianquan", label: "审稿中", done: "已过稿", role: "审稿门禁 · 冻结", gate: true },
+  { key: "par", star: "par", label: "视觉/视频", done: "已交付", role: "图文 // 视频", parallel: true },
+  { key: "yaoguang", star: "yaoguang", label: "运营关单", done: "已关单", role: "分发 · 关单" },
 ];
 
 /// 已关单判定（Leo 2026-10-16 第 3 问：「这运营关单是在执行中还是已经完成了」）。
@@ -343,7 +348,14 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
                 </div>
               )}
               <div className="pl-colhead-role cp-mono">{col.role}</div>
-              <div className="pl-colhead-model cp-mono">
+              <div
+                className="pl-colhead-model cp-mono"
+                title={
+                  col.parallel
+                    ? `模型 ${parTele.model} · 上次 ${parTele.yuhengLast} / ${parTele.kaiyangLast}`
+                    : `模型 ${tele.model ?? "—"} · 上次 ${tele.lastRun ?? "—"}`
+                }
+              >
                 {col.parallel
                   ? `${parTele.model} · ${parTele.yuhengLast} / ${parTele.kaiyangLast}`
                   : `${tele.model ?? "—"} · 上次 ${tele.lastRun ?? "—"}`}
@@ -387,11 +399,16 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
                 <div className={`pl-par-slot${isCur ? " is-active" : isDone ? " is-done" : " is-idle"}`}>
                   <div className={`pl-par-node${yuLive ? " is-live" : ""}`} title={yuLive ? "玉衡执行中" : undefined}>
                     <StarChip star="yuheng" size={17} /><b>玉衡</b>
-                    {yuLive ? <span className="pl-live-dot" /> : <span className="pl-par-tail">图文</span>}
+                    {yuLive ? <span className="pl-live-dot" /> : <span className="pl-par-tail">{isDone ? "已交付" : "图文"}</span>}
                   </div>
                   <div className={`pl-par-node${standby ? " is-standby" : ""}${kaLive ? " is-live" : ""}`} title={kaLive ? "开阳执行中" : undefined}>
                     <StarChip star="kaiyang" size={17} /><b>开阳</b>
-                    {standby ? <span className="pl-par-tail">{item.masterFrozen ? "可追投" : "未启用"}</span> : <span className="pl-par-tail">视频</span>}
+                    {/* 仅图文案的开阳永远是「未启用 / 可追投」——它确实没跑，
+                        不因为案子关单了就把空支线写成「已交付」。双出案走完
+                        视觉列才写「已交付」。 */}
+                    {standby
+                      ? <span className="pl-par-tail">{item.masterFrozen ? "可追投" : "未启用"}</span>
+                      : <span className="pl-par-tail">{isDone ? "已交付" : "视频"}</span>}
                   </div>
                 </div>
               </div>
@@ -428,7 +445,11 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
                 {col.gate && item.secondStrikes > 0 ? <span className="pl-strike-mark">{item.secondStrikes}/3</span> : null}
                 {liveIsThisCase ? <span className="pl-live-dot pl-live-dot--corner" /> : null}
                 <StarChip star={col.star} />
-                <span className="pl-node-label" style={{ color: labelColor }}>{closedHere && index === LAST_COL ? "已关单" : col.label}</span>
+                {/* 走完的步写完成态文案（已定题/已过稿/已关单…），没走完的
+                    才写进行态（研究中/审稿中）。以前一律写 label，于是一张
+                    全案关单的泳道和刚开工的看起来一模一样（Leo 2026-10-20
+                    第 5 问）。 */}
+                <span className="pl-node-label" style={{ color: labelColor }}>{isDone ? col.done : col.label}</span>
               </div>
             </div>
           );
