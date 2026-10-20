@@ -199,6 +199,38 @@ export function contextEstimateAge(atMs, nowMs = Date.now()) {
 /// 标出来只为让"上次运行至今"可感知；真正陈旧（小时/天级）一眼可辨。
 export const ESTIMATE_STALE_MS = 60 * 60 * 1000;
 
+/// 幽灵运行：有 automation_run 记录、但 sourceId（cron job UUID）已不在
+/// cron 列表里的任务。Leo 2026-10-20 实况实锤——三个天枢巡检 job 被删后
+/// BM-2603/BM-2604 静默停滞 11 小时，没有任何东西巡拉关单，而「定时任务」
+/// 页毫无异常。这个函数把"删过的任务"算出来，按最近运行倒序。
+///
+/// tasks = gateway_task 镜像行（kind=automation_run、sourceId、startedAtMs、
+/// agentId）；jobs = cron.list 镜像（id）。
+export function listOrphanRuns(tasks, jobs) {
+  const jobIds = new Set((jobs ?? []).map((job) => job?.id).filter(Boolean));
+  const bySource = new Map();
+  for (const task of tasks ?? []) {
+    if (task?.kind !== "automation_run" || !task.sourceId || jobIds.has(task.sourceId)) continue;
+    const at = task.startedAtMs ?? 0;
+    const current = bySource.get(task.sourceId);
+    if (current) {
+      current.runs += 1;
+      if (at > current.at) {
+        current.at = at;
+        if (task.agentId) current.agentId = task.agentId;
+      }
+    } else {
+      bySource.set(task.sourceId, {
+        sourceId: task.sourceId,
+        agentId: task.agentId ?? null,
+        at,
+        runs: 1,
+      });
+    }
+  }
+  return [...bySource.values()].sort((a, b) => b.at - a.at);
+}
+
 /// 跳状态档：done / failed / skipped / pending / current 五色同语言，迷你行/
 /// 胶片条/时间线三处组件共用——状态判定改一处即全生效，别再各自复制。
 /// current = 正在跑的那个任务本身（链上同一时刻至多一个）。

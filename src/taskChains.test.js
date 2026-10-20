@@ -33,6 +33,7 @@ import {
   hopToneOf,
   isActiveTask,
   countIdleSessions,
+  listOrphanRuns,
   contextEstimateAge,
   selectUsageSessions,
   sessionEpisodeHops,
@@ -164,6 +165,31 @@ test("contextEstimateAge: 水位估算年龄文案（陈条不许看起来像实
   assert.equal(contextEstimateAge(Number.NaN, now), "");
   // 未来时刻（时钟跳变）不渲染成负数
   assert.equal(contextEstimateAge(now + 60_000, now), "刚刚");
+});
+
+test("listOrphanRuns: 有运行记录但 job 已不在 cron 列表 = 幽灵任务", () => {
+  const jobs = [{ id: "alive-1", name: "心跳保活" }];
+  const tasks = [
+    // 活着的 job：不算幽灵
+    { kind: "automation_run", sourceId: "alive-1", startedAtMs: 5000, agentId: "tianshu" },
+    // 被删的巡检 job：两次运行，取最新时刻
+    { kind: "automation_run", sourceId: "gone-1", startedAtMs: 9000, agentId: "tianshu" },
+    { kind: "automation_run", sourceId: "gone-1", startedAtMs: 3000, agentId: "tianshu" },
+    // 另一个被删的 job，运行更早
+    { kind: "automation_run", sourceId: "gone-2", startedAtMs: 1000, agentId: "kaiyang" },
+    // 非 automation_run 行不参与（会话跳没有 sourceId 语义）
+    { kind: "session", sourceId: "gone-3", startedAtMs: 9999 },
+  ];
+  const orphans = listOrphanRuns(tasks, jobs);
+  assert.equal(orphans.length, 2);
+  assert.equal(orphans[0].sourceId, "gone-1");
+  assert.equal(orphans[0].at, 9000);
+  assert.equal(orphans[0].runs, 2);
+  assert.equal(orphans[1].sourceId, "gone-2");
+  assert.equal(orphans[1].at, 1000);
+  // 空输入不炸
+  assert.deepEqual(listOrphanRuns([], []), []);
+  assert.deepEqual(listOrphanRuns(null, null), []);
 });
 
 test("countIdleSessions/listIdleSessions: 空闲数与清单口径一致（cron 不算）", () => {

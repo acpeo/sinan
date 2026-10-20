@@ -8473,6 +8473,32 @@ html[data-theme="dark"] .console-root {
 .console-beidou-toast--warn { border-color: rgba(217, 168, 96, 0.55); background: rgba(217, 168, 96, 0.14); }
 .tasks-section--flush { margin: 0; padding: 0; }
 .tasks-standby { color: var(--fg-faint, #6a6b73); font-size: 13px; text-align: center; padding: 28px 12px; }
+/* 幽灵运行告警（Leo 2026-10-20 实况）：有 automation_run 记录但 job 已不在
+   cron 列表 = 任务被删。真机三个天枢巡检 job 被删后 BM-2603/2604 静默 11
+   小时，而「定时任务」页毫无异常——这个块把"删过的任务"摊在明面上。
+   琥珀边条 + 深一号的底，不用整卡重色（它住在 cron-board 上方，要压得住
+   但不抢"2 启用"那种正常态）。 */
+.cron-orphans {
+  margin: 0 0 12px;
+  padding: 10px 14px 10px 16px;
+  border: 1px solid rgba(217, 154, 43, 0.4);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: rgba(217, 154, 43, 0.07);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.cron-orphans b { display: block; color: var(--warn); }
+.cron-orphans > span { display: block; margin-top: 2px; color: var(--fg-faint, #6a6b73); }
+.cron-orphans ul { margin: 6px 0 0; padding: 0; list-style: none; }
+.cron-orphans li { display: flex; gap: 8px; align-items: baseline; }
+.cron-orphans li em { font-style: normal; font-weight: 600; min-width: 3em; }
+.cron-orphans li span { color: var(--fg-faint, #6a6b73); }
+.cron-orphans-more { color: var(--fg-faint, #6a6b73); }
+:root[data-theme="dark"] .cron-orphans { background: rgba(217, 154, 43, 0.1); }
+:root[data-theme="dark"] .cron-orphans > span,
+:root[data-theme="dark"] .cron-orphans li span,
+:root[data-theme="dark"] .cron-orphans-more { color: #9a9ba2; }
 .starrail { margin: 0 0 12px; }
 .starrail-frame { position: relative; background: rgba(127, 127, 127, 0.07); border: 1px solid rgba(127, 127, 127, 0.22); border-radius: 10px; padding: 26px 12px 8px 92px; }
 .starrail-grid { position: absolute; left: 92px; right: 12px; top: 0; bottom: 0; }

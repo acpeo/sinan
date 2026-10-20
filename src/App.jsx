@@ -37,7 +37,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
 import { CaseArchive } from "./CaseArchive.jsx";
 import { BrandLogo } from "./PipelineView.jsx";
@@ -4167,6 +4167,16 @@ function TasksSection({
     return map;
   }, [cronTasks]);
 
+  // 幽灵运行（Leo 2026-10-20 实况实锤）：automation_run 行的 sourceId 是
+  // cron job UUID。有运行记录但 job 不在 cron 列表里 = 任务被删了、记录还
+  // 在。真机今晨三个天枢巡检 job（976b3a7a/bb855423/f6bfc785）被删后，
+  // BM-2603/BM-2604 静默停滞 11 小时——没有任何东西巡拉它们关单，
+  // 而「定时任务」页一片安静，看着像"没有待办"。钩子在早退返回之前。
+  const orphanRuns = useMemo(
+    () => listOrphanRuns(cronTasks, cronJobs),
+    [cronJobs, cronTasks],
+  );
+
   const load = useCallback((filter) => {
     loadGatewayTasks(filter === "all" ? null : filter)
       .then((data) => {
@@ -4424,6 +4434,27 @@ function TasksSection({
           liveActiveIds={boardLiveActiveIds}
           dialEpisodes={dialEpisodes}
         />
+      )}
+      {showCron && orphanRuns.length > 0 && (
+        <div className="cron-orphans" role="note">
+          <b>
+            {orphanRuns.length} 个任务已从定时列表删除，账本里却还有它们的运行记录
+          </b>
+          <span>
+            被删的任务不会再生效；若其中是巡检/看门狗，流水线停滞时没有任何东西会推它——需要回网关恢复。
+          </span>
+          <ul>
+            {orphanRuns.slice(0, 5).map((orphan) => (
+              <li key={orphan.sourceId}>
+                <em>{starNameOf(orphan.agentId) || orphan.agentId || "未知星位"}</em>
+                <span>
+                  {orphan.runs} 次运行 · 最新 {formatHistoryTime(orphan.at, now)}
+                </span>
+              </li>
+            ))}
+            {orphanRuns.length > 5 && <li className="cron-orphans-more">另有 {orphanRuns.length - 5} 个</li>}
+          </ul>
+        </div>
       )}
       {showCron && (cronBoard.length > 0 ? (
         <section className="cron-board" aria-label="定时任务">
