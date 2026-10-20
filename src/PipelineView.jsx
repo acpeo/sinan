@@ -246,7 +246,21 @@ function LaunchBar({ onLaunch, busy }) {
 }
 
 /* ═══════════ 星位流水线：一行一案 ═══════════ */
-function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, onColFilter, starTelemetry }) {
+/// 列 → 段卡名：与 SOP 11.1 的段名枚举一字不差（同源口径，别造短别名）。
+/// 纯函数放模块级——列头画在 LaneGrid，聚合数据也以 prop 传给它，别在
+/// PipelineView 里定义却在 LaneGrid 里引用（033fa41 白屏事故的根因：
+/// esbuild 不管跨组件作用域，构建过、运行时 ReferenceError 整窗白屏）。
+function wbSegsOfCol(col) {
+  if (col.key === "tianxuan") return ["02-选题"];
+  if (col.key === "tianquan") return ["03-初审"];
+  if (col.key === "tianji") return ["04-母稿"];
+  if (col.key === "tianquan2") return ["05-二审"];
+  if (col.key === "par") return ["06-出图", "06-视频"];
+  if (col.key === "yaoguang") return ["07-运营"];
+  return [];
+}
+
+function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, onColFilter, starTelemetry, wbRunningBySeg = {} }) {
   const hostRef = useRef(null);
   const list = useMemo(() => {
     if (!colFilter) return cases;
@@ -922,6 +936,7 @@ export function PipelineView({
   // 天权在链上有两列（03-初审 / 05-二审），按星聚合会把同一计数画到两列上。
   // 列头只报「在跑」——done/todo 的数量是看板缩影，不该挤进星位遥测；
   // claim 心跳做 live 判据是 Phase 2 后半段的事，这里先纯计数。
+  // 列头画在 LaneGrid（泳道网格）里，这个聚合以 prop 传下去。
   const wbRunningBySeg = useMemo(() => {
     const out = {};
     for (const card of workboardCards) {
@@ -932,16 +947,6 @@ export function PipelineView({
     }
     return out;
   }, [workboardCards]);
-  // 列 → 段卡名：与 SOP 11.1 的段名枚举一字不差（同源口径，别造短别名）。
-  const wbSegsOfCol = (col) => {
-    if (col.key === "tianxuan") return ["02-选题"];
-    if (col.key === "tianquan") return ["03-初审"];
-    if (col.key === "tianji") return ["04-母稿"];
-    if (col.key === "tianquan2") return ["05-二审"];
-    if (col.key === "par") return ["06-出图", "06-视频"];
-    if (col.key === "yaoguang") return ["07-运营"];
-    return [];
-  };
   // 泳道区高度：null = 按内容（0 案时就是一排列头高，不留死空间）；
   // 拖过之后存**像素**。以前存比例（0.46），等于把「拖那一刻的主区高度」记死，
   // 换窗口尺寸就多出/少掉一截 —— 0 案的机器上就变成一大片白。
@@ -1054,6 +1059,7 @@ export function PipelineView({
                 colFilter={colFilter}
                 onColFilter={setColFilter}
                 starTelemetry={starTelemetry}
+                wbRunningBySeg={wbRunningBySeg}
               />
             </div>
           </section>
