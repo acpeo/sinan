@@ -7194,6 +7194,24 @@ html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .5
   font-weight: 600;
 }
 
+/* 估算年龄角标（Leo 2026-10-20 审计）：数字是上一次 run 的快照，超过 1 小时
+   未跑的会话标出来——客星 23k 十一天没动、天权 207k 来自 10 小时前，
+   不标就全是"看起来实时的陈条"。比条数再暗一档，不抢水位本身。 */
+.tasks-usage-age {
+  opacity: 0.5;
+}
+
+/* 卡内口径声明（Leo 2026-10-20 审计）：cron 会话为何不在卡上——网关不为
+   它们上报 contextBudgetStatus。颜色随父级（--cp-* 令牌的作用域不含任务卡，
+   写死色值会在另一主题下翻车），只压透明度，与 tasks-usage-idle 同约定。 */
+.tasks-usage-note {
+  margin: 4px 0 0;
+  font-size: 9px;
+  line-height: 1.5;
+  color: inherit;
+  opacity: 0.55;
+}
+
 /* 独立任务窗的 footer 不在 .widget-content 里（拿不到它的 10px 内距），自己补齐。
    对齐方式跟原版 footer 一致用垂直居中——基线对齐在"中文+数字"混排下数字会显浮
    （2026-10-02 用户对照原版截图纠正）。 */
@@ -9678,6 +9696,9 @@ button.pl-badge { cursor: pointer; }
 .pl-chip--bronze { background: var(--cp-bronze-bg); color: var(--cp-bronze); }
 /* 「待你裁决」：打回满 3 次停着等人改判，用朱砂底（与熔断/打回同一个语义色） */
 .pl-chip--alert { background: var(--cp-cinnabar-bg); color: var(--cp-cinnabar); font-weight: 600; }
+/* 群/主身份标（星位明细浮层）：透明底描边，比模型 chip 再退一档——
+   说明这个上下文属于流水线群会话还是 agent 间派发通道，不是状态。 */
+.pl-chip--dim { background: transparent; color: var(--cp-meta); font-weight: 500; }
 .pl-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ---------- 主体两段 ---------- */
@@ -10089,6 +10110,9 @@ button.pl-badge { cursor: pointer; }
 .pl-stardetail-right { flex: none; text-align: right; }
 .pl-stardetail-ctx { display: block; font-size: 10px; color: var(--cp-body); }
 .pl-stardetail-last { display: block; margin-top: 2px; font-size: 9.5px; color: var(--cp-meta); }
+/* 估算年龄行（陈旧水位专用）：比"上次 run 用时"再暗一档，且不占位——
+   只有超过 1 小时未跑的会话才多出这一行。 */
+.pl-stardetail-last--stale { opacity: 0.72; }
 /* 星位明细里的上下文水位条：复用任务页 .task-context-bar 的配色（浅深都已适配）。
    它现在是行内第三个 flex 子项，吃掉星名与数字之间的空白——那个类是
    position:relative 的，不给 flex 宽度会缩成 0。 */

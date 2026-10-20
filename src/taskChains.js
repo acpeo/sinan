@@ -175,6 +175,30 @@ export function countIdleSessions(sessions, shown) {
   return listIdleSessions(sessions, shown).length;
 }
 
+/// 上下文估算的年龄文案（estimatedPromptTokens 的取样时刻 → 现在）。
+///
+/// 为什么需要它：网关的水位是**上一次 run 开始时的 pre-prompt 估算**，跑完
+/// 就不再刷新。Leo 2026-10-20 审计实锤——小组件「天权 主 207k/525k」来自
+/// 10 小时前的 main 会话（watchdog 把 RT 派发全文堆在那，SOP 只清群会话），
+/// 「客星 主 23k」十一天没动过。不标年龄，一个 39% 的条看起来就像实时水位。
+///
+/// nowMs 由调用方传入（纯函数可测；渲染层传 Date.now()）。
+export function contextEstimateAge(atMs, nowMs = Date.now()) {
+  if (!Number.isFinite(atMs) || atMs <= 0 || !Number.isFinite(nowMs)) return "";
+  const seconds = Math.floor((nowMs - atMs) / 1000);
+  if (seconds < 60) return "刚刚";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+/// 估算年龄超过这个值就在行内显式标出（tooltip 里任何时候都带）。
+/// 1 小时：跑个长任务就可能超过，但那时数字确实是"这一轮刚开始时"的快照，
+/// 标出来只为让"上次运行至今"可感知；真正陈旧（小时/天级）一眼可辨。
+export const ESTIMATE_STALE_MS = 60 * 60 * 1000;
+
 /// 跳状态档：done / failed / skipped / pending / current 五色同语言，迷你行/
 /// 胶片条/时间线三处组件共用——状态判定改一处即全生效，别再各自复制。
 /// current = 正在跑的那个任务本身（链上同一时刻至多一个）。

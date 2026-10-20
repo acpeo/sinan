@@ -362,6 +362,9 @@ export async function loadAgentsSnapshot(gateways, { force = false } = {}) {
           shouldCompact: false,
           hasActiveRun: false,
           updatedAt: now - 60_000,
+          // 水位估算的取样时刻（Leo 2026-10-20 审计新增字段）：演示数据按
+          // 真机形态摆成 3 小时前——预览也要走"估算 3 小时前"的陈旧标。
+          estimatedAtMs: now - 3 * 3600_000,
         },
         ...stars.map((star, index) => ({
           key: `VPS-北斗:agent:${star.id}:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a`,
@@ -377,6 +380,8 @@ export async function loadAgentsSnapshot(gateways, { force = false } = {}) {
           // 天玑（index 2）= 正在跑的补发跳：运行中但上下文还没产出 → "启动中"
           hasActiveRun: index === 2,
           updatedAt: now - (index < 2 ? index * 4000 : index === 2 ? 3000 : 40 * 60_000),
+          // 有估值的行才带取样时刻；22 分钟前的群会话 = 未过 1 小时线，不标陈旧
+          estimatedAtMs: index < 2 ? now - 22 * 60_000 : null,
         })),
       ],
     };

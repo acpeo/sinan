@@ -24,6 +24,7 @@ import {
   starNameOf,
   textWantsDual,
 } from "./cockpit.js";
+import { contextEstimateAge, ESTIMATE_STALE_MS } from "./taskChains.js";
 
 export const STAR_ICON = {
   tianshu: "🧭", tianxuan: "🔭", tianquan: "⚖️", tianji: "🖋️",
@@ -1017,6 +1018,20 @@ function StarDetail({ telemetry, liveStars, onClose }) {
             : t.budget
               ? `— / ${compactTokens(t.budget)}`
               : "—";
+          // 代表会话的群/主身份 + 水位估算年龄（Leo 2026-10-20 审计）：
+          // SOP 关单后清的是**群**上下文，main 会话（agent 间派发通道）没人清
+          // ——天权 207k 就在 main 上。不标身份，这个数会被读成群的水位；
+          // 不标年龄，10 小时前的快照看起来像实时。
+          const sessionBadge = t.sessionIsGroup
+            ? "群"
+            : typeof t.sessionKey === "string" && t.sessionKey.endsWith(":main")
+              ? "主"
+              : null;
+          const estimateAge =
+            typeof t.estimatedAtMs === "number" ? contextEstimateAge(t.estimatedAtMs) : "";
+          const estimateStale =
+            typeof t.estimatedAtMs === "number"
+            && Date.now() - t.estimatedAtMs >= ESTIMATE_STALE_MS;
           return (
             <div className="pl-stardetail-row" key={id}>
               <StarChip star={id} size={22} />
@@ -1024,6 +1039,9 @@ function StarDetail({ telemetry, liveStars, onClose }) {
                 <span className="pl-stardetail-line">
                   <b>{starNameOf(id)}</b>
                   <span className="pl-chip" style={{ fontSize: 9.5, padding: "1px 5px" }}>{t.model ?? "—"}</span>
+                  {sessionBadge ? (
+                    <span className="pl-chip pl-chip--dim" style={{ fontSize: 9.5, padding: "1px 5px" }}>{sessionBadge}</span>
+                  ) : null}
                   {live ? <span className="pl-badge pl-badge--amber">执行中</span> : <span className="pl-badge pl-badge--slate">空闲</span>}
                 </span>
                 <span className="pl-stardetail-note">{t.note ?? ""}</span>
@@ -1034,7 +1052,7 @@ function StarDetail({ telemetry, liveStars, onClose }) {
                 className={`task-context-bar pl-stardetail-bar${fillPct == null ? " task-context-bar--empty" : ""}`}
                 title={
                   hasLevel
-                    ? `已用 ${fillPct}% · ${t.estimate.toLocaleString()} / ${t.budget.toLocaleString()} tok`
+                    ? `已用 ${fillPct}% · ${t.estimate.toLocaleString()} / ${t.budget.toLocaleString()} tok${estimateAge ? ` · 估算于 ${estimateAge}` : ""}${typeof t.sessionKey === "string" ? ` · ${t.sessionKey}` : ""}`
                     : "空闲会话，网关不报上下文水位"
                 }
               >
@@ -1046,6 +1064,14 @@ function StarDetail({ telemetry, liveStars, onClose }) {
               <div className="pl-stardetail-right">
                 <span className="cp-mono pl-stardetail-ctx">上下文 {ctxText}</span>
                 <span className="cp-mono pl-stardetail-last">上次 {t.lastRun ?? "—"}</span>
+                {estimateStale ? (
+                  <span
+                    className="cp-mono pl-stardetail-last pl-stardetail-last--stale"
+                    title={`水位估算取样于 ${estimateAge}，此后该会话没有新 run；若期间被 reset，实际已重置`}
+                  >
+                    估算 {estimateAge}
+                  </span>
+                ) : null}
               </div>
             </div>
           );
@@ -1055,6 +1081,8 @@ function StarDetail({ telemetry, liveStars, onClose }) {
         说明：上下文是<span className="cp-mono">已用 / 预算</span>，取自网关的
         <span className="cp-mono">estimatedPromptTokens</span>——只有跑过 run 的会话带这个值，
         空闲会话缺省，那种行只报预算、进度条留空（不画成 0%）。
+        数字是<span className="cp-mono">上一次 run 的快照</span>，跑完不再刷新：超过 1 小时未跑的会话会标出估算年龄
+        （群徽标 = 流水线群会话，主 = agent 间派发通道；SOP 关单只清群上下文）。
         累计 token 计数器仍是关的（<span className="cp-mono">sessions.usage</span> 全 0），
         等真开了计量再加「本任务累计 token」。
       </div>

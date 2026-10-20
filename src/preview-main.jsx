@@ -134,12 +134,18 @@ const CASES = [
 // estimatedPromptTokens（已用，只有跑过 run 的会话才有；空闲会话是 null）。
 // 七颗星都 gpt-6 所以预算都是 525k —— 以前浮层把 525k 当"用量"显示，
 // 七行一模一样，就是这个原因。
+// sessionKey/sessionIsGroup/estimatedAtMs（Leo 2026-10-20 审计新增）：
+// 水位数字是上一次 run 的 pre-prompt 快照，跑完不刷新。预览按真机实测摆：
+// 天玑 182k 来自 10 小时前的 main 会话（watchdog 派发通道，SOP 不清它），
+// 玉衡 96k 来自 22 分钟前的流水线群会话（关单后会被 reset 的那类）。
+const HOUR = 3600_000;
+const PREVIEW_NOW = Date.now();
 const TELEMETRY = {
   tianshu: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "127s", note: "巡检核验 / 建档案" },
-  tianxuan: { model: "gpt-6", budget: 525000, estimate: 41000, lastRun: "869s", note: "趋势选题" },
+  tianxuan: { model: "gpt-6", budget: 525000, estimate: 41000, lastRun: "869s", note: "趋势选题", sessionKey: "agent:tianxuan:main", sessionIsGroup: false, estimatedAtMs: PREVIEW_NOW - 3 * HOUR },
   tianquan: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "674s", note: "skill 检查 · 674s" },
-  tianji: { model: "gpt-6", budget: 525000, estimate: 182000, lastRun: "377s", note: "母稿落盘" },
-  yuheng: { model: "gpt-6", budget: 525000, estimate: 96000, lastRun: "869s", note: "插图实测" },
+  tianji: { model: "gpt-6", budget: 525000, estimate: 182000, lastRun: "377s", note: "母稿落盘", sessionKey: "agent:tianji:main", sessionIsGroup: false, estimatedAtMs: PREVIEW_NOW - 10 * HOUR },
+  yuheng: { model: "gpt-6", budget: 525000, estimate: 96000, lastRun: "869s", note: "插图实测", sessionKey: "agent:yuheng:feishu:group:oc_b15d1b110f2473c56fd31373fc88da6a", sessionIsGroup: true, estimatedAtMs: PREVIEW_NOW - 22 * 60_000 },
   kaiyang: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "152s", note: "skill 检查 · 失败过 1 次" },
   yaoguang: { model: "gpt-6", budget: 525000, estimate: null, lastRun: "1516s", note: "定版关单" },
 };

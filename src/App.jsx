@@ -37,7 +37,7 @@ import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
 import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel } from "./taskChains.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
 import { CaseArchive } from "./CaseArchive.jsx";
 import { BrandLogo } from "./PipelineView.jsx";
@@ -3379,6 +3379,11 @@ function TasksUsageCard({ usageSessions, idleSessions, agentNameMap, variant = "
           : "—";
     const msgs = Number.isFinite(session.promptMessageCount) ? session.promptMessageCount : null;
     const lastSeen = Number.isFinite(session.updatedAt) ? session.updatedAt : 0;
+    // 水位估算的年龄：数字是上一次 run 的快照，不标时间就会把陈条当实时
+    // （Leo 2026-10-20 审计：客星 23k 十一天没动、天权 207k 来自 10 小时前）。
+    const estimateAt = Number.isFinite(session.estimatedAtMs) ? session.estimatedAtMs : null;
+    const estimateAge = estimateAt != null ? contextEstimateAge(estimateAt) : "";
+    const estimateStale = estimateAt != null && Date.now() - estimateAt >= ESTIMATE_STALE_MS;
     const badge = session.isGroup ? "群" : (session.key ?? "").endsWith(":main") ? "主" : null;
     return (
       <div
@@ -3386,7 +3391,7 @@ function TasksUsageCard({ usageSessions, idleSessions, agentNameMap, variant = "
         className={`tasks-usage-row${dimmed ? " tasks-usage-row--idle" : ""}`}
         title={`${session.key}${model ? `
 模型 ${model}` : ""}
-${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "运行中，上下文尚未产出" : "空闲会话，无上下文估算"}${budget != null ? ` · 预算 ${budget.toLocaleString()} tok` : ""}${msgs != null ? ` · ${msgs} 条消息` : ""}${lastSeen ? `
+${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "运行中，上下文尚未产出" : "空闲会话，无上下文估算"}${budget != null ? ` · 预算 ${budget.toLocaleString()} tok` : ""}${msgs != null ? ` · ${msgs} 条消息` : ""}${estimateAge ? ` · 水位估算于 ${estimateAge}` : ""}${lastSeen ? `
 最近活动 ${formatTaskAge(lastSeen)}` : ""}`}
       >
         <i className={`agent-status-dot tasks-usage-dot ${running ? "" : "tasks-usage-dot--idle"}`} aria-hidden="true" />
@@ -3404,6 +3409,11 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
           {nums}
           {hot ? <small className="tasks-usage-hot">建议清理</small> : null}
           {msgs != null ? <small>{msgs}条</small> : null}
+          {estimateStale ? (
+            <small className="tasks-usage-age" title={`水位估算取样于 ${estimateAge}，此后该会话没有新 run；若期间被 reset，实际已重置`}>
+              估算 {estimateAge}
+            </small>
+          ) : null}
         </span>
       </div>
     );
@@ -3443,6 +3453,13 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
           {showIdleRows &&
             idleSessions.map((session) => renderUsageRow(session, true))}
         </div>
+        {/* 口径声明（Leo 2026-10-20 审计）：cron 会话被 selectUsageSessions
+            排除，但排除不是随意滤——网关的 contextBudgetStatus 根本不为
+            cron 会话上报估算（实测 sessions.list 里 cron 行恒缺）。写出来，
+            免得「上下文前两名（开阳/玉衡定时会话）不在卡上」被读成卡漏了。 */}
+        <p className="tasks-usage-note">
+          不含定时任务会话（cron）：网关不上报它们的水位估算
+        </p>
       </div>
     );
   }
@@ -3472,6 +3489,9 @@ ${estimate != null ? `上下文 ${estimate.toLocaleString()} tok` : starting ? "
         {showIdleRows &&
           idleSessions.map((session) => renderUsageRow(session, true))}
       </div>
+      <p className="tasks-usage-note">
+        不含定时任务会话（cron）：网关不上报它们的水位估算
+      </p>
     </div>
   );
 }
@@ -4502,6 +4522,13 @@ function PipelineTelemetry({
           model: session.model ?? current?.model ?? "—",
           estimate,
           budget: budget > 0 ? budget : null,
+          // 代表会话是群还是主：SOP 关单后清的是**群**上下文，main 会话
+          // （agent 间派发通道）没人清——天权 207k 就在 main 上。浮层不标
+          // 群/主，这个数会被读成"流水线群"的水位（Leo 2026-10-20 审计）。
+          sessionKey: session.key,
+          sessionIsGroup: Boolean(session.isGroup),
+          estimatedAtMs:
+            typeof session.estimatedAtMs === "number" ? session.estimatedAtMs : null,
         };
       } else if (current && !current.model && session.model) {
         current.model = session.model;

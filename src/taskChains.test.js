@@ -33,6 +33,7 @@ import {
   hopToneOf,
   isActiveTask,
   countIdleSessions,
+  contextEstimateAge,
   selectUsageSessions,
   sessionEpisodeHops,
   sessionErrorText,
@@ -149,6 +150,20 @@ test("usage sessions: 只收有真实水位的会话，按水位降序（Leo 202
   // limit 截断先保运行中，再按水位取最满的
   const capped = selectUsageSessions(sessions, { limit: 1 });
   assert.deepEqual(capped.map((session) => session.key), ["agent:tianxuan:feishu:group:oc_b"]);
+});
+
+test("contextEstimateAge: 水位估算年龄文案（陈条不许看起来像实时）", () => {
+  const now = 1_800_000_000_000;
+  assert.equal(contextEstimateAge(now - 5_000, now), "刚刚");
+  assert.equal(contextEstimateAge(now - 25 * 60_000, now), "25 分钟前");
+  assert.equal(contextEstimateAge(now - 10 * 3600_000, now), "10 小时前");
+  assert.equal(contextEstimateAge(now - 11 * 24 * 3600_000, now), "11 天前");
+  // 脏数据：没有取样时刻就不编年龄
+  assert.equal(contextEstimateAge(null, now), "");
+  assert.equal(contextEstimateAge(0, now), "");
+  assert.equal(contextEstimateAge(Number.NaN, now), "");
+  // 未来时刻（时钟跳变）不渲染成负数
+  assert.equal(contextEstimateAge(now + 60_000, now), "刚刚");
 });
 
 test("countIdleSessions/listIdleSessions: 空闲数与清单口径一致（cron 不算）", () => {

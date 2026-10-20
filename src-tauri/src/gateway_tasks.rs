@@ -590,6 +590,10 @@ pub struct SessionUsage {
     pub context_tokens: Option<i64>,
     /// 当前上下文填充估算（pre-prompt-estimate，空闲会话缺省）。
     pub estimated_prompt_tokens: Option<i64>,
+    /// 水位估算的取样时刻（contextBudgetStatus.updatedAt）。跑完 run 就不再
+    /// 刷新——reset 干净的会话（SOP 关单后清群上下文）数字可能几小时甚至
+    /// 十一天没动过（真机客星 main 实测）。UI 靠它标年龄，别把陈条当实时。
+    pub estimated_at_ms: Option<i64>,
     /// 上下文预算（模型窗口 - 预留）。
     pub context_token_budget: Option<i64>,
     pub prompt_message_count: Option<i64>,
@@ -879,6 +883,9 @@ pub fn fetch_agents_snapshot(
                 context_tokens: session.get("contextTokens").and_then(Value::as_i64),
                 estimated_prompt_tokens: budget
                     .and_then(|b| b.get("estimatedPromptTokens"))
+                    .and_then(Value::as_i64),
+                estimated_at_ms: budget
+                    .and_then(|b| b.get("updatedAt"))
                     .and_then(Value::as_i64),
                 context_token_budget: budget
                     .and_then(|b| b.get("contextTokenBudget"))
