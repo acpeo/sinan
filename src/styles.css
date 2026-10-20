@@ -8422,6 +8422,114 @@ html[data-theme="dark"] .console-root {
   color: #e8e8ec;
 }
 
+/* ===== 主窗玻璃皮（Leo 2026-10-20 拍板「四窗全玻璃」）=====
+   只换皮不动结构：主窗本来就是 transparent 窗口（tauri.conf.json），
+   只是 .console-root 一直盖着实底 #f7f6f2——这里换半透明 tint。
+   配方与小组件同一套（冷色偏置 + --glass-alpha 浓度 + 髮丝边 + 内高光），
+   浓度由设置页「玻璃浓度」滑杆驱动，四窗一档。
+   可读性纪律（设计对话的代价提醒）：文字一律实色，不随玻璃降透明度；
+   卡片/表格/泳道行各保留自己的半透层，深色下比纸感再加深一档兜底。 */
+html[data-theme="dark"] .console-root.console-root--glass {
+  /* 与 .widget-shell--transparent 同一组色标（27 32 45 → 11 14 22，冷色偏置
+     0.1），浓度同吃 --glass-alpha——四窗摆在一起是同一块玻璃。 */
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(178, 200, 255, 0.1), transparent 48%),
+    linear-gradient(
+      168deg,
+      rgb(27 32 45 / calc(var(--glass-alpha, 0.82) + 0.03)),
+      rgb(11 14 22 / var(--glass-alpha, 0.82))
+    );
+  color: #e9e9ee;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    inset 0 1px rgba(255, 255, 255, 0.14);
+}
+
+/* 浅色玻璃 = 透亮白磨砂（同小组件 --glass-light 一族）：白 tint + 深色字，
+   色标与 widget 浅色档逐位相同（252 253 255 → 236 240 247），
+   浓度同样吃滑杆。 */
+html:not([data-theme="dark"]) .console-root.console-root--glass {
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(255, 255, 255, 0.5), transparent 48%),
+    linear-gradient(
+      168deg,
+      rgb(252 253 255 / calc(var(--glass-alpha, 0.82) + 0.06)),
+      rgb(236 240 247 / calc(var(--glass-alpha, 0.82) - 0.05))
+    );
+  color: #1c1c20;
+  box-shadow:
+    inset 0 0 0 1px rgba(31, 33, 36, 0.12),
+    0 22px 56px rgba(15, 18, 25, 0.26),
+    0 4px 14px rgba(15, 18, 25, 0.14);
+}
+
+/* --- 玻璃下的表面层：卡片不再实底，透出桌面但保住文字对比 --- */
+html[data-theme="dark"] .console-root.console-root--glass .v7card {
+  background: rgba(19, 26, 38, 0.66);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+}
+html:not([data-theme="dark"]) .console-root.console-root--glass .v7card {
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(31, 33, 36, 0.1);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.7);
+}
+html[data-theme="dark"] .console-root.console-root--glass .settings-card {
+  background: rgba(24, 30, 41, 0.66);
+}
+html:not([data-theme="dark"]) .console-root.console-root--glass .settings-card {
+  background: rgba(252, 251, 249, 0.6);
+}
+html[data-theme="dark"] .console-root.console-root--glass .cron-board-row {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(240, 240, 240, 0.12);
+}
+html:not([data-theme="dark"]) .console-root.console-root--glass .cron-board-row {
+  background: rgba(255, 255, 255, 0.52);
+  border-color: rgba(31, 33, 36, 0.1);
+}
+/* 顶栏不再吃 86% 纸色——玻璃上一块实底会把"一整块窗"切断；
+   它自带 blur(12px) 与底部髮丝线，交给下面的玻璃透上来。 */
+.console-root--glass .console-topbar {
+  background: transparent;
+}
+
+/* --- 指挥舱：换 --cp-* 的底/面两枚 token，组件层不动 ---
+   泳道矩阵的行、格本来就是透明+髮丝线；canvas 透明后桌面直接透上来，
+   行上再垫一层极淡的 tint 兜字（深色 0.035 / 浅色 0.38），
+   与设计稿「每格半透明加深兜底」同一条纪律。IS-ON 行的铜金染色保留。 */
+html[data-theme="dark"] .console-root.console-root--glass .pl-root,
+html[data-theme="dark"] .console-root.console-root--glass .ca-root {
+  --cp-canvas: transparent;
+  --cp-surface: rgba(22, 27, 38, 0.82);
+}
+html:not([data-theme="dark"]) .console-root.console-root--glass .pl-root,
+html:not([data-theme="dark"]) .console-root.console-root--glass .ca-root {
+  --cp-canvas: transparent;
+  --cp-surface: rgba(255, 255, 255, 0.78);
+}
+html[data-theme="dark"] .console-root.console-root--glass .pl-lane-row {
+  background: rgba(255, 255, 255, 0.035);
+}
+html:not([data-theme="dark"]) .console-root.console-root--glass .pl-lane-row {
+  background: rgba(255, 255, 255, 0.38);
+}
+html[data-theme="dark"] .console-root.console-root--glass .pl-lane-row.is-on {
+  background: color-mix(in srgb, var(--cp-bronze) 5%, rgba(255, 255, 255, 0.035));
+}
+html:not([data-theme="dark"]) .console-root.console-root--glass .pl-lane-row.is-on {
+  background: color-mix(in srgb, var(--cp-bronze) 6%, rgba(255, 255, 255, 0.38));
+}
+/* 深潜舱三列：贴一层淡底，长判词不直接压在壁纸上。这里给得比泳道行重
+   （0.05/0.5）——设计稿的代价清单点明"逐字读的长文本"最吃玻璃，
+   判词、验收标准都在这一区。 */
+html[data-theme="dark"] .console-root.console-root--glass .pl-insp-col {
+  background: rgba(255, 255, 255, 0.05);
+}
+html:not([data-theme="dark"]) .console-root.console-root--glass .pl-insp-col {
+  background: rgba(255, 255, 255, 0.5);
+}
+
 .console-scroll {
   position: absolute;
   inset: 44px 0 0 0;

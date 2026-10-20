@@ -518,6 +518,10 @@ export function loadMonitorConfig() {
       // 主窗"任务"页历史轮次回看窗口（分钟，0=关闭）。台账保留期是数据上限，
       // 这里只管显示多久；上限 10080 = 7 天（对齐台账缺省保留期）。
       historyWindowMin: clampNumber(raw.historyWindowMin, 1440, 0, 10080),
+      // 主窗材质（Leo 2026-10-20 拍板「四窗全玻璃」）：true=玻璃皮（与小组件
+      // 同一套 tint+浓度），false=纸感实底。默认 true——拍板即默认，老配置
+      // 没写过这个键也走玻璃；要纸感在设置页切回，不靠改 localStorage。
+      mainGlass: raw.mainGlass !== false,
       // 星位上下文水位预警阈值（%，0=关）。
       watermarkWarnPct: warnPct(raw.watermarkWarnPct, 80),
       // 自绘提醒角标（六案 B·自绘壳）：总开关默认关，要用主动开。
@@ -542,6 +546,7 @@ export function loadMonitorConfig() {
       translateProgress: true,
       tasksEdgeDock: false,
       historyWindowMin: 1440,
+      mainGlass: true,
       watermarkWarnPct: 80,
       notifyEnabled: false,
       notifyOnFailure: true,
@@ -576,6 +581,8 @@ export function saveMonitorConfig(config) {
     translateProgress: config.translateProgress !== false,
     tasksEdgeDock: config.tasksEdgeDock === true,
     historyWindowMin: clampNumber(config.historyWindowMin, 1440, 0, 10080),
+    // 主窗材质：拍板即默认玻璃，只有显式 false 才回纸感（见 loadMonitorConfig）。
+    mainGlass: config.mainGlass !== false,
     watermarkWarnPct: warnPct(config.watermarkWarnPct, 80),
     notifyEnabled: config.notifyEnabled === true,
     notifyOnFailure: config.notifyOnFailure !== false,

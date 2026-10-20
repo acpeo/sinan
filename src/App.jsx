@@ -1808,7 +1808,7 @@ const fleetModules = buildFleetModules({ tasks, runs: sessionRuns, now, dayStart
   );
 }
 
-function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassTint, onGlassTint, glassInk, onGlassInk, uiScale, onUiScale, stripScale, onStripScale, pinned, onPinnedChange, pinnedHoverMode, onPinnedHoverMode, pinnedHoverOpacity, onPinnedHoverOpacity }) {
+function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassTint, onGlassTint, glassInk, onGlassInk, mainGlass, onMainGlass, uiScale, onUiScale, stripScale, onStripScale, pinned, onPinnedChange, pinnedHoverMode, onPinnedHoverMode, pinnedHoverOpacity, onPinnedHoverOpacity }) {
   return (
     <div className="settings-card">
       <h2>外观与缩放</h2>
@@ -1827,6 +1827,33 @@ function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassT
             {option.label}
           </button>
         ))}
+      </div>
+      {/* 主窗材质（Leo 2026-10-20 拍板「四窗全玻璃」）：全玻璃 = 和小组件/
+          胶囊同一套材质（tint + 同一个浓度滑杆）；纸感 = 宣纸白+徽墨的久读底。
+          矩阵这种高密度界面玻璃久读会更累，滑杆往右拉能补可读性。 */}
+      <div className="settings-subsection">
+        <h3>主窗材质</h3>
+        <p className="settings-muted">
+          全玻璃让主窗与小组件、胶囊、角标同一套材质，直接透出桌面；纸感是宣纸白的实底，适合长时间逐字读矩阵。
+        </p>
+        <div className="theme-toggle" role="group" aria-label="主窗材质">
+          <button
+            type="button"
+            className={mainGlass ? "is-selected" : ""}
+            aria-pressed={mainGlass}
+            onClick={() => onMainGlass(true)}
+          >
+            全玻璃
+          </button>
+          <button
+            type="button"
+            className={!mainGlass ? "is-selected" : ""}
+            aria-pressed={!mainGlass}
+            onClick={() => onMainGlass(false)}
+          >
+            纸感
+          </button>
+        </div>
       </div>
       {/* macOS 面板材质跟随系统 vibrancy，不提供组件外观选项；
           深/浅配色用于 Windows 与 Linux 的卡片和胶囊。 */}
@@ -1874,7 +1901,7 @@ function AppearanceCard({ theme, onThemeChange, glassAlpha, onGlassAlpha, glassT
       )}
       <SliderRow
         label="玻璃浓度"
-        hint="作用于任务追踪小组件和贴边胶囊的透明/玻璃档；主窗是实底控制台不受影响。越低越通透，越高越厚实。"
+        hint="作用于任务追踪小组件、贴边胶囊和全玻璃主窗——四窗同一档浓度。越低越通透，越高越厚实；逐字读矩阵时往右拉。"
         min={5}
         max={96}
         step={2}
@@ -4728,10 +4755,18 @@ export function App() {
     // 玻璃窗是独立 webview：浓度改动要广播（此前漏广播，玻璃窗纹丝不动）
     emitGlassAlpha(next);
   }, []);
+  // 主窗材质（Leo 2026-10-20 拍板四窗全玻璃）：true=玻璃皮，false=纸感实底。
+  // 存 monitor 配置而不是 localStorage 散键——它和「界面长什么样」的其他开关
+  // 住一起（外观卡就在同一个设置页）；默认 true 见 loadMonitorConfig。
+  const [mainGlass, setMainGlass] = useState(() => loadMonitorConfig().mainGlass);
+  const handleMainGlass = useCallback((next) => {
+    const value = next === true;
+    setMainGlass(value);
+    saveMonitorConfig({ ...loadMonitorConfig(), mainGlass: value });
+  }, []);
   const [glassTint, setGlassTint] = useState(() =>
     normalizeGlassTint(localStorage.getItem("metrik:glassTint")),
-  );
-  const handleGlassTint = useCallback((next) => {
+  );  const handleGlassTint = useCallback((next) => {
     const value = normalizeGlassTint(next);
     setGlassTint(value);
     localStorage.setItem("metrik:glassTint", value);
@@ -4974,7 +5009,10 @@ export function App() {
   }, [beidouToast]);
 
   return (
-    <div className="console-root">
+    <div
+      className={`console-root${mainGlass ? " console-root--glass" : ""}`}
+      style={mainGlass ? { "--glass-alpha": shellGlassAlpha } : undefined}
+    >
       <div className="expanded-drag-region" data-tauri-drag-region aria-hidden="true" />
 
       {/* 独立窗口条（方案 B 定稿，Leo 2026-10-18）：30px 专用条，整条可拖，
@@ -5108,6 +5146,8 @@ export function App() {
             onGlassTint={handleGlassTint}
             glassInk={glassInk}
             onGlassInk={handleGlassInk}
+            mainGlass={mainGlass}
+            onMainGlass={handleMainGlass}
           />
         </div>
       </div>
