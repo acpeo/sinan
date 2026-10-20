@@ -10122,7 +10122,7 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
 .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
 .pl-colhead-star { display: flex; align-items: center; gap: 5px; line-height: 1; }
 .pl-colhead-star b { font-size: 12.5px; font-weight: 600; }
-.pl-colhead-role { font-size: 10.5px; line-height: 1.3; color: var(--cp-meta); }
+.pl-colhead-role { font-size: 10.5px; line-height: 1.3; color: var(--cp-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-colhead-model { font-size: 10px; line-height: 1.25; color: var(--cp-meta); opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 有回环的行**不再多留底高**：v20.2 的 S 动线整条待在两张卡的侧面空档里
@@ -10531,6 +10531,11 @@ html[data-theme="dark"] .pl-stardetail {
    断点从 1180 收到 1040（Leo 2026-10-20 第 6 条）：1080 的老窗口宽度本来
    就排得下三栏（minmax(0) 之后每栏 322px），却被 1180 一刀切成两栏，
    第三栏「产出包」整块掉到第二行。 */
+/* 列头字号在窄窗回落一档：1080 下每列只有 92px，10px 的「gpt-6 · 上次 127s」
+   会只剩「上次 …」——字号是为了读，读到一半被截就白抬了。 */
+@media (max-width: 1180px) {
+  .pl-colhead-model { font-size: 9px; }
+}
 @media (max-width: 1040px) {
   .pl-insp-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
   .pl-insp-body > :last-child { grid-column: 1 / -1; }

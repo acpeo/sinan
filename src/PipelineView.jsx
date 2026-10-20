@@ -43,7 +43,7 @@ export const STAGE_COLS = [
   { key: "tianxuan", star: "tianxuan", label: "研究中", done: "已定题", role: "趋势 · 选题" },
   { key: "tianquan", star: "tianquan", label: "审题中", done: "已过审", role: "审题门禁" },
   { key: "tianji", star: "tianji", label: "创作中", done: "母稿已交", role: "母稿创作" },
-  { key: "tianquan2", star: "tianquan", label: "审稿中", done: "已过稿", role: "审稿门禁 · 冻结", gate: true },
+  { key: "tianquan2", star: "tianquan", label: "审稿中", done: "已过稿", role: "审稿门禁", gate: true },
   { key: "par", star: "par", label: "视觉/视频", done: "已交付", role: "图文 // 视频", parallel: true },
   { key: "yaoguang", star: "yaoguang", label: "运营关单", done: "已关单", role: "分发 · 关单" },
 ];
