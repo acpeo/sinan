@@ -1967,6 +1967,45 @@ fn says_closed(text: &str) -> bool {
 /// 「记录复核 … ['已关单']」）。判定放在**行内**做：同一行里既要有案号、
 /// 又要 says_closed —— 不能开窗口跨行比，否则
 /// 「BM-2603 未关单 / BM-2604 已关单」两行会把 BM-2603 也判成已关。
+/// 结构化字段块：lark-cli `record-get` 的真实输出是「一条记录一段」，
+/// 每段以 `任务名称 = "BM-xxxx …"` 开头，`当前阶段 = ["已关单"]` 在后面几行。
+///
+/// 2026-10-20 22:04 真机（BM-2605 第四轮）：摇光发了【关单通知】、天枢把任务表
+/// 改成「已关单」，app 却一直停在 `06_二审`。原因就是行内双条件永远不成立——
+/// 案号在 `任务名称` 那一行，「已关单」在 `当前阶段` 那一行，两行之间隔着
+/// 内容标题、状态、交付链接。判据不能只看一行，要认「字段块」这个结构。
+///
+/// 防串（和行内规则同一个目的）：块内出现第二个 `任务名称` 就停——那已经是
+/// 下一条记录了；块内出现别的案号也停，宁可这次不认，也不把别人的关单安到
+/// 这一单头上。
+fn field_block_closure(text: &str, case_id: &str) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if !(line.contains("任务名称") && line.contains(case_id)) {
+            continue;
+        }
+        // record-get 一条记录 12~18 行，20 行足够覆盖到「当前阶段」。
+        for next in lines.iter().skip(index + 1).take(20) {
+            if next.contains("任务名称") {
+                break; // 进入下一条记录
+            }
+            if next.contains("当前阶段") && says_closed(next) {
+                return true;
+            }
+            if next.contains("BM-") && !next.contains(case_id) {
+                break; // 块里混进别的案号，保守放弃
+            }
+        }
+    }
+    false
+}
+
+/// 给 gateway_tasks 的关单对账挑证据行用：单行里"已关单"是否成立
+/// （否定词规则与 says_closed 一致，不允许绕过）。
+pub fn says_closed_pub(text: &str) -> bool {
+    says_closed(text)
+}
+
 pub fn closure_mention(text: &str, case_id: &str) -> bool {
     if case_id.is_empty() {
         return false;
@@ -1989,9 +2028,19 @@ pub fn closure_mention(text: &str, case_id: &str) -> bool {
             let mut from = 0usize;
             while let Some(rel) = line[from..].find(marker) {
                 let pos = from + rel;
-                // says_closed 的否定词规则在这里逐字复用：切出标记附近的一小段
-                let lo = pos.saturating_sub(4);
-                let hi = (pos + marker.len() + 8).min(line.len());
+                // says_closed 的否定词规则在这里逐字复用：切出标记附近的一小段。
+                // **必须对齐到字符边界**：这里是字节下标，而中文一字三字节——
+                // `&line[lo..hi]` 直接切会 panic（2026-10-20 22:17 用真机群消息
+                // 复现：`end byte index 4590 is not a char boundary`）。群消息里
+                // 一行并排多个案号时必踩，扫一次关单就 panic 一次。
+                let mut lo = pos.saturating_sub(4);
+                while lo > 0 && !line.is_char_boundary(lo) {
+                    lo -= 1;
+                }
+                let mut hi = (pos + marker.len() + 8).min(line.len());
+                while hi < line.len() && !line.is_char_boundary(hi) {
+                    hi += 1;
+                }
                 let local = &line[lo..hi];
                 let near_case = pos.abs_diff(anchor) <= 40;
                 if near_case && says_closed(local) {
@@ -2001,7 +2050,8 @@ pub fn closure_mention(text: &str, case_id: &str) -> bool {
             }
         }
     }
-    false
+    // 行内双条件不成立时，退到「结构化字段块」判据（真机关单证据都是分行的）。
+    field_block_closure(text, case_id)
 }
 
 /// 网关侧确认关单的落点：飞书任务表已改「已关单」，但该动作不产生会话跳。
@@ -4804,6 +4854,60 @@ mod dispatch_helper_tests {
         }
         // 不在列表里的案一个都不许沾
         assert!(!closure_mention(review, "BM-2609"));
+    }
+
+    /// 一行里并排多个案号、且是中文——切窗口时不许切在多字节字符中间。
+    /// 2026-10-20 22:17 用真机群消息复现过 panic：
+    /// `end byte index 4590 is not a char boundary; it is inside '态'`。
+    #[test]
+    fn closure_mention_survives_multibyte_line_with_many_cases() {
+        // 两个案号并排 + 中文夹在中间 → 走「多案近邻」分支（就是会切窗口的那条）。
+        let line = "BM-2603 未关单 —— 这一条后面还有很多很多说明文字用来拉开距离，确保超过四十个字节，然后才提到：BM-2601 已关单";
+        assert!(closure_mention(line, "BM-2601"), "BM-2601 就近写着已关单");
+        assert!(
+            !closure_mention(line, "BM-2603"),
+            "BM-2603 写着未关单，不许被远处的已关单带走"
+        );
+    }
+
+    #[test]
+    fn closure_mention_reads_field_block_from_record_get() {
+        // 真机形态：lark-cli record-get 一条记录一段，案号与「已关单」分两行。
+        // 2026-10-20 22:04 BM-2605 关单后 app 停在 06_二审，就是这条没认出来。
+        let record = "\
+=== ① 任务表实读 ===
+任务名称 = \"BM-2605 落盘实测第四轮\"
+内容标题 = \"家里最该留的，是一个「不用好看」的角落\"
+当前阶段 = [\"已关单\"]
+状态 = [\"已完成\"]
+是否归档 = true
+最终交付链接 = \"https://my.feishu.cn/docx/XjiTdYKsCo2QdcxBLOhcPcOSnGe\"";
+        assert!(
+            closure_mention(record, "BM-2605"),
+            "字段块里明明写着已关单"
+        );
+
+        // 同一段里没关单 → 不许判成已关
+        let open = "任务名称 = \"BM-2605 落盘实测第四轮\"\n当前阶段 = [\"天玑创作中\"]\n状态 = [\"进行中\"]";
+        assert!(!closure_mention(open, "BM-2605"));
+
+        // 两条记录连着输出：不许串到下一条的「已关单」
+        let two = "\
+任务名称 = \"BM-2604 落盘实测第三轮\"
+当前阶段 = [\"已关单\"]
+任务名称 = \"BM-2605 落盘实测第四轮\"
+当前阶段 = [\"天玑创作中\"]";
+        assert!(
+            !closure_mention(two, "BM-2605"),
+            "串到上一条记录的已关单"
+        );
+        assert!(closure_mention(two, "BM-2604"));
+
+        // 不在任何「任务名称」块里的裸案号 + 别处「已关单」不算
+        assert!(!closure_mention(
+            "参考上一单 BM-2605 的做法\n本次复核：已关单",
+            "BM-2605"
+        ));
     }
 
     #[test]

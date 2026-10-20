@@ -1559,11 +1559,12 @@ pub fn reconcile_closures_from_chat(
     // 用 chat.history 而不是 sessions.get：后者要把整段 transcript 序列化，
     // 真机实测 90 秒起步直接超时（天枢当时还是空闲状态——不是负载，是接口
     // 本身重）；chat.history(limit 100) 只要 237ms，且窗口正落在 07:38–08:29
-    // 这段关单复核上。群消息再涨、窗口滑走时的兜底见下方 closure_mention 失败
-    // 的静默路径——宁可这轮没对上，也不能把快照拖死。
+    // 这段关单复核上。**但窗口会滑走**：2026-10-20 22:20 实测，BM-2605 在
+    // 22:02 关单、22:04 的复核文本到 22:20 已被挤出一百条之外——而那轮正好
+    // 撞上同步卡死，等 app 恢复时证据已经没了。放宽到 300 条。
     let payload = client.call(
         "chat.history",
-        json!({"sessionKey": group_key, "limit": 100}),
+        json!({"sessionKey": group_key, "limit": 300}),
     )?;
     let messages = payload
         .get("messages")
@@ -1587,10 +1588,20 @@ pub fn reconcile_closures_from_chat(
                 .get("timestamp")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            // 证据只取命中案号的那一行——日志里要能一眼看到"凭什么关的"。
+            // 证据只取一行——日志里要能一眼看到"凭什么关的"。优先取同时含
+            // 案号与「已关单」的那一行；字段块形态下两者分居两行，退到
+            // 「当前阶段」那一行（比只写案件名的行更能说明问题）。
             let evidence = raw
                 .lines()
-                .find(|line| line.contains(case_id.as_str()))
+                .find(|line| {
+                    line.contains(case_id.as_str())
+                        && crate::beidou_cases::says_closed_pub(line)
+                })
+                .or_else(|| {
+                    raw.lines()
+                        .find(|line| line.contains("当前阶段") && crate::beidou_cases::says_closed_pub(line))
+                })
+                .or_else(|| raw.lines().find(|line| line.contains(case_id.as_str())))
                 .unwrap_or("")
                 .chars()
                 .take(160)
@@ -1884,7 +1895,7 @@ const CHAT_PULL_MIN_INTERVAL_MS: i64 = 15_000;
 /// 快照路径上必须限频。飞书侧关单是人的操作节奏（分钟级），5 分钟足够。
 static CLOSURE_RECONCILE_AT: std::sync::LazyLock<Mutex<Option<Instant>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
-const CLOSURE_RECONCILE_MIN_INTERVAL: Duration = Duration::from_secs(300);
+const CLOSURE_RECONCILE_MIN_INTERVAL: Duration = Duration::from_secs(90);
 
 /// 判定该台账行这一拍是否该拉 chat.history，并把"该拉"的这一拍登记进节流表。
 /// 锁中毒时按"不拉"处理（宁可少一次进度刷新，不赌并发）。
