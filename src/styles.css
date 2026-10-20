@@ -10064,14 +10064,15 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
    第一列前面是「案件 / CASE」，用相邻选择器自然跳过，不跟案名列连线。 */
 .pl-colhead-cell { position: relative; display: flex; min-width: 0; }
 .pl-colhead-cell > .pl-colhead { flex: 1 1 auto; min-width: 0; }
-/* 列头之间的流水线轴：平时一条发丝线，把 7 个星位串成一条链而不是 7 个孤岛
-   （Leo 2026-10-20 第 1 条："上一位到下一位中间有没有连接的跑马灯"）。
-   **只在 6px 的缝里画**，不伸进卡片：玻璃壳把卡片背景改成半透明后，
-   压在卡片里的那 26px 会透出来，像每张卡左缘都被人划了一道
-   （Leo 2026-10-20 20:01 指着天枢左边那条问"为什么多了一条横线"）。
-   第一列（前面是「案件 / CASE」标签、不是链上的一节）静态不画——
-   那一段没有卡片可接，画出来就是一条悬空的断头线。 */
-.pl-colhead-cell + .pl-colhead-cell::before {
+/* 列头之间的流水线轴：**默认一条线都不画**。Leo 2026-10-20 20:21 定的三态：
+     没活儿在跑 / 待关单 → 空白（7 个星位是各自独立的卡片）
+     已经走过的一段     → 一条静态横线
+     正在交接的那一段   → 跑马灯
+   第一列（前面是「案件 / CASE」标签、不是链上的一节）永远不画——
+   那一段没有卡片可接，画出来是悬空的断头线（20:01 那次问的就是它）。
+   长度只取 6px 的缝，不伸进卡片：玻璃壳把卡片背景改成半透明后，
+   压在卡片里的线会从底色透出来，像每张卡左缘被划了一道。 */
+.pl-colhead-cell.is-settled::before {
   content: "";
   position: absolute;
   left: -6px;   /* 跨过 grid 的 6px gap，接到上一张卡片的右缘 */
@@ -10083,25 +10084,27 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
      22% ink 是"看得见但不抢戏"，深浅两档都成立（16% 在深色底上又糊了）。 */
   background: color-mix(in srgb, var(--cp-ink) 22%, transparent);
 }
-/* 走灯态：活儿正从上一颗星手里递过来。缝只有 6px，跑不了位移，
-   所以读的是"接口通电"——变粗、变琥珀、带光晕、明暗呼吸。
-   真正的位移式跑马灯在泳道格子左侧那条 26px 的衬里里（`.pl-link`）。
-   第一列不参与（见 PipelineView 里 handoff 的 index > 0）。 */
+/* 走灯态：活儿正从上一颗星手里递给下一位。6px 的缝放不下一整个虚线周期，
+   所以这段放长到 14px 并压住卡片前沿 8px，右端用 mask 淡出——
+   读起来是"光从上一张卡流进下一张卡"，而不是卡上的一道划痕。
+   要盖在卡片之上（z-index）：玻璃壳的卡片是半透明的，压在下面的那段
+   会被卡片的底色糊掉，只剩缝里一小截，看不出"在流"。 */
+.pl-colhead-cell.is-handoff { z-index: 1; }
 .pl-colhead-cell.is-handoff::before {
   content: "";
   position: absolute;
+  z-index: 2;
   left: -6px;
   top: 50%;
-  width: 6px;
+  width: 20px;
   height: 2px;
   margin-top: -1px;
-  background: var(--cp-amber);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--cp-amber) 70%, transparent));
-  animation: pl-handoff-pulse 0.9s ease-in-out infinite;
-}
-@keyframes pl-handoff-pulse {
-  0%, 100% { opacity: 0.45; }
-  50% { opacity: 1; }
+  background: repeating-linear-gradient(90deg, var(--cp-amber) 0 7px, transparent 7px 14px);
+  background-size: 14px 2px;
+  animation: pl-linkmove 0.45s linear infinite;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--cp-amber) 65%, transparent));
+  -webkit-mask-image: linear-gradient(90deg, #000 0 12px, transparent 20px);
+  mask-image: linear-gradient(90deg, #000 0 12px, transparent 20px);
 }
 .pl-colhead-lead { align-self: end; padding-bottom: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; color: var(--cp-meta); }
 .pl-colhead {

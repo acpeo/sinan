@@ -300,6 +300,20 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
     return () => ro.disconnect();
   }, [list.length, activeId, colFilter]);
 
+  // 列头轴线（两粒星之间那一段）的三态，Leo 2026-10-20 20:21 定的：
+  //   · 没活儿在跑 / 待关单 → 一条线都不画，7 个星位之间是干净的空白
+  //   · 已经走过的一段         → 一条静态横线（活儿确实从这儿交过去了）
+  //   · 正在交接的那一段       → 跑马灯（上一位交给下一位）
+  // 所以先要知道"这条流水线此刻走到哪一列"：所有在跑的星位里最靠前的那个。
+  // 全线空闲时是 -1（不是 Infinity——`index < Infinity` 恒真，会把 7 段全部
+  // 画成"已完成"，正是 Leo 说不要的那种"平时也有一条线"）。
+  const starLiveOf = (c) =>
+    c.parallel ? liveStars.has("yuheng") || liveStars.has("kaiyang") : liveStars.has(c.star);
+  const liveIdx = STAGE_COLS.reduce(
+    (acc, c, i) => (starLiveOf(c) ? (acc < 0 ? i : Math.min(acc, i)) : acc),
+    -1,
+  );
+
   return (
     <div className="pl-lanes" ref={hostRef}>
       {/* 列头 = 星位遥测：三行（星名+在跑点 / 链路职责 / 模型+最近一次 run 用时）。
@@ -312,9 +326,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
         const tele = starTelemetry?.[col.star] ?? {};
         // 这一列此刻有没有星在跑。并行列入线看两股里的任意一股——
         // 母稿冻结点只有一个出口，玉衡/开阳谁先动都算"这条路在走"。
-        const starLive = (c) =>
-          c.parallel ? liveStars.has("yuheng") || liveStars.has("kaiyang") : liveStars.has(c.star);
-        const live = starLive(col);
+        const live = starLiveOf(col);
         // 本列的星在跑 = 活儿正在递给它：这一列**前面**那段列头轴线要走灯
         // （与泳道里 `.pl-link` 的判据同一口径：本格当前且在跑）。
         // index > 0：第一列前面是「案件 / CASE」标签，不是星位，也不是链条上
@@ -323,7 +335,13 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
         // 左边又是空的，截出来是一个孤零零的橙色短杠，比不画更难解释
         // （Leo 2026-10-20 20:01 指着这条问"为什么多了一条横线"）。
         // 天枢在跑的反馈由列头上的呼吸点承担。
-        const handoff = index > 0 && live;
+        // 只亮"流水线当前所在的那一段"（index === liveIdx），不按每列各自的
+        // live 亮：天权在链上出现两次（审题 / 审稿），同一颗星在跑会让两段
+        // 一起闪，看着像有两个地方在同时交接。列头的呼吸点仍按各自的 live 挂。
+        const handoff = index > 0 && index === liveIdx;
+        // 已经走过的一段：流水线已经越过这一列，说明活儿确实从这段交过去了。
+        // 全部空闲时 liveIdx = -1，一段都不画。
+        const settled = index > 0 && index < liveIdx;
         // 并行列（玉衡 // 开阳）各自有遥测，不能拿单颗星的 tele 顶两行。
         const parTele = col.parallel
           ? {
@@ -333,7 +351,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             }
           : null;
           return (
-            <div className={`pl-colhead-cell${handoff ? " is-handoff" : ""}`} key={col.key}>
+            <div className={`pl-colhead-cell${handoff ? " is-handoff" : ""}${settled ? " is-settled" : ""}`} key={col.key}>
             <button
               type="button"
               className={`pl-colhead${colFilter === star ? " is-on" : ""}`}
