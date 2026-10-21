@@ -4136,6 +4136,10 @@ function TasksSection({
     const ids = new Set();
     // 第一路：快照（与胶囊灯牌、星位上下文同源同拍，都过新鲜度闸）。
     for (const session of boardAgentsFresh?.sessions ?? []) {
+      // 巡检（cron/isolated）不算星位在跑：watchdog 每 5 分钟一轮、每轮小几分钟，
+      // 算进去天枢就永久呼吸（Leo 2026-10-21 指着列头问"天枢怎么一直在执行中"）。
+      // 天枢真正的接单/关单跑在群会话上，不受此影响。
+      if (String(session?.key ?? "").includes(":cron:")) continue;
       if (session?.hasActiveRun && session.agentId) ids.add(canonicalAgentId(session.agentId));
     }
     // 第二路：账本兜底（Leo 2026-10-11 实锤"有星在活跃，星位却没动作"）。
@@ -4148,6 +4152,8 @@ function TasksSection({
     const seen = Date.now();
     for (const run of sessionRuns) {
       if (!run || (run.status !== "running" && run.status !== "queued")) continue;
+      // 同上：cron 巡检 run 不是星位在干活。
+      if (String(run.sessionKey ?? "").includes(":cron:")) continue;
       const at = Number.isFinite(run.lastSeenMs) ? run.lastSeenMs : 0;
       if (at > 0 && seen - at > zombieMs) continue;
       const id = canonicalAgentId(run.agentId);

@@ -10193,12 +10193,15 @@ html[data-theme="dark"] .pl-btn--primary:hover { color: #14171f; }
   .pl-colhead.is-live::after { animation: none; background-position: 50% 0; opacity: 0.7; }
 }
 .pl-colhead.is-on { background: var(--cp-bronze-bg); border-color: color-mix(in srgb, var(--cp-bronze) 45%, transparent); }
-.pl-colhead-star { display: flex; align-items: center; gap: 5px; line-height: 1; }
-.pl-colhead-star b { font-size: 12.5px; font-weight: 600; }
+.pl-colhead-star { display: flex; align-items: center; gap: 5px; line-height: 1; min-width: 0; flex-wrap: nowrap; }
+/* 名字和「n卡在跑」都不许折行（Leo 2026-10-21：徽标折成两行、把名字挤成竖排）。
+   列窄时宁可让星名省略号，也不把两字名字竖直排。 */
+.pl-colhead-star b { font-size: 12.5px; font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
+.pl-colhead-star b { overflow: hidden; text-overflow: ellipsis; max-width: 60px; }
 /* Workboard 段卡在跑徽标（Phase 2 · B 路线）：只在有 running 段卡时出现。
    字号压到与角色行同级，琥珀描边但不发亮——它在跑的信号呼吸点已经承担了，
    这里只是把"几张卡"说清楚，不与呼吸点抢注意。 */
-.pl-colhead-wb { font-size: 10px; color: var(--cp-jade); border: 1px solid color-mix(in srgb, var(--cp-jade) 38%, transparent); border-radius: 999px; padding: 1px 6px; margin-left: 2px; }
+.pl-colhead-wb { font-size: 9.5px; line-height: 1.25; color: var(--cp-jade); border: 1px solid color-mix(in srgb, var(--cp-jade) 38%, transparent); border-radius: 999px; padding: 1px 5px; margin-left: 2px; white-space: nowrap; flex: 0 0 auto; }
 /* 深潜舱的卡片条：父卡 + 段卡 chips 一行排开，塞得下就一行，塞不下折行。
    挂在 pl-insp-head 之下、三栏 body 之上，全宽但不另起卡片层（Leo 的克制令）。 */
 .pl-insp-cards { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px 20px 0; }

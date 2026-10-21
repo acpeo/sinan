@@ -12,6 +12,7 @@
 // Leo 2026-10-15：实际用的时候不会有假案子。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { STAGE_COLS, liveColumnsOf, liveIndex } from "./pipelineLive.js";
 import {
   DAG_STEPS,
   DELIVERABLE_MODES,
@@ -38,15 +39,9 @@ export const STAR_ICON = {
 /// Leo 2026-10-20 第 5 问要的：以前所有格子无论走没走完都写「建档 / 研究中 /
 /// 审题中」，于是一张全案关单的泳道看上去跟刚开工一模一样。文案只由进度
 /// 下标推导（index < step 即该步已交付），不新造状态、不猜时间。
-export const STAGE_COLS = [
-  { key: "tianshu", star: "tianshu", label: "建档", done: "已建档", role: "建档 · 巡检" },
-  { key: "tianxuan", star: "tianxuan", label: "研究中", done: "已定题", role: "趋势 · 选题" },
-  { key: "tianquan", star: "tianquan", label: "审题中", done: "已过审", role: "审题门禁" },
-  { key: "tianji", star: "tianji", label: "创作中", done: "母稿已交", role: "母稿创作" },
-  { key: "tianquan2", star: "tianquan", label: "审稿中", done: "已过稿", role: "审稿门禁", gate: true },
-  { key: "par", star: "par", label: "视觉/视频", done: "已交付", role: "图文 // 视频", parallel: true },
-  { key: "yaoguang", star: "yaoguang", label: "运营关单", done: "已关单", role: "分发 · 关单" },
-];
+// 七列定义已挪到 pipelineLive.js（纯模块，node 测试能直接 import）。
+// 这里再导出一次，CaseArchive.jsx 等老引用不用改。
+export { STAGE_COLS };
 
 /// 已关单判定（Leo 2026-10-16 第 3 问：「这运营关单是在执行中还是已经完成了」）。
 /// 停在最后一列、且这一步已经办完。两路数据两个判据，都不新造字段：
@@ -321,12 +316,13 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
   // 所以先要知道"这条流水线此刻走到哪一列"：所有在跑的星位里最靠前的那个。
   // 全线空闲时是 -1（不是 Infinity——`index < Infinity` 恒真，会把 7 段全部
   // 画成"已完成"，正是 Leo 说不要的那种"平时也有一条线"）。
-  const starLiveOf = (c) =>
-    c.parallel ? liveStars.has("yuheng") || liveStars.has("kaiyang") : liveStars.has(c.star);
-  const liveIdx = STAGE_COLS.reduce(
-    (acc, c, i) => (starLiveOf(c) ? (acc < 0 ? i : Math.min(acc, i)) : acc),
-    -1,
-  );
+  // 按**列**判活，不按星：天权在链上占两列（03-审题 / 05-审稿），按星判会让
+  // 两块一起呼吸（Leo 2026-10-21：审天璇时两个天权都亮，看着像两处同时交接）。
+  // 判据与测试都在 pipelineLive.js（纯函数，node 直接跑得到）。
+  const liveCols = useMemo(() => liveColumnsOf(cases, liveStars), [cases, liveStars]);
+  // 轴线（列头之间那一段）仍要一个"最靠前的在跑列"：多案并行时取最小，
+  // 与"只有一处跑马灯"的约定一致。
+  const liveIdx = liveIndex(liveCols);
 
   return (
     <div className="pl-lanes" ref={hostRef}>
@@ -340,7 +336,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
         const tele = starTelemetry?.[col.star] ?? {};
         // 这一列此刻有没有星在跑。并行列入线看两股里的任意一股——
         // 母稿冻结点只有一个出口，玉衡/开阳谁先动都算"这条路在走"。
-        const live = starLiveOf(col);
+        const live = liveCols.has(index);
         // 本列的星在跑 = 活儿正在递给它：这一列**前面**那段列头轴线要走灯
         // （与泳道里 `.pl-link` 的判据同一口径：本格当前且在跑）。
         // index > 0：第一列前面是「案件 / CASE」标签，不是星位，也不是链条上

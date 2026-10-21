@@ -1,0 +1,50 @@
+// 流水线的纯逻辑（无 JSX，供 node 测试直接 import）。
+//
+// 两个约定集中在这里，改动只改一处：
+//   ① STAGE_COLS —— 七列的定义与顺序（天权在链上占两列：审题 / 审稿）；
+//   ② liveColumnsOf —— 「哪一列此刻在跑」的判据。
+//
+// 为什么单拎出来：判据曾经按**星**算（liveStars.has(star)），天权一跑
+// 审题、审稿两块列头一起呼吸，看上去像两处在同时交接（Leo 2026-10-21）。
+// 真判据是「案子此刻停在哪一列」——按列算，两案分别停在天权两列时，
+// 两列各亮各的才对。
+
+/// 下标推导（index < step 即该步已交付），不新造状态、不猜时间。
+export const STAGE_COLS = [
+  { key: "tianshu", star: "tianshu", label: "建档", done: "已建档", role: "建档 · 巡检" },
+  { key: "tianxuan", star: "tianxuan", label: "研究中", done: "已定题", role: "趋势 · 选题" },
+  { key: "tianquan", star: "tianquan", label: "审题中", done: "已过审", role: "审题门禁" },
+  { key: "tianji", star: "tianji", label: "创作中", done: "母稿已交", role: "母稿创作" },
+  { key: "tianquan2", star: "tianquan", label: "审稿中", done: "已过稿", role: "审稿门禁", gate: true },
+  { key: "par", star: "par", label: "视觉/视频", done: "已交付", role: "图文 // 视频", parallel: true },
+  { key: "yaoguang", star: "yaoguang", label: "运营关单", done: "已关单", role: "分发 · 关单" },
+];
+
+/// 这一列的星是否在跑（并行列入线看玉衡/开阳任意一股）。
+export function starLiveOf(col, liveStars) {
+  if (!col) return false;
+  return col.parallel
+    ? liveStars.has("yuheng") || liveStars.has("kaiyang")
+    : liveStars.has(col.star);
+}
+
+/// 按列判活：返回在跑的列下标集合。
+/// 只有「某案停在某列」且「该列的星在跑」才算——按星判会让天权两列一起亮。
+export function liveColumnsOf(cases = [], liveStars = new Set(), cols = STAGE_COLS) {
+  const out = new Set();
+  for (const item of cases) {
+    const idx = Number(item?.step);
+    if (!Number.isInteger(idx)) continue;
+    const col = cols[idx];
+    if (!col) continue;
+    if (starLiveOf(col, liveStars)) out.add(idx);
+  }
+  return out;
+}
+
+/// 列头轴线（两粒星之间那一段）用的「最靠前的在跑列」。多案并行时取最小，
+/// 与「全线只亮一处跑马灯」的约定一致；全线空闲是 -1（不是 Infinity——
+/// `index < Infinity` 恒真，会把 7 段全画成"已完成"）。
+export function liveIndex(liveCols) {
+  return liveCols && liveCols.size ? Math.min(...liveCols) : -1;
+}
