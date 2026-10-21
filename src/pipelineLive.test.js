@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { STAGE_COLS, liveColumnsOf, liveIndex, starLiveOf, wbBadgeText, wbSegsOfCol } from "./pipelineLive.js";
+import { STAGE_COLS, liveColumnsOf, liveIndex, segIndexOf, starLiveOf, wbBadgeText, wbSegsOfCol, wbStepByCase } from "./pipelineLive.js";
 
 const only = (set) => [...set].sort((a, b) => a - b);
 
@@ -73,4 +73,38 @@ test("段卡映射：天权两列各认各的段，天枢没有段卡", () => {
   assert.deepEqual(wbSegsOfCol({ key: "par" }), ["06-出图", "06-视频"]);
   assert.deepEqual(wbSegsOfCol({ key: "tianshu" }), []);
   assert.deepEqual(wbSegsOfCol(null), []);
+});
+
+test("段名 → 列下标：六段各归各位，天枢无段", () => {
+  assert.equal(segIndexOf("03-初审"), 2);
+  assert.equal(segIndexOf("05-二审"), 4);
+  assert.equal(segIndexOf("06-出图"), 5);
+  assert.equal(segIndexOf("07-运营"), 6);
+  assert.equal(segIndexOf("01-接单"), -1, "接单不是段卡列");
+  assert.equal(segIndexOf(""), -1);
+});
+
+test("工单兜底 step：账本落后时用工单把它们抬上去", () => {
+  // Leo 2026-10-21 17:28：账本写 06_出图（step=5）、工单已经 07-运营 在跑
+  const cards = [
+    { role: "segment", status: "done", caseId: "BM-2607", seg: "06-出图" },
+    { role: "segment", status: "running", caseId: "BM-2607", seg: "07-运营" },
+    { role: "segment", status: "ready", caseId: "BM-2607", seg: "05-二审" },
+    { role: "parent", status: "done", caseId: "BM-2607" },
+    { role: "segment", status: "done", caseId: "BM-2606", seg: "04-母稿" },
+  ];
+  const floor = wbStepByCase(cards);
+  assert.equal(floor.get("BM-2607"), 6, "取 done/running 里最靠后的一段");
+  assert.equal(floor.get("BM-2606"), 3);
+  assert.deepEqual([...floor.keys()].sort(), ["BM-2606", "BM-2607"]);
+});
+
+test("工单兜底 step：ready/父卡/无 caseId 都不算", () => {
+  const floor = wbStepByCase([
+    { role: "segment", status: "ready", caseId: "X", seg: "06-出图" },
+    { role: "parent", status: "done", caseId: "X" },
+    { role: "segment", status: "done", seg: "04-母稿" },
+    { role: "segment", status: "done", caseId: "Y", seg: "乱写的段" },
+  ]);
+  assert.equal(floor.size, 0);
 });

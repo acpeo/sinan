@@ -75,3 +75,34 @@ export function wbBadgeText(n, live) {
   if (!live || !n) return null;
   return `${n} 案在跑`;
 }
+
+/// 段卡名 → 列下标（"03-初审" → 2）。不认识的段返回 -1。
+export function segIndexOf(seg) {
+  const key = String(seg ?? "").trim();
+  if (!key) return -1;
+  for (let i = 0; i < STAGE_COLS.length; i += 1) {
+    if (wbSegsOfCol(STAGE_COLS[i]).includes(key)) return i;
+  }
+  return -1;
+}
+
+/// 工单（workboard 段卡）反推「每案推进到哪一列」，返回 caseId → 列下标。
+/// 为什么需要它：本地账本（beidou_cases）的阶段是**会话收尾时 harvest** 的，
+/// 案子还在跑的时候账本停在上一站 —— 2026-10-21 BM-2607 就是这样：
+/// 工单已经 07-运营 在跑，账本还写着 06_出图，深潜舱里玉衡那格就一直是
+/// 「出图中」、天权那格一直是「审稿中」（Leo 17:28 截图直问「玉衡开阳都
+/// 没活跃了，底下还有审稿中、出图中」）。工单是 60 秒一拍的实时状态，
+/// 拿它给账本的 step 兜底：只往上抬（done / running 的段），不往回压。
+export function wbStepByCase(cards = []) {
+  const out = new Map();
+  for (const card of cards) {
+    if (!card || card.role !== "segment") continue;
+    if (card.status !== "done" && card.status !== "running") continue;
+    const caseId = card.caseId;
+    if (!caseId) continue;
+    const idx = segIndexOf(card.seg);
+    if (idx < 0) continue;
+    if (idx > (out.get(caseId) ?? -1)) out.set(caseId, idx);
+  }
+  return out;
+}

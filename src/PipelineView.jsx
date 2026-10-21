@@ -12,7 +12,7 @@
 // Leo 2026-10-15：实际用的时候不会有假案子。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { STAGE_COLS, liveColumnsOf, liveIndex, wbBadgeText, wbSegsOfCol } from "./pipelineLive.js";
+import { STAGE_COLS, liveColumnsOf, liveIndex, wbBadgeText, wbSegsOfCol, wbStepByCase } from "./pipelineLive.js";
 import {
   DAG_STEPS,
   DELIVERABLE_MODES,
@@ -461,7 +461,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
                         不因为案子关单了就把空支线写成「已交付」。双出案走完
                         视觉列才写「已交付」。 */}
                     {standby
-                      ? <span className="pl-par-tail">{item.masterFrozen ? "可追投" : "未启用"}</span>
+                      ? <span className="pl-par-tail">{item.masterFrozen || item.step > 4 ? "可追投" : "未启用"}</span>
                       : <span className="pl-par-tail">{isDone ? "已交付" : "视频"}</span>}
                   </div>
                 </div>
@@ -495,7 +495,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             <div className={`pl-cell${flowing ? " has-link is-flowing" : ""}`} key={col.key}>
               {flowing ? <span className="pl-link" aria-hidden="true" /> : null}
               <div className={`pl-node ${cls}`} title={liveShow ? `${starNameOf(col.star)}执行中` : undefined}>
-                {col.gate && item.masterFrozen ? <span className="pl-gate-mark">🔒</span> : null}
+                {col.gate && (item.masterFrozen || item.step > 4) ? <span className="pl-gate-mark">🔒</span> : null}
                 {col.gate && item.secondStrikes > 0 ? <span className="pl-strike-mark">{item.secondStrikes}/3</span> : null}
                 {liveIsThisCase ? <span className="pl-live-dot pl-live-dot--corner" /> : null}
                 <StarChip star={col.star} />
@@ -592,7 +592,10 @@ function Inspector({ caseItem, liveStars, liveAction, workboardCards = [], hasCa
   // 「打过一回 → 复审 PASS → 母稿 FROZEN（rev 7）」——旧逻辑
   // （frozen && secondStrikes === 0）让这种案显示「母稿未冻结」，
   // 还憋回追投按钮（真机截图实锤，Leo 2026-10-21 批的 mock21 同口径）。
-  const frozen = Boolean(c.masterFrozen);
+  // 母稿冻结：账本的 master_frozen 也是 harvest 时才回填（BM-2607 关单后
+  // 账本里还是 0，任务表明明写着 FROZEN）。案子能走到 05 之后，二审门禁
+  // 必然已过、母稿必然已冻结——step > 4 与 masterFrozen 同效，不用等回填。
+  const frozen = Boolean(c.masterFrozen) || (c.step ?? 0) > 4;
   // 换了案就把"上膛"状态收回，别让上一案的确认态带到下一案头上。
   const armedHealForThisCase = armedHeal && armedHealCaseRef.current === c.caseId;
   // 已关单的案不亮 strip：strip 说的是「这一步正在办」，关完的案没有正在办的步
@@ -954,6 +957,21 @@ export function PipelineView({
     }
     return out;
   }, [workboardCards]);
+  // 账本阶段只在**会话收尾时** harvest，案子还在跑的时候它停在上一站：
+  // 2026-10-21 BM-2607 实测——工单已经 07-运营 在跑，账本还写着 06_出图，
+  // 于是深潜舱里玉衡「出图中」、天权「审稿中」，而玉衡/开阳明明都没动了
+  // （Leo 17:28 截图）。工单 60 秒一拍、实时，拿 done/running 的段给 step
+  // 兜底：只往上抬，不往回压（打回/回退的判据仍由账本说了算）。
+  const casesEff = useMemo(() => {
+    if (!workboardCards.length) return cases;
+    const floor = wbStepByCase(workboardCards);
+    if (!floor.size) return cases;
+    return cases.map((item) => {
+      const f = floor.get(item.caseId) ?? -1;
+      return f > (item.step ?? 0) ? { ...item, step: f } : item;
+    });
+  }, [cases, workboardCards]);
+
   // 泳道区高度：null = 按内容（0 案时就是一排列头高，不留死空间）；
   // 拖过之后存**像素**。以前存比例（0.46），等于把「拖那一刻的主区高度」记死，
   // 换窗口尺寸就多出/少掉一截 —— 0 案的机器上就变成一大片白。
@@ -969,7 +987,7 @@ export function PipelineView({
   const lanesRef = useRef(null);
   const dragRef = useRef(null);
 
-  const active = cases.find((item) => item.caseId === activeId) ?? cases[0];
+  const active = casesEff.find((item) => item.caseId === activeId) ?? casesEff[0];
 
   // 从「案件卷宗」点一行跳过来时，要选中那一案，而不是默认第一个。
   // 依赖里放 cases.length：账本是异步读的，先跳后到货也要能选中。
@@ -1014,12 +1032,12 @@ export function PipelineView({
   }, [onDragMove]);
 
   const withActions = useMemo(
-    () => cases.map((item) => ({
+    () => casesEff.map((item) => ({
       ...item,
       onAppendVideo: () => onAppendVideo?.(item),
       onAutoHeal: () => onAutoHeal?.(item),
     })),
-    [cases, onAppendVideo, onAutoHeal],
+    [casesEff, onAppendVideo, onAutoHeal],
   );
   const activeWithActions = withActions.find((item) => item.caseId === active?.caseId);
 
@@ -1061,7 +1079,7 @@ export function PipelineView({
             <div className="pl-lane-scroll" ref={lanesRef}>
               <LaneGrid
                 cases={withActions}
-                totalCount={cases.length}
+                totalCount={casesEff.length}
                 activeId={active?.caseId}
                 onPick={setActiveId}
                 liveStars={liveStars}
