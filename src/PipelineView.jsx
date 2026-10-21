@@ -12,7 +12,7 @@
 // Leo 2026-10-15：实际用的时候不会有假案子。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { STAGE_COLS, liveColumnsOf, liveIndex } from "./pipelineLive.js";
+import { STAGE_COLS, liveColumnsOf, liveIndex, wbBadgeText, wbSegsOfCol } from "./pipelineLive.js";
 import {
   DAG_STEPS,
   DELIVERABLE_MODES,
@@ -241,18 +241,30 @@ function LaunchBar({ onLaunch, busy }) {
 }
 
 /* ═══════════ 星位流水线：一行一案 ═══════════ */
-/// 列 → 段卡名：与 SOP 11.1 的段名枚举一字不差（同源口径，别造短别名）。
-/// 纯函数放模块级——列头画在 LaneGrid，聚合数据也以 prop 传给它，别在
-/// PipelineView 里定义却在 LaneGrid 里引用（033fa41 白屏事故的根因：
-/// esbuild 不管跨组件作用域，构建过、运行时 ReferenceError 整窗白屏）。
-function wbSegsOfCol(col) {
-  if (col.key === "tianxuan") return ["02-选题"];
-  if (col.key === "tianquan") return ["03-初审"];
-  if (col.key === "tianji") return ["04-母稿"];
-  if (col.key === "tianquan2") return ["05-二审"];
-  if (col.key === "par") return ["06-出图", "06-视频"];
-  if (col.key === "yaoguang") return ["07-运营"];
-  return [];
+/// 列 → 段卡名映射已挪到 pipelineLive.js（纯模块，测试盯得住）。
+/// 注意 033fa41 白屏事故：esbuild 不管跨组件作用域，模块级函数必须在
+/// 模块级定义，别在 PipelineView 里定义却在 LaneGrid 里引用。
+
+/// 列头的「在跑」徽标。
+/// 口径（Leo 2026-10-21 17:01）：**只有这一列真的有人在做才挂**。
+/// 以前读工作板里卡的状态（running）就挂——星位漏了 complete 的旧卡会一直
+/// 挂在 running，案子都走到玉衡了，天枢天权前面还顶着「1卡在跑」，看着像
+/// 三个星位在同时干活。现在判据跟列头呼吸点同一口径（liveCols）：没人做就
+/// 不挂，挂了就一定有人在跑。
+/// 单位也从「卡」改成「案」：一个星位名下本来就可能压着多张卡（天权审题、
+/// 审稿各一张；不同案子停在同一步也会有多张），「1 卡」容易被读成"这个
+/// agent 有好几张卡在跑"。
+function WbChip({ n, live }) {
+  const text = wbBadgeText(n, live);
+  if (!text) return null;
+  return (
+    <span
+      className="pl-colhead-wb cp-mono"
+      title={`本站有 ${n} 个案子的卡在跑（案子停在这一步，星位正在做）`}
+    >
+      {text}
+    </span>
+  );
 }
 
 function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, onColFilter, starTelemetry, wbRunningBySeg = {} }) {
@@ -370,18 +382,17 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             >
               {col.parallel ? (
                 <>
-                  <div className="pl-colhead-star"><StarChip star="yuheng" size={20} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--jade pl-breathe" /> : null}{wbRunningBySeg["06-出图"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-出图"]}卡在跑</span> : null}</div>
-                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={20} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--jade pl-breathe" /> : null}{wbRunningBySeg["06-视频"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-视频"]}卡在跑</span> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="yuheng" size={20} /><b>玉衡</b><WbChip n={wbRunningBySeg["06-出图"] ?? 0} live={liveStars.has("yuheng")} />{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--jade pl-breathe" /> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={20} /><b>开阳</b><WbChip n={wbRunningBySeg["06-视频"] ?? 0} live={liveStars.has("kaiyang")} />{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--jade pl-breathe" /> : null}</div>
                 </>
               ) : (
                 <div className="pl-colhead-star">
                   <StarChip star={col.star} size={20} />
                   <b>{starNameOf(col.star)}</b>
-                  {(() => {
-                    const segs = wbSegsOfCol(col);
-                    const n = segs.reduce((sum, seg) => sum + (wbRunningBySeg[seg] ?? 0), 0);
-                    return n ? <span className="pl-colhead-wb cp-mono">{n}卡在跑</span> : null;
-                  })()}
+                  <WbChip
+                    n={wbSegsOfCol(col).reduce((sum, seg) => sum + (wbRunningBySeg[seg] ?? 0), 0)}
+                    live={live}
+                  />
                   {/* 列头**不挂** 🔒。锁是格子的「母稿冻结」角标（pl-gate-mark，
                       跟着单个案走），搬到门禁列头上就成了"这一列被锁住/不可用"
                       的错觉——Leo 2026-10-20 第 3 条直接问"为什么天权都有个锁"。

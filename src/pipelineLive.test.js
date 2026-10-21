@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { STAGE_COLS, liveColumnsOf, liveIndex, starLiveOf } from "./pipelineLive.js";
+import { STAGE_COLS, liveColumnsOf, liveIndex, starLiveOf, wbBadgeText, wbSegsOfCol } from "./pipelineLive.js";
 
 const only = (set) => [...set].sort((a, b) => a - b);
 
@@ -57,4 +57,20 @@ test("starLiveOf：并行列两股任一，普通列只看自己", () => {
   assert.equal(starLiveOf(par, new Set(["tianquan"])), false);
   assert.equal(starLiveOf(STAGE_COLS[2], new Set(["tianquan"])), true);
   assert.equal(starLiveOf(STAGE_COLS[4], new Set(["tianquan"])), true);
+});
+
+test("列头徽标：只在真在跑时挂，案子走过就摘掉", () => {
+  // Leo 2026-10-21 17:01：案已到玉衡，前期列头还挂着「1卡在跑」
+  assert.equal(wbBadgeText(1, false), null, "没人在做就不挂，哪怕卡还 running");
+  assert.equal(wbBadgeText(0, true), null, "没人做也不挂");
+  assert.equal(wbBadgeText(1, true), "1 案在跑");
+  assert.equal(wbBadgeText(2, true), "2 案在跑");
+});
+
+test("段卡映射：天权两列各认各的段，天枢没有段卡", () => {
+  assert.deepEqual(wbSegsOfCol({ key: "tianquan" }), ["03-初审"]);
+  assert.deepEqual(wbSegsOfCol({ key: "tianquan2" }), ["05-二审"]);
+  assert.deepEqual(wbSegsOfCol({ key: "par" }), ["06-出图", "06-视频"]);
+  assert.deepEqual(wbSegsOfCol({ key: "tianshu" }), []);
+  assert.deepEqual(wbSegsOfCol(null), []);
 });

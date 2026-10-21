@@ -48,3 +48,30 @@ export function liveColumnsOf(cases = [], liveStars = new Set(), cols = STAGE_CO
 export function liveIndex(liveCols) {
   return liveCols && liveCols.size ? Math.min(...liveCols) : -1;
 }
+
+/// 段卡名 → 列（与 SOP 11.1 的段名枚举一字不差，别造短别名）。
+/// 天枢没有段卡（接单/巡检不算段），返回空数组。
+/// 放纯模块里，测试能盯住"列头徽标别把天权的两列混在一起"。
+export const WB_SEG_OF_COL = {
+  tianxuan: ["02-选题"],
+  tianquan: ["03-初审"],
+  tianji: ["04-母稿"],
+  tianquan2: ["05-二审"],
+  par: ["06-出图", "06-视频"],
+  yaoguang: ["07-运营"],
+};
+
+export function wbSegsOfCol(col) {
+  return WB_SEG_OF_COL[col?.key] ?? [];
+}
+
+/// 列头徽标文案（null = 不挂）。
+/// Leo 2026-10-21 17:01 的两问都在这条规则里：
+///   ①「为什么案子都到后面了，前面还显示在跑」→ 只有这一列真有人做（live）才挂；
+///   ②「为什么是 1 卡，难不成一个 agent 有很多卡」→ 单位改成"案"；一个星位名下
+///     确实可能压多张卡（天权审题/审稿各一张，不同案停同一步也会有多张），
+///     但界面上报的是"有 n 个案子的卡停在这一站"，不是"这个 agent 有 n 张卡"。
+export function wbBadgeText(n, live) {
+  if (!live || !n) return null;
+  return `${n} 案在跑`;
+}
