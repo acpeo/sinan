@@ -368,14 +368,14 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
             <div className={`pl-colhead-cell${handoff ? " is-handoff" : ""}${settled ? " is-settled" : ""}`} key={col.key}>
             <button
               type="button"
-              className={`pl-colhead${colFilter === star ? " is-on" : ""}`}
+              className={`pl-colhead${colFilter === star ? " is-on" : ""}${live ? " is-live" : ""}`}
               onClick={() => onColFilter(colFilter === star ? null : star)}
               title={`筛选：只看${starNameOf(col.star)}这一列的案子`}
             >
               {col.parallel ? (
                 <>
-                  <div className="pl-colhead-star"><StarChip star="yuheng" size={20} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}{wbRunningBySeg["06-出图"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-出图"]}卡在跑</span> : null}</div>
-                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={20} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}{wbRunningBySeg["06-视频"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-视频"]}卡在跑</span> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="yuheng" size={20} /><b>玉衡</b>{liveStars.has("yuheng") ? <span className="pl-dot pl-dot--jade pl-breathe" /> : null}{wbRunningBySeg["06-出图"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-出图"]}卡在跑</span> : null}</div>
+                  <div className="pl-colhead-star"><StarChip star="kaiyang" size={20} /><b>开阳</b>{liveStars.has("kaiyang") ? <span className="pl-dot pl-dot--jade pl-breathe" /> : null}{wbRunningBySeg["06-视频"] ? <span className="pl-colhead-wb cp-mono">{wbRunningBySeg["06-视频"]}卡在跑</span> : null}</div>
                 </>
               ) : (
                 <div className="pl-colhead-star">
@@ -390,7 +390,7 @@ function LaneGrid({ cases, totalCount, activeId, onPick, liveStars, colFilter, o
                       跟着单个案走），搬到门禁列头上就成了"这一列被锁住/不可用"
                       的错觉——Leo 2026-10-20 第 3 条直接问"为什么天权都有个锁"。
                       冻结状态在格子里、在深潜舱里都有，列头只留"在跑"呼吸点。 */}
-                  {live ? <span className="pl-dot pl-dot--amber pl-breathe" style={{ marginLeft: "auto" }} /> : null}
+                  {live ? <span className="pl-dot pl-dot--jade pl-breathe" style={{ marginLeft: "auto" }} /> : null}
                 </div>
               )}
               <div className="pl-colhead-role cp-mono">{col.role}</div>
@@ -643,7 +643,7 @@ function Inspector({ caseItem, liveStars, liveAction, workboardCards = [], hasCa
           return (
             <span className={`pl-badge pl-badge--${tone} pl-wb-chip`} key={card.cardId ?? label} title={card.summary || undefined}>
               {label} · {zh}
-              {card.status === "running" ? <span className="pl-dot pl-dot--amber pl-breathe" /> : null}
+              {card.status === "running" ? <span className="pl-dot pl-dot--jade pl-breathe" /> : null}
               {proofs > 0 ? <b className="pl-wb-proof">✓{proofs}</b> : null}
             </span>
           );
@@ -1038,7 +1038,9 @@ export function PipelineView({
               <span className="pl-section-sub">一行一案 · 横看案件进度 · 竖看星位队列</span>
               {/* 四态图例：设计稿 mock20 段头就有，落地时漏了 —— 于是「格子颜色
                   是什么意思」只能靠猜。四态与泳道节点一一对应：
-                  投递中=琥珀虚线 / 执行中=琥珀底 / 已交付=jade 底 / 未开始=白底。 */}
+                  投递中=琥珀虚线 / 执行中=琥珀底 / 已交付=jade 底 / 未开始=白底。
+                  列头呼吸点不在这套词里：它表示「星在跑」，2026-10-21 起用翠色
+                  （琥珀像告警，Leo 指出的正是这里）。 */}
               <span className="pl-legend" aria-label="动线图例">
                 <span><i className="lg lg--flow" />投递中</span>
                 <span><i className="lg lg--run" />执行中</span>
@@ -1161,7 +1163,7 @@ function StarDetail({ telemetry, liveStars, onClose }) {
                   {sessionBadge ? (
                     <span className="pl-chip pl-chip--dim" style={{ fontSize: 9.5, padding: "1px 5px" }}>{sessionBadge}</span>
                   ) : null}
-                  {live ? <span className="pl-badge pl-badge--amber">执行中</span> : <span className="pl-badge pl-badge--slate">空闲</span>}
+                  {live ? <span className="pl-badge pl-badge--jade">执行中</span> : <span className="pl-badge pl-badge--slate">空闲</span>}
                 </span>
                 <span className="pl-stardetail-note">{t.note ?? ""}</span>
               </div>
