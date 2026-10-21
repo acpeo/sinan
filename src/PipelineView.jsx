@@ -12,7 +12,7 @@
 // Leo 2026-10-15：实际用的时候不会有假案子。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { STAGE_COLS, liveColumnsOf, liveIndex, wbBadgeText, wbSegsOfCol, wbStepByCase } from "./pipelineLive.js";
+import { STAGE_COLS, liveColumnsOf, liveIndex, nameOfCase, sortCasesNewest, wbBadgeText, wbSegsOfCol, wbStepByCase } from "./pipelineLive.js";
 import {
   DAG_STEPS,
   DELIVERABLE_MODES,
@@ -962,15 +962,26 @@ export function PipelineView({
   // 于是深潜舱里玉衡「出图中」、天权「审稿中」，而玉衡/开阳明明都没动了
   // （Leo 17:28 截图）。工单 60 秒一拍、实时，拿 done/running 的段给 step
   // 兜底：只往上抬，不往回压（打回/回退的判据仍由账本说了算）。
+  // 任务名回退：账本 title 只落了案号时，用工单父卡标题补（Leo 2026-10-21
+  // 23:36：App 里只看得到 BM-2609，看不到「衣柜换季收纳」）。
+  const wbTitleByCase = useMemo(() => {
+    const m = new Map();
+    for (const card of workboardCards) {
+      if (card?.role !== "parent" || !card.caseId || !card.title) continue;
+      if (!m.has(card.caseId)) m.set(card.caseId, card.title);
+    }
+    return m;
+  }, [workboardCards]);
+
   const casesEff = useMemo(() => {
-    if (!workboardCards.length) return cases;
-    const floor = wbStepByCase(workboardCards);
-    if (!floor.size) return cases;
-    return cases.map((item) => {
+    const floor = workboardCards.length ? wbStepByCase(workboardCards) : new Map();
+    return sortCasesNewest(cases).map((item) => {
       const f = floor.get(item.caseId) ?? -1;
-      return f > (item.step ?? 0) ? { ...item, step: f } : item;
+      const step = f > (item.step ?? 0) ? f : item.step;
+      const name = nameOfCase(item, wbTitleByCase.get(item.caseId));
+      return step === item.step && name === item.name ? item : { ...item, step, name };
     });
-  }, [cases, workboardCards]);
+  }, [cases, workboardCards, wbTitleByCase]);
 
   // 泳道区高度：null = 按内容（0 案时就是一排列头高，不留死空间）；
   // 拖过之后存**像素**。以前存比例（0.46），等于把「拖那一刻的主区高度」记死，

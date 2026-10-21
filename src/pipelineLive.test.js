@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { STAGE_COLS, liveColumnsOf, liveIndex, segIndexOf, starLiveOf, wbBadgeText, wbSegsOfCol, wbStepByCase } from "./pipelineLive.js";
+import { STAGE_COLS, caseSeqOf, liveColumnsOf, liveIndex, nameOfCase, segIndexOf, sortCasesNewest, starLiveOf, wbBadgeText, wbSegsOfCol, wbStepByCase } from "./pipelineLive.js";
 
 const only = (set) => [...set].sort((a, b) => a - b);
 
@@ -107,4 +107,19 @@ test("工单兜底 step：ready/父卡/无 caseId 都不算", () => {
     { role: "segment", status: "done", caseId: "Y", seg: "乱写的段" },
   ]);
   assert.equal(floor.size, 0);
+});
+
+test("泳道排序：新案在上，旧案依次往下", () => {
+  const list = [{ caseId: "BM-2602" }, { caseId: "BM-2609" }, { caseId: "BM-2607" }];
+  assert.deepEqual(sortCasesNewest(list).map((x) => x.caseId), ["BM-2609", "BM-2607", "BM-2602"]);
+  assert.equal(caseSeqOf("BM-2610"), 2610);
+  assert.equal(caseSeqOf("老房翻新"), -1);
+});
+
+test("任务名回退：账本只有案号时用工单父卡标题补", () => {
+  assert.equal(nameOfCase({ caseId: "BM-2609", name: "BM-2609" }, "BM-2609 小户型衣柜换季收纳"), "小户型衣柜换季收纳");
+  assert.equal(nameOfCase({ caseId: "BM-2609", name: "" }, "BM-2609 衣柜换季"), "衣柜换季");
+  // 已经有正式名就不覆盖
+  assert.equal(nameOfCase({ caseId: "BM-2602", name: "为什么你家总是收不完？" }, "BM-2602 别的名字"), "为什么你家总是收不完？");
+  assert.equal(nameOfCase({ caseId: "BM-2610", name: "BM-2610" }, ""), "BM-2610");
 });

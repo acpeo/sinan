@@ -106,3 +106,29 @@ export function wbStepByCase(cards = []) {
   }
   return out;
 }
+
+/// 案号里的序号（BM-2609 → 2609），用于「新案在上」排序；认不出返回 -1。
+export function caseSeqOf(caseId) {
+  const m = String(caseId ?? "").match(/(\d{3,6})/);
+  return m ? Number(m[1]) : -1;
+}
+
+/// 泳道排序：新案在上、旧案依次往下（Leo 2026-10-21 23:36 定的口径）。
+/// 不用 updatedAt 排——旧案被 watchdog 纠偏一次就会跳到最上面，看着像新案。
+export function sortCasesNewest(cases = []) {
+  return [...cases].sort((a, b) => {
+    const d = caseSeqOf(b?.caseId) - caseSeqOf(a?.caseId);
+    if (d !== 0) return d;
+    return String(b?.caseId ?? "").localeCompare(String(a?.caseId ?? ""));
+  });
+}
+
+/// 任务名回退：账本 title 只落了案号时（harvest 只认 [CASE_ID] 标签，读不到
+/// 飞书里的任务名），用工单父卡标题补——父卡标题形如「BM-2609 衣柜换季收纳」。
+export function nameOfCase(item, wbTitle) {
+  const name = String(item?.name ?? "").trim();
+  const caseId = String(item?.caseId ?? "").trim();
+  if (name && name !== caseId) return name;
+  const fromCard = String(wbTitle ?? "").replace(/^BM-\d{3,6}\s*/i, "").trim();
+  return fromCard || name || "未命名案件";
+}
