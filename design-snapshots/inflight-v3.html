@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>司南 · 案卷（效果图 v3）</title>
+<style>
+  :root{
+    --paper:#f6f4ef; --card:#fffdf9; --line:#e7e2d8; --ink:#1f2420; --muted:#7b817a;
+    --accent:#2f6b4f; --accent-soft:#e7f0ea; --warn:#b8792a; --warn-soft:#f9efe2;
+    --rail:#dcd7cb; --shadow:0 10px 30px rgba(40,50,44,.07);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:"SF Pro Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:14px;line-height:1.5}
+  .app{max-width:1040px;margin:0 auto;padding:20px 26px 36px}
+
+  .top{display:flex;align-items:center;gap:16px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:650}
+  .logo{width:26px;height:26px;border-radius:8px;background:linear-gradient(145deg,#2f6b4f,#244f3b);
+    display:grid;place-items:center;color:#fff;font-size:13px}
+  .tabs{display:flex;gap:4px}
+  .tab{padding:6px 12px;border-radius:8px;color:var(--muted)}
+  .tab.on{background:#fff;color:var(--ink);box-shadow:0 1px 0 var(--line),0 2px 8px rgba(0,0,0,.04);font-weight:600}
+  .right{margin-left:auto;display:flex;gap:8px;color:var(--muted);font-size:12.5px}
+  .pill{padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
+  .pill.live{color:#1f5a3f;border-color:#cfe0d5;background:var(--accent-soft)}
+
+  .sec{margin-top:18px;display:flex;align-items:baseline;gap:10px}
+  .sec h2{margin:0;font-size:13px;letter-spacing:.4px;color:var(--muted);font-weight:650}
+  .sec span{font-size:11.5px;color:#a9aea7}
+
+  .case{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);margin-top:10px;overflow:hidden}
+  .case + .case{margin-top:10px}
+  .head{display:flex;align-items:center;gap:10px;padding:13px 16px;cursor:default}
+  .cid{font-weight:750;letter-spacing:.3px;white-space:nowrap}
+  .ctitle{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:#fff;white-space:nowrap}
+  .chip.live{color:#8a5a1c;border-color:#ead9c2;background:var(--warn-soft)}
+  .chip.ok{color:#1f5a3f;border-color:#cfe0d5;background:var(--accent-soft)}
+  .head .spacer{flex:1}
+  .dur{font-size:12px;color:var(--muted);white-space:nowrap}
+
+  /* 一行进度点 */
+  .mini{display:flex;align-items:center;gap:6px;padding:0 16px 12px}
+  .mini .m{display:flex;align-items:center;gap:6px;color:#a9aea7;font-size:11px}
+  .mini .dot{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:9.5px;
+    background:#f0ede6;border:1px solid #e2ddd2;color:#8a8f88}
+  .mini .done .dot{background:var(--accent);border-color:var(--accent);color:#fff}
+  .mini .now .dot{background:#fff;border:2px solid var(--warn);color:var(--warn)}
+  .mini .now{color:var(--warn);font-weight:650}
+  .mini .wait{opacity:.55}
+  .mini .bar{width:22px;height:2px;background:var(--rail);border-radius:2px}
+  .mini .done + .bar{background:#9fc4ae}
+
+  /* 展开体 = v1 明细 */
+  .body{border-top:1px solid var(--line);padding:6px 16px 14px;background:#fffdf9}
+  .stop{display:grid;grid-template-columns:30px 1fr auto;gap:10px;padding:10px 0;border-top:1px dashed #eee9df}
+  .stop:first-child{border-top:0}
+  .stop .n{width:23px;height:23px;border-radius:50%;display:grid;place-items:center;font-size:11px;
+    background:#f0ede6;border:1px solid #e2ddd2;color:#8a8f88;margin-top:1px}
+  .stop.done .n{background:var(--accent);border-color:var(--accent);color:#fff}
+  .stop.now .n{background:#fff;border:2px solid var(--warn);color:var(--warn);box-shadow:0 0 0 4px #f9efe2}
+  .stop.wait{opacity:.5}
+  .stop b{font-weight:650;font-size:13px}
+  .stop .who{color:var(--muted);font-size:12px;margin-left:6px}
+  .stop p{margin:2px 0 0;color:var(--muted);font-size:12px}
+  .stop .meta{text-align:right;font-size:11.5px;color:var(--muted);white-space:nowrap}
+  .stop.now .meta{color:var(--warn);font-weight:650}
+  .link{color:#285c9e;text-decoration:none;border-bottom:1px dotted #b8cbe2}
+  .prog{height:5px;border-radius:99px;background:#efece5;overflow:hidden;margin-top:7px;max-width:320px}
+  .prog i{display:block;height:100%;width:62%;background:linear-gradient(90deg,#d9a25a,#b8792a)}
+
+  .foot{margin-top:14px;color:#9aa098;font-size:11.5px;text-align:right}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="brand"><span class="logo">司</span>司南 · 北斗矩阵</div>
+    <div class="tabs">
+      <div class="tab on">案卷</div>
+      <div class="tab">任务</div>
+      <div class="tab">定时任务</div>
+      <div class="tab">设置</div>
+    </div>
+    <div class="right"><span class="pill live">1 在途</span><span class="pill">今日已关 4</span></div>
+  </div>
+
+  <div class="sec"><h2>在途</h2><span>展开显示每一站做了什么、做到哪</span></div>
+
+  <div class="case">
+    <div class="head">
+      <span class="cid">BM-2614</span>
+      <span class="ctitle">冬天晒不干衣服？阳台这 1 平米还能这么用</span>
+      <span class="chip">公众号 · 图文</span>
+      <span class="chip live">第 6 / 7 站 · 玉衡出图</span>
+      <span class="spacer"></span><span class="dur">已运行 41 分钟 · 预计 23:52 关单</span>
+    </div>
+    <div class="mini">
+      <span class="m done"><span class="dot">枢</span>建档</span><span class="bar"></span>
+      <span class="m done"><span class="dot">璇</span>定题</span><span class="bar"></span>
+      <span class="m done"><span class="dot">权</span>过审</span><span class="bar"></span>
+      <span class="m done"><span class="dot">玑</span>母稿</span><span class="bar"></span>
+      <span class="m done"><span class="dot">权</span>过稿</span><span class="bar"></span>
+      <span class="m now"><span class="dot">衡</span>出图</span><span class="bar"></span>
+      <span class="m wait"><span class="dot">光</span>运营</span>
+    </div>
+    <div class="body">
+      <div class="stop done"><div class="n">1</div><div><b>接单建档</b><span class="who">天枢</span><p>文件夹 + 任务表 + watchdog 已挂</p></div><div class="meta">22:57<br>2 分钟</div></div>
+      <div class="stop done"><div class="n">2</div><div><b>选题研究</b><span class="who">天璇</span><p>四件套落盘 · <a class="link">天璇选题研究</a></p></div><div class="meta">23:04<br>7 分钟</div></div>
+      <div class="stop done"><div class="n">3</div><div><b>初审 · 五轴定题</b><span class="who">天权</span><p>PASS + 7 处必改 · <a class="link">初审报告</a></p></div><div class="meta">23:09<br>5 分钟</div></div>
+      <div class="stop done"><div class="n">4</div><div><b>母稿 · 配图锚点</b><span class="who">天玑</span><p>2829 字 · rev 4 · <a class="link">母稿 docx</a></p></div><div class="meta">23:20<br>8 分钟</div></div>
+      <div class="stop done"><div class="n">5</div><div><b>二审 · 七轴门禁</b><span class="who">天权</span><p>PASS + 2 处必改，复审 rev 6 · 已 FROZEN</p></div><div class="meta">23:31<br>11 分钟</div></div>
+      <div class="stop now"><div class="n">6</div><div><b>视觉出图</b><span class="who">玉衡</span><p>7 张锚点图 · 已落 3 张，封面待 1:1 裁切</p><div class="prog"><i></i></div></div><div class="meta">已 9 分钟<br>预计 +6</div></div>
+      <div class="stop wait"><div class="n">7</div><div><b>运营分发 · 关单</b><span class="who">摇光</span><p>等玉衡交付后唤醒</p></div><div class="meta">未开始</div></div>
+    </div>
+  </div>
+
+  <div class="sec"><h2>已关单</h2><span>点任一单可展开回看每一步</span></div>
+
+  <div class="case">
+    <div class="head">
+      <span class="cid">BM-2613</span>
+      <span class="ctitle">冬天晒不干衣服？阳台这 1 平米还能这么用</span>
+      <span class="chip ok">已关单 · 摇光</span>
+      <span class="spacer"></span><span class="dur">75 分钟 · 00:10 关单</span>
+    </div>
+    <div class="mini">
+      <span class="m done"><span class="dot">枢</span>建档</span><span class="bar"></span>
+      <span class="m done"><span class="dot">璇</span>定题</span><span class="bar"></span>
+      <span class="m done"><span class="dot">权</span>过审</span><span class="bar"></span>
+      <span class="m done"><span class="dot">玑</span>母稿</span><span class="bar"></span>
+      <span class="m done"><span class="dot">权</span>过稿</span><span class="bar"></span>
+      <span class="m done"><span class="dot">衡</span>出图</span><span class="bar"></span>
+      <span class="m done"><span class="dot">光</span>关单</span>
+    </div>
+  </div>
+
+  <div class="case">
+    <div class="head">
+      <span class="cid">BM-2612</span>
+      <span class="ctitle">厨房台面越用越小？先拿走这三样</span>
+      <span class="chip ok">已关单 · 摇光</span>
+      <span class="spacer"></span><span class="dur">77 分钟 · 22:13 关单</span>
+    </div>
+    <div class="mini">
+      <span class="m done"><span class="dot">枢</span>建档</span><span class="bar"></span>
+      <span class="m done"><span class="dot">璇</span>定题</span><span class="bar"></span>
+      <span class="m done"><span class="dot">权</span>过审</span><span class="bar"></span>
+      <span class="m done"><span class="dot">玑</span>母稿</span><span class="bar"></span>
+      <span class="m done"><span class="dot">权</span>过稿</span><span class="bar"></span>
+      <span class="m done"><span class="dot">衡</span>出图</span><span class="bar"></span>
+      <span class="m done"><span class="dot">光</span>关单</span>
+    </div>
+  </div>
+
+  <div class="foot">效果图 v3 · 每单一条可展开流水线；在途默认展开，已关单默认收起（BM-2614 为示意）</div>
+</div>
+</body>
+</html>

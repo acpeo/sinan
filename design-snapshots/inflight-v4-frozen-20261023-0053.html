@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>司南 · 在途（效果图 v4：流水线 + 明细结合）</title>
+<style>
+  :root{
+    --paper:#f6f4ef; --card:#fffdf9; --line:#e7e2d8; --ink:#1f2420; --muted:#7b817a;
+    --accent:#2f6b4f; --accent-soft:#e7f0ea; --warn:#b8792a; --warn-soft:#f9efe2;
+    --rail:#dcd7cb; --shadow:0 10px 30px rgba(40,50,44,.07);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:"SF Pro Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:14px;line-height:1.5}
+  .app{max-width:1200px;margin:0 auto;padding:20px 26px 36px}
+
+  .top{display:flex;align-items:center;gap:16px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:650}
+  .logo{width:26px;height:26px;border-radius:8px;background:linear-gradient(145deg,#2f6b4f,#244f3b);
+    display:grid;place-items:center;color:#fff;font-size:13px}
+  .tabs{display:flex;gap:4px}
+  .tab{padding:6px 12px;border-radius:8px;color:var(--muted)}
+  .tab.on{background:#fff;color:var(--ink);box-shadow:0 1px 0 var(--line),0 2px 8px rgba(0,0,0,.04);font-weight:600}
+  .right{margin-left:auto;display:flex;gap:8px;color:var(--muted);font-size:12.5px}
+  .pill{padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
+  .pill.live{color:#1f5a3f;border-color:#cfe0d5;background:var(--accent-soft)}
+
+  .case-head{display:flex;align-items:center;gap:12px;padding:16px 2px 10px;flex-wrap:wrap}
+  .case-id{font-weight:750;letter-spacing:.4px}
+  .case-title{font-weight:650;font-size:16px}
+  .chip{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:#fff}
+  .chip.live{color:#8a5a1c;border-color:#ead9c2;background:var(--warn-soft)}
+  .elapsed{margin-left:auto;color:var(--muted);font-size:12.5px}
+
+  /* 流水线 */
+  .rail-card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:20px 18px 14px}
+  .rail{display:grid;grid-template-columns:repeat(7,1fr);gap:0;align-items:stretch}
+  .node{position:relative;padding:0 8px;text-align:center}
+  .node .idx{font-size:11px;color:#a9aea7;letter-spacing:.5px}
+  .node .card{position:relative;margin-top:6px;border:1px solid var(--line);border-radius:12px;background:#fff;
+    padding:10px 8px 9px;min-height:104px;display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center}
+  .node .star{font-weight:650;font-size:13px}
+  .node .state{font-size:11.5px;color:var(--muted)}
+  .node .cost{font-size:11.5px;color:#9aa098}
+  .node .ico{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;
+    background:#f0ede6;border:1px solid #e2ddd2;color:#8a8f88}
+  .node.done .card{border-color:#d8e6dd;background:#fbfdfb}
+  .node.done .ico{background:var(--accent);border-color:var(--accent);color:#fff}
+  .node.done .state{color:#2f6b4f}
+  .node.now .card{border:2px solid var(--warn);background:#fffaf3;box-shadow:0 0 0 6px #f9efe2}
+  .node.now .ico{background:#fff;border:2px solid var(--warn);color:var(--warn)}
+  .node.now .state{color:var(--warn);font-weight:650}
+  .node.wait{opacity:.5}
+  .link{position:absolute;top:74px;height:2px;background:var(--rail);z-index:0}
+  .node:not(:last-child) .link{left:calc(50% + 44px);width:calc(100% - 88px)}
+  .node.done .link{background:#9fc4ae}
+  .node.now .link{background:linear-gradient(90deg,#d9a25a 0 55%,#e7e2d8 55% 100%);overflow:hidden}
+  .node.now .link::after{content:"";position:absolute;top:-2px;left:0;width:14px;height:6px;border-radius:99px;
+    background:#b8792a;animation:run 1.6s linear infinite}
+  @keyframes run{0%{left:-14px;opacity:0}20%{opacity:1}100%{left:100%;opacity:0}}
+  .handoff{display:grid;grid-template-columns:repeat(7,1fr);margin-top:6px}
+  .handoff div{font-size:10.5px;color:#a9aea7;text-align:center;padding:0 6px}
+  .handoff div.hot{color:var(--warn)}
+
+  /* 下半区：左明细 + 右卡片 */
+  .grid{display:grid;grid-template-columns:1.45fr .95fr;gap:16px;margin-top:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+  .detail{padding:6px 18px 14px}
+  .detail h3{margin:12px 0 2px;font-size:12.5px;letter-spacing:.4px;color:var(--muted);font-weight:650}
+  .stop{display:grid;grid-template-columns:30px 1fr auto;gap:10px;padding:10px 0;border-top:1px dashed #eee9df}
+  .stop:first-of-type{border-top:0}
+  .stop .n{width:23px;height:23px;border-radius:50%;display:grid;place-items:center;font-size:11px;
+    background:#f0ede6;border:1px solid #e2ddd2;color:#8a8f88;margin-top:1px}
+  .stop.done .n{background:var(--accent);border-color:var(--accent);color:#fff}
+  .stop.now .n{background:#fff;border:2px solid var(--warn);color:var(--warn);box-shadow:0 0 0 4px #f9efe2}
+  .stop.wait{opacity:.5}
+  .stop b{font-weight:650;font-size:13px}
+  .stop .who{color:var(--muted);font-size:12px;margin-left:6px}
+  .stop p{margin:2px 0 0;color:var(--muted);font-size:12px}
+  .stop .meta{text-align:right;font-size:11.5px;color:var(--muted);white-space:nowrap}
+  .stop.now .meta{color:var(--warn);font-weight:650}
+  .link-doc{color:#285c9e;text-decoration:none;border-bottom:1px dotted #b8cbe2}
+  .prog{height:5px;border-radius:99px;background:#efece5;overflow:hidden;margin-top:7px;max-width:320px}
+  .prog i{display:block;height:100%;width:62%;background:linear-gradient(90deg,#d9a25a,#b8792a)}
+
+  .side{display:flex;flex-direction:column;gap:14px}
+  .block{padding:14px 16px}
+  .block h3{margin:0 0 8px;font-size:12.5px;letter-spacing:.4px;color:var(--muted);font-weight:650}
+  .focus{border-left:3px solid var(--warn);padding-left:12px}
+  .focus b{font-size:15px}
+  .focus p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+  .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .btn{padding:6px 12px;border-radius:9px;border:1px solid var(--line);background:#fff;font-size:12.5px;color:var(--ink)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .list{margin:0;padding:0;list-style:none}
+  .list li{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed #eee9df;font-size:12.5px}
+  .list li:last-child{border-bottom:0}
+  .list span{color:var(--muted)}
+
+  /* 今日已关单 */
+  .today{margin-top:16px;padding:10px 18px 6px}
+  .today h3{margin:0 0 4px;font-size:12.5px;color:var(--muted);font-weight:650}
+  .trow{display:grid;grid-template-columns:84px 1fr 86px 96px;gap:12px;padding:8px 0;border-top:1px dashed #eee9df;font-size:12.5px;color:var(--muted)}
+  .trow b{color:var(--ink);font-weight:650}
+  .foot{margin-top:12px;color:#9aa098;font-size:11.5px;text-align:right}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="brand"><span class="logo">司</span>司南 · 北斗矩阵</div>
+    <div class="tabs">
+      <div class="tab on">指挥舱</div><div class="tab">案卷</div><div class="tab">任务</div><div class="tab">定时任务</div><div class="tab">设置</div>
+    </div>
+    <div class="right"><span class="pill live">1 在途</span><span class="pill">已连接</span></div>
+  </div>
+
+  <div class="case-head">
+    <span class="case-id">BM-2614</span>
+    <span class="case-title">冬天晒不干衣服？阳台这 1 平米还能这么用</span>
+    <span class="chip">公众号 · 图文</span>
+    <span class="chip live">第 6 / 7 站 · 玉衡出图</span>
+    <span class="elapsed">已运行 41 分钟 · 预计 23:52 关单</span>
+  </div>
+
+  <!-- ① 横向流水线（形状） -->
+  <div class="rail-card">
+    <div class="rail">
+      <div class="node done"><div class="idx">01</div><div class="card"><div class="ico">✓</div><div class="star">天枢</div><div class="state">已建档</div><div class="cost">2 分钟</div></div><span class="link"></span></div>
+      <div class="node done"><div class="idx">02</div><div class="card"><div class="ico">✓</div><div class="star">天璇</div><div class="state">已定题</div><div class="cost">7 分钟</div></div><span class="link"></span></div>
+      <div class="node done"><div class="idx">03</div><div class="card"><div class="ico">✓</div><div class="star">天权</div><div class="state">已过审</div><div class="cost">5 分钟</div></div><span class="link"></span></div>
+      <div class="node done"><div class="idx">04</div><div class="card"><div class="ico">✓</div><div class="star">天玑</div><div class="state">母稿已交</div><div class="cost">8 分钟</div></div><span class="link"></span></div>
+      <div class="node done"><div class="idx">05</div><div class="card"><div class="ico">✓</div><div class="star">天权</div><div class="state">已过稿</div><div class="cost">11 分钟</div></div><span class="link"></span></div>
+      <div class="node now"><div class="idx">06</div><div class="card"><div class="ico">◐</div><div class="star">玉衡</div><div class="state">出图中</div><div class="cost">已 9 分钟</div></div><span class="link"></span></div>
+      <div class="node wait"><div class="idx">07</div><div class="card"><div class="ico">·</div><div class="star">摇光</div><div class="state">待命</div><div class="cost">—</div></div></div>
+    </div>
+    <div class="handoff">
+      <div>22:55 派发</div><div>23:04 已唤醒</div><div>23:09 已唤醒</div><div>23:20 已唤醒</div>
+      <div>23:31 已唤醒</div><div class="hot">23:31 交付中 · 9 分钟</div><div>等玉衡</div>
+    </div>
+  </div>
+
+  <!-- ② 下半区：明细 + 卡片 -->
+  <div class="grid">
+    <div class="card detail">
+      <h3>这一单做了什么</h3>
+      <div class="stop done"><div class="n">1</div><div><b>接单建档</b><span class="who">天枢</span><p>文件夹 + 任务表 + watchdog 已挂</p></div><div class="meta">22:57<br>2 分钟</div></div>
+      <div class="stop done"><div class="n">2</div><div><b>选题研究</b><span class="who">天璇</span><p>四件套落盘 · <a class="link-doc">天璇选题研究</a></p></div><div class="meta">23:04<br>7 分钟</div></div>
+      <div class="stop done"><div class="n">3</div><div><b>初审 · 五轴定题</b><span class="who">天权</span><p>PASS + 7 处必改 · <a class="link-doc">初审报告</a></p></div><div class="meta">23:09<br>5 分钟</div></div>
+      <div class="stop done"><div class="n">4</div><div><b>母稿 · 配图锚点</b><span class="who">天玑</span><p>2829 字 · rev 4 · <a class="link-doc">母稿 docx</a></p></div><div class="meta">23:20<br>8 分钟</div></div>
+      <div class="stop done"><div class="n">5</div><div><b>二审 · 七轴门禁</b><span class="who">天权</span><p>PASS + 2 处必改，复审 rev 6 · 已 FROZEN</p></div><div class="meta">23:31<br>11 分钟</div></div>
+      <div class="stop now"><div class="n">6</div><div><b>视觉出图</b><span class="who">玉衡</span><p>7 张锚点图 · 已落 3 张，封面待 1:1 裁切</p><div class="prog"><i></i></div></div><div class="meta">已 9 分钟<br>预计 +6</div></div>
+      <div class="stop wait"><div class="n">7</div><div><b>运营分发 · 关单</b><span class="who">摇光</span><p>等玉衡交付后唤醒</p></div><div class="meta">未开始</div></div>
+    </div>
+
+    <div class="side">
+      <div class="card block">
+        <h3>当前卡点</h3>
+        <div class="focus">
+          <b>玉衡 · 出图 9 分钟</b>
+          <p>最后一次动作 23:36 落盘 3 张；无报错、无重发。按历史 7–24 分钟，属正常区间。</p>
+        </div>
+        <div class="actions"><span class="btn primary">看玉衡会话</span><span class="btn">催一次</span><span class="btn">跳过出图</span></div>
+      </div>
+      <div class="card block">
+        <h3>产出 · 已生成 4 / 6</h3>
+        <ul class="list">
+          <li><a class="link-doc">天璇选题研究</a><span>23:04</span></li>
+          <li><a class="link-doc">初审报告 · PASS</a><span>23:09</span></li>
+          <li><a class="link-doc">母稿 docx · rev 4</a><span>23:20</span></li>
+          <li><a class="link-doc">二审报告 · FROZEN</a><span>23:31</span></li>
+          <li><span style="color:#a9aea7">玉衡图文包</span><span>生成中</span></li>
+          <li><span style="color:#a9aea7">摇光运营方案</span><span>待开始</span></li>
+        </ul>
+      </div>
+      <div class="card block">
+        <h3>这一单的状态</h3>
+        <ul class="list">
+          <li><span>派单</span><span>22:55 · Leo</span></li>
+          <li><span>补发</span><span>0 次</span></li>
+          <li><span>watchdog</span><span>3 轮 · 最长 190 秒</span></li>
+          <li><span>预计关单</span><span>23:52（±10）</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ 今日已关单 -->
+  <div class="card today">
+    <h3>今日已关单 · 4</h3>
+    <div class="trow"><b>BM-2613</b><span>冬天晒不干衣服？阳台这 1 平米…</span><span>75 分钟</span><span>00:10 关单</span></div>
+    <div class="trow"><b>BM-2612</b><span>厨房台面越用越小？先拿走这三样</span><span>77 分钟</span><span>22:13 关单</span></div>
+    <div class="trow"><b>BM-2611</b><span>冬天屋里干得嗓子疼？先别急着买加湿器</span><span>107 分钟</span><span>18:59 关单</span></div>
+    <div class="trow"><b>BM-2610</b><span>降温之后，家里最该先换的不是被子</span><span>137 分钟</span><span>14:32 关单</span></div>
+  </div>
+
+  <div class="foot">效果图 v4 · 上半流水线看形状，下半左边看每站做了什么，右边看卡点与产出</div>
+</div>
+</body>
+</html>
