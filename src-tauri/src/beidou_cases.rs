@@ -5364,7 +5364,7 @@ mod dispatch_helper_tests {
 /// 工单终态：父卡 done + 本案段卡 >=5 张且全部 done。
 /// 2026-10-22 BM-2611 实锤：账本 20:19 在 8 秒内 08_已关单 → 06_二审 反复翻转，
 /// 就是「自愈重开」把工单判定的关单翻掉了。工单终态在，就不许翻案。
-fn case_terminal_by_cards(connection: &Connection, case_id: &str) -> Result<bool> {
+fn case_terminal_by_cards(connection: &Connection, case_id: &str) -> rusqlite::Result<bool> {
     let hit: Option<i64> = connection
         .query_row(
             "SELECT 1 FROM workboard_cards p
