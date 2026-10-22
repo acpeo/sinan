@@ -76,8 +76,8 @@ export default function InflightView() {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     return cases
-      .filter((c) => c.closed && (c.closedAtMs ?? 0) >= start.getTime())
-      .sort((a, b) => (b.closedAtMs ?? 0) - (a.closedAtMs ?? 0))
+      .filter((c) => c.closed && (c.updatedAtMs ?? 0) >= start.getTime())
+      .sort((a, b) => (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0))
       .slice(0, 4);
   }, [cases]);
 
@@ -109,7 +109,7 @@ export default function InflightView() {
     { label: "摇光运营方案", url: active.opsDocUrl },
   ];
   const gotCount = outputs.filter((o) => o.url).length;
-  const elapsedMin = minutesBetween(active.startedAtMs ?? active.lastActivityMs, now) ?? 0;
+  const elapsedMin = Math.min(minutesBetween(active.lastActivityMs, now) ?? 0, 240);
 
   return (
     <div className="ifv">
@@ -123,7 +123,7 @@ export default function InflightView() {
         <h1>{active.name}</h1>
         <div className="ifv-head-right">
           <span className="ifv-chip on">第 {active.step + 1} 站 · {STATIONS[active.step]?.star ?? "—"}</span>
-          <div className="ifv-clock"><b>{elapsedMin}:00</b><span>预计 {fmtDate((active.lastActivityMs ?? now) + 15 * 60000)} 关单</span></div>
+          <div className="ifv-clock"><b>{elapsedMin} 分钟</b><span>预计 {fmtDate((active.lastActivityMs ?? now) + 15 * 60000)} 关单</span></div>
         </div>
       </div>
 
@@ -196,7 +196,7 @@ export default function InflightView() {
           <div className="ifv-card">
             <div className="ifv-card-h"><h2>当前卡点</h2><span /></div>
             <div className="ifv-focus">
-              <div className="ifv-focus-t"><b>{STATIONS[active.step]?.star ?? "—"} · {STATIONS[active.step]?.label ?? "—"}</b><span>{elapsedMin}:00</span></div>
+              <div className="ifv-focus-t"><b>{STATIONS[active.step]?.star ?? "—"} · {STATIONS[active.step]?.label ?? "—"}</b><span>已 {elapsedMin} 分钟</span></div>
               <p>{active.residencyNote || "暂无驻留说明；等待该星位落盘后自动推进。"}</p>
               <div className="ifv-actions">
                 <button className="ifv-btn primary" disabled title="下一版接入">看会话</button>
@@ -234,8 +234,8 @@ export default function InflightView() {
         {todayClosed.length ? todayClosed.map((c) => (
           <div key={c.caseId} className="ifv-trow">
             <b>{c.caseId}</b><span>{c.name}</span>
-            <span className="d">{minutesBetween(c.startedAtMs ?? c.lastActivityMs, c.closedAtMs) ?? "—"} 分钟</span>
-            <span className="t">{fmtDate(c.closedAtMs)}</span>
+            <span className="d">{minutesBetween(c.lastActivityMs, c.updatedAtMs) ?? "—"} 分钟</span>
+            <span className="t">{fmtDate(c.updatedAtMs)}</span>
           </div>
         )) : <div className="ifv-trow"><span style={{ color: "#a8afa7" }}>今天还没有关单记录</span></div>}
       </div>
