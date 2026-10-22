@@ -39,6 +39,7 @@ import { GLASS_MODES, glassShellAppearance, nextGlassTint, resolveGlassMode } fr
 import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, loadWorkboardCards, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, syncWorkboardCards, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
+import InflightView from "./InflightView.jsx";
 import { CaseArchive } from "./CaseArchive.jsx";
 import { BrandLogo } from "./PipelineView.jsx";
 import { ledgerRowsToCases, buildLiveActionMap, wakeupFailureText } from "./cockpit.js";
@@ -4723,6 +4724,7 @@ function PipelineTelemetry({
 }
 
 const CONSOLE_TABS = [
+  { id: "inflight", label: "在途" },
   { id: "cockpit", label: "指挥舱" },
   // 案件卷宗：查历史案件用（泳道只看当前在办，翻旧账得靠这张表）
   { id: "cases", label: "案件卷宗" },
@@ -4744,7 +4746,7 @@ export function App() {
   const [viewMode] = useState(initialWindowMode);
   const [gateways, setGateways] = useState(() => loadGatewayConfig());
   const reloadGateways = useCallback(() => setGateways(loadGatewayConfig()), []);
-  const [consoleTab, setConsoleTab] = useState("cockpit");
+  const [consoleTab, setConsoleTab] = useState("inflight");
   // 卷宗里点一行 → 回指挥舱并选中那一案（不然点了没反应，"查看过往案件"就断在这）。
   const [focusCaseId, setFocusCaseId] = useState(null);
   const [starsOpen, setStarsOpen] = useState(false);
@@ -5222,6 +5224,8 @@ export function App() {
       </header>
       <div className="console-scroll">
         <div className={consoleTab === "settings" ? "console-hidden" : ""}>
+          {consoleTab === "inflight" ? <InflightView /> : null}
+          <div className={consoleTab === "inflight" ? "console-hidden" : ""}>
           <TasksSection
             gateways={gateways}
             onGatewaysChanged={reloadGateways}
@@ -5243,6 +5247,7 @@ export function App() {
               setConsoleTab("cockpit");
             }}
           />
+          </div>
         </div>
         <div className={consoleTab === "settings" ? "console-settings" : "console-settings console-hidden"}>
           <MonitorSettingsCard tasksWidgetEnabled={tasksWidgetEnabled} onToggleTasksWidget={handleToggleTasksWidget} />
