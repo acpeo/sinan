@@ -1670,7 +1670,12 @@ fn harvest_episode_content(
         .max()
         .unwrap_or(0);
     let fresher_than_closure = recorded_closed_at == 0 || latest_evidence_at > recorded_closed_at;
-    if fresher_than_closure && inflight && !says_closed(&latest_hop_blob) && !says_closed(&latest_watch_blob) {
+    if fresher_than_closure
+        && inflight
+        && !says_closed(&latest_hop_blob)
+        && !says_closed(&latest_watch_blob)
+        && !case_terminal_by_cards(connection, case_id)?
+    {
         connection.execute(
             "UPDATE beidou_cases SET stage = '05_母稿', updated_at_ms = ?2, closed_at_ms = 0
              WHERE case_id = ?1 AND stage IN ('08_已关单', '08_关单完成')",
@@ -5354,4 +5359,25 @@ mod dispatch_helper_tests {
         let stable = list.iter().find(|r| r.case_id == "BM-7780").expect("BM-7780 again");
         assert_eq!(stable.stage, "07_视听并行", "翻回来就稳住，不被旧段拖下去");
     }
+}
+
+/// 工单终态：父卡 done + 本案段卡 >=5 张且全部 done。
+/// 2026-10-22 BM-2611 实锤：账本 20:19 在 8 秒内 08_已关单 → 06_二审 反复翻转，
+/// 就是「自愈重开」把工单判定的关单翻掉了。工单终态在，就不许翻案。
+fn case_terminal_by_cards(connection: &Connection, case_id: &str) -> Result<bool> {
+    let hit: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM workboard_cards p
+              WHERE p.case_id = ?1 AND p.status = 'done'
+                AND (SELECT COUNT(*) FROM workboard_cards s
+                     WHERE s.labels LIKE '%\"case:' || p.case_id || '\"%') >= 5
+                AND NOT EXISTS (
+                     SELECT 1 FROM workboard_cards s2
+                     WHERE s2.labels LIKE '%\"case:' || p.case_id || '\"%' AND s2.status <> 'done')
+              LIMIT 1",
+            rusqlite::params![case_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(hit.is_some())
 }
