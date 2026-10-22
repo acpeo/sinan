@@ -4118,9 +4118,15 @@ function TasksSection({
     };
     pull();
     const timer = window.setInterval(pull, 20_000);
+    // 窗口回前台立刻补一拍（后台定时器会被降频，2026-10-22 实拍）。
+    const onFocus = () => pull();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     return () => {
       alive = false;
       window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [Array.isArray(gateways) ? gateways.map((g) => g.label).join("|") : ""]);
@@ -5086,10 +5092,20 @@ export function App() {
   // 就是因为账本那次读取停在 00:02。15 秒一拍，成本是两条几十行级的 SQL 扫描，
   // 没变化时不写库（收割线自带"内容没变不 UPDATE"）。
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setBeidouCasesVersion((v) => v + 1);
-    }, 15_000);
-    return () => window.clearInterval(timer);
+    const bump = () => setBeidouCasesVersion((v) => v + 1);
+    const timer = window.setInterval(bump, 15_000);
+    // 2026-10-22 Leo 实拍：窗口在后台时 webview 定时器被降频/暂停，账本已关单
+    // 但泳道还显示「运营关单」，切一次视图才刷新。回到前台立刻重读一次。
+    window.addEventListener("focus", bump);
+    const onVisible = () => {
+      if (!document.hidden) bump();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", bump);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
   // 顶栏右侧两枚 chip 的数（外壳统一后从 PipelineTopBar 挪上来）。账本只写真数据：
   // 在途 = 没关单的案；待你裁决 = 打回满 3 次的案。
