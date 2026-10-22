@@ -5365,7 +5365,7 @@ mod dispatch_helper_tests {
 /// 2026-10-22 BM-2611 实锤：账本 20:19 在 8 秒内 08_已关单 → 06_二审 反复翻转，
 /// 就是「自愈重开」把工单判定的关单翻掉了。工单终态在，就不许翻案。
 fn case_terminal_by_cards(connection: &Connection, case_id: &str) -> rusqlite::Result<bool> {
-    let hit: Option<i64> = connection
+    let hit: Option<i64> = match connection
         .query_row(
             "SELECT 1 FROM workboard_cards p
               WHERE p.case_id = ?1 AND p.status = 'done'
@@ -5378,6 +5378,12 @@ fn case_terminal_by_cards(connection: &Connection, case_id: &str) -> rusqlite::R
             rusqlite::params![case_id],
             |row| row.get(0),
         )
-        .optional()?;
+        .optional()
+    {
+        Ok(value) => value,
+        // 测试库/旧库没有工单镜像表：降级为「不是工单终态」，不让收割整体失败。
+        Err(rusqlite::Error::SqliteFailure(_, Some(message))) if message.contains("no such table") => None,
+        Err(error) => return Err(error),
+    };
     Ok(hit.is_some())
 }
