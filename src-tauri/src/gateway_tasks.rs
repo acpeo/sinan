@@ -1953,7 +1953,42 @@ pub fn sync_workboard_cards(connection: &Connection, client: &mut GatewayClient)
             Err(error) => eprintln!("sinan workboard card skipped: {error}"),
         }
     }
+    // 工单终态 → 账本关单（2026-10-22 Leo 定 B 路线）：关单轮是静默的，群里
+    // 没有「已关单」通知，账本不能靠 chat history 等那一句。
+    closed += reconcile_closures_from_cards(connection)?;
     Ok((changed, closed))
+}
+
+/// 父卡 done + 本案段卡 >= 5 张且全部 done → 账本落 08_已关单。
+/// 判据只看工单终态，不看自然语言；缺段（ready/running）一律不判。
+fn reconcile_closures_from_cards(connection: &Connection) -> Result<usize> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut stmt = connection.prepare(
+        "SELECT DISTINCT p.case_id FROM workboard_cards p
+         WHERE p.status = 'done' AND p.labels LIKE '%\"bm:%'
+           AND (SELECT COUNT(*) FROM workboard_cards s
+                WHERE s.labels LIKE '%\"case:' || p.case_id || '\"%') >= 5
+           AND NOT EXISTS (
+                SELECT 1 FROM workboard_cards s2
+                WHERE s2.labels LIKE '%\"case:' || p.case_id || '\"%' AND s2.status <> 'done')",
+    )?;
+    let cases: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .filter_map(|row| row.ok())
+        .collect();
+    let mut closed = 0usize;
+    for case_id in cases {
+        let changed = connection.execute(
+            "UPDATE beidou_cases
+                SET stage = '08_已关单',
+                    closed_at_ms = COALESCE(closed_at_ms, ?2),
+                    updated_at_ms = ?2
+              WHERE case_id = ?1 AND (stage IS NULL OR stage NOT LIKE '08%')",
+            rusqlite::params![case_id, now],
+        )?;
+        closed += changed;
+    }
+    Ok(closed)
 }
 
 /// 深潜舱/列头用的卡片状态：把 workboard_cards 展平成 JSON 行（父卡 + 段卡）。
