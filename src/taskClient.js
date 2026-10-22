@@ -258,6 +258,18 @@ export async function loadSessionRuns() {
 /// Workboard 卡片状态（Phase 2）：北斗父卡 + 段卡的本地镜像（workboard_cards 表）。
 /// 只读本地，不联网——联网同步在 Rust 快照循环里 60 秒一拍。
 /// 浏览器演示给空：卡片是执行留痕，演示环境没有真实执行，摆假卡违反账本诚实规则。
+/// 轻量工单同步（2026-10-22）：只调 workboard.cards.list 落本地镜像，
+/// 不等重快照。主窗 20 秒一调，解决「小组件实时、主窗慢半拍」。
+export async function syncWorkboardCards(gateways = []) {
+  if (!isTauriRuntime()) return { ok: false, synced: 0 };
+  try {
+    const synced = await invoke("workboard_cards_sync", { gateways });
+    return { ok: true, synced: Number(synced) || 0 };
+  } catch (error) {
+    return { ok: false, synced: 0, error: String(error) };
+  }
+}
+
 export async function loadWorkboardCards() {
   if (!isTauriRuntime()) {
     return { demo: false, cards: [] };

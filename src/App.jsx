@@ -36,7 +36,7 @@ import qwenAppIcon from "./assets/qwen-app-icon.png";
 import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
 import { GLASS_MODES, glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
-import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, loadWorkboardCards, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
+import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, loadWorkboardCards, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, syncWorkboardCards, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
 import { CaseArchive } from "./CaseArchive.jsx";
@@ -4099,6 +4099,31 @@ function TasksSection({
   const [sessionRuns, setSessionRuns] = useState([]);
   // Workboard 卡片镜像（Phase 2）：北斗父卡/段卡本地镜像，随任务页同拍刷新。
   const [workboardCards, setWorkboardCards] = useState([]);
+  // 轻量工单同步（2026-10-22 Leo 拍板）：只拉 workboard.cards.list，20 秒一拍，
+  // 不再等重快照。此前工单镜像夹在审计/聊天那条重循环里，实测 185 秒才更新一次，
+  // 主窗比小组件慢半拍（小组件读会话实时，主窗读镜像）。
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+    const list = typeof gateways === "undefined" ? [] : gateways;
+    if (!list.length) return undefined;
+    let alive = true;
+    const pull = async () => {
+      try {
+        await syncWorkboardCards(list);
+        const data = await loadWorkboardCards();
+        if (alive) setWorkboardCards(data.cards ?? []);
+      } catch {
+        /* 轻同步失败不打扰用户，下一拍再试 */
+      }
+    };
+    pull();
+    const timer = window.setInterval(pull, 20_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Array.isArray(gateways) ? gateways.map((g) => g.label).join("|") : ""]);
   // 定时任务看板（六案③）：cron.list 本地镜像 + 任务账本对账"上次结果"。
   // cronTasks = 无状态过滤的全量任务行（sourceId join 用），与看板同拍刷新。
   const [cronJobs, setCronJobs] = useState([]);

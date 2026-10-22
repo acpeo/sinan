@@ -1933,7 +1933,7 @@ static WORKBOARD_SYNC_AT: std::sync::LazyLock<Mutex<Option<Instant>>> =
 const WORKBOARD_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// 拉 workboard.cards.list 落本地表；返回 (卡片数, 由卡片 done 触发的关单数)。
-fn sync_workboard_cards(connection: &Connection, client: &mut GatewayClient) -> Result<(usize, usize)> {
+pub fn sync_workboard_cards(connection: &Connection, client: &mut GatewayClient) -> Result<(usize, usize)> {
     let payload = client.call("workboard.cards.list", json!({}))?;
     let cards = payload
         .pointer("/cards")

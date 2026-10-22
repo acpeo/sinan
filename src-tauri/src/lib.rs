@@ -561,6 +561,41 @@ fn gateway_task_list(
 
 /// Workboard 卡片状态（北斗父卡 + 段卡的本地镜像，Phase 2）。
 /// 只读本地 workboard_cards 表，不联网；联网同步在快照循环里做。
+/// 轻量同步：只拉 workboard.cards.list 落表，不碰审计/聊天/会话清单。
+/// 2026-10-22 拆出来的原因：工单镜像原来挂在重快照里，网关忙时 185 秒才更新
+/// 一次，主窗泳道比小组件慢半拍（Leo 实拍）。这条命令给前端单独 20 秒一调。
+#[tauri::command]
+async fn workboard_cards_sync(
+    gateways: Vec<GatewayTargetConfig>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let database_path = state.database_path.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
+        let connection = open_database(&database_path)?;
+        let mut changed = 0usize;
+        for target in &gateways {
+            if target.url.trim().is_empty() {
+                continue;
+            }
+            let gw = gateway_target(target);
+            let identity_dir = gw
+                .identity_dir
+                .clone()
+                .unwrap_or_else(gateway_tasks::default_state_dir_for_probe);
+            let identity = gateway_tasks::load_probe_identity(&identity_dir)
+                .map_err(|error| error.to_string())?;
+            let mut client = gateway_tasks::GatewayClient::connect(&gw, &identity)
+                .map_err(|error| error.to_string())?;
+            let (count, _closed) = gateway_tasks::sync_workboard_cards(&connection, &mut client)
+                .map_err(|error| error.to_string())?;
+            changed += count;
+        }
+        Ok(changed)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 fn workboard_cards_list(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
     let connection = open_database_read_only(&state.database_path)?;
@@ -1364,6 +1399,7 @@ pub fn run() {
             gateway_agents_snapshot,
             session_run_list,
             workboard_cards_list,
+            workboard_cards_sync,
             beidou_direct_launch,
             beidou_append_video,
             beidou_auto_heal,
