@@ -118,6 +118,27 @@ export default function InflightView() {
   // 只有工单一张都没读到（同步未完成）时，才退回账本，并在诊断行里明示。
   const step = caseCards.length ? cardStep : (Number.isFinite(fromLedger) ? fromLedger : 0);
 
+  // 每段耗时（2026-10-23 Leo 要）：工单段卡的 updatedAtMs 就是该段完成时刻。
+  // 段耗时 = 本段完成 − 上一段完成；第一段（02 选题）从建档（最早一张卡的时刻）起算。
+  // 01 接单建档就是父卡、没有独立段卡，算不出来就显示「—」，不编。
+  const segDoneAt = (segNo) => {
+    const card = caseCards.find((c) => String(c.seg ?? "").startsWith(segNo));
+    if (!card) return null;
+    if (String(card.status ?? "").toLowerCase() !== "done") return null;
+    return Number(card.updatedAtMs) || null;
+  };
+  const firstAt = (() => {
+    const times = caseCards.map((c) => Number(c.updatedAtMs)).filter((n) => Number.isFinite(n) && n > 0);
+    return times.length ? Math.min(...times) : null;
+  })();
+  const segMinutes = (idx, done, nowAt) => {
+    if (!done && !nowAt) return null;
+    const startAt = idx === 0 ? null : idx === 1 ? firstAt : segDoneAt(STATIONS[idx - 1].seg);
+    const endAt = done ? segDoneAt(STATIONS[idx].seg) : now;
+    if (!startAt || !endAt) return null;
+    return minutesBetween(startAt, endAt);
+  };
+
   const stepCols = STATIONS.map((s, i) => {
     const done = i < step || active.closed;
     const nowAt = i === step && !active.closed;
@@ -197,6 +218,7 @@ export default function InflightView() {
             {STATIONS.map((s, i) => {
               const done = i < step || active.closed;
               const nowAt = i === step && !active.closed;
+              const mins = segMinutes(i, done, nowAt);
               return (
                 <div key={s.key} className={`ifv-stop ${done ? "is-done" : ""} ${nowAt ? "is-now" : ""} ${!done && !nowAt ? "is-wait" : ""}`}>
                   <span className="ifv-dot" />
@@ -215,7 +237,10 @@ export default function InflightView() {
                         : done ? "已完成" : nowAt ? "进行中" : "等待上游"}
                     </div>
                   </div>
-                  <div className="ifv-meta"><b>{done ? "✓" : nowAt ? "进行中" : "—"}</b>{nowAt ? `${elapsedMin} 分钟` : ""}</div>
+                  <div className="ifv-meta">
+                    <b>{done ? "✓" : nowAt ? "进行中" : "—"}</b>
+                    {done ? (mins != null ? `${mins} 分钟` : "—") : nowAt ? `${mins ?? elapsedMin} 分钟` : ""}
+                  </div>
                 </div>
               );
             })}
