@@ -731,8 +731,14 @@ function useWidgetTasksFeed(gateways, enabled) {
         withInvokeTimeout(loadAgentsSnapshot(current, { force }))
           .then((snap) => {
             if (!alive) return;
-            setAgents(snap);
-            setLive(gatewayResultsAllOk(snap?.results));
+            // 2026-10-23 Leo 实拍：网关不通（顶栏「未连接」）时，任务页/小组件/
+            // 迷你胶囊仍亮着好几个「正在执行」。快照里 hasActiveRun 是断连前
+            // 最后一拍的陈旧状态，灯牌却当实况用——灯和连接状态自相矛盾。
+            // 口径：这一拍没连上网关，就不许拿快照点亮活跃；台账（本地 done）
+            // 会接手，该亮的（真在跑的）仍然亮。
+            const ok = gatewayResultsAllOk(snap?.results);
+            setAgents(ok ? snap : defuseSnapshotActivity(snap));
+            setLive(ok);
           })
           .catch(() => {
             if (alive) setLive(false);
@@ -770,6 +776,17 @@ function taskAccentClass(status) {
   if (status === "queued") return "widget-task-accent--queued";
   if (status === "failed" || status === "timed_out" || status === "lost") return "widget-task-accent--failed";
   return "widget-task-accent--ended";
+}
+
+/// 把快照里的活跃标记整体拆掉（2026-10-23）。
+/// 用于「这一拍没连上网关」的情形：断连时的 hasActiveRun 只是历史残留，
+/// 拿它点灯会让顶栏写「未连接」而星位写「正在执行」，自相矛盾。
+function defuseSnapshotActivity(snap) {
+  if (!snap || !Array.isArray(snap.sessions)) return snap;
+  return {
+    ...snap,
+    sessions: snap.sessions.map((s) => (s?.hasActiveRun ? { ...s, hasActiveRun: false } : s)),
+  };
 }
 
 /// 任务追踪小组件：独立常驻小窗（与主窗完全分离，托盘/设置可显隐）。
