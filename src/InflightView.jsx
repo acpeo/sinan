@@ -100,11 +100,14 @@ export default function InflightView() {
   const cardStep = (() => {
     let idx = 0;
     for (const c of caseCards) {
-      const labels = Array.isArray(c.labels) ? c.labels.join(" ") : String(c.labels ?? "");
-      const m = /seg:(\d{2})/.exec(labels);
-      if (!m) continue;
       const st = String(c.status ?? "").toLowerCase();
       if (st !== "done" && st !== "running" && st !== "in_progress") continue;
+      // 2026-10-23 实锤：workboard_cards_list 返回的是已经剥掉前缀的 seg（"06-出图"），
+      // 根本没有 labels 字段。早先按 labels 匹配 → 全部落空 → cardStep 恒为 0 →
+      // 在途页永远画第 1 站天枢。两种形态都兼容，别再假设字段名。
+      const segText = String(c.seg ?? (Array.isArray(c.labels) ? c.labels.join(" ") : c.labels ?? ""));
+      const m = /^(\d{2})/.exec(segText) || /seg:(\d{2})/.exec(segText);
+      if (!m) continue;
       const i = STATIONS.findIndex((x) => x.seg === m[1]);
       if (i > idx) idx = i;
     }
@@ -149,8 +152,9 @@ export default function InflightView() {
         <h1>{active.name}</h1>
         <div className="ifv-head-right">
           <span className="ifv-chip on">第 {step + 1} 站 · {STATIONS[step]?.star ?? "—"}</span>
-          <div className="ifv-clock"><b>{elapsedMin} 分钟</b><span>预计 {fmtDate((active.lastActivityMs ?? now) + 15 * 60000)} 关单</span></div>
+          <div className="ifv-clock"><b>{elapsedMin} 分钟</b><span>距上次动作</span></div>
         </div>
+        <div className="ifv-diag">{diag}</div>
       </div>
 
       <div className="ifv-rail">
@@ -266,7 +270,6 @@ export default function InflightView() {
         )) : <div className="ifv-trow"><span style={{ color: "#a8afa7" }}>今天还没有关单记录</span></div>}
       </div>
 
-      <div className="ifv-diag">{diag}</div>
     </div>
   );
 }
