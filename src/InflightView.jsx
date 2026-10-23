@@ -108,7 +108,8 @@ export default function InflightView() {
     }
     return idx;
   })();
-  const step = Math.max(Number(step) || 0, cardStep);
+  const fromLedger = Number(active.step);
+  const step = Math.max(Number.isFinite(fromLedger) ? fromLedger : 0, cardStep);
 
   const stepCols = STATIONS.map((s, i) => {
     const done = i < step || active.closed;

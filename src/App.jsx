@@ -40,6 +40,7 @@ import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, load
 import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
 import { PipelineView } from "./PipelineView.jsx";
 import InflightView from "./InflightView.jsx";
+import ViewBoundary from "./ViewBoundary.jsx";
 import { CaseArchive } from "./CaseArchive.jsx";
 import { BrandLogo } from "./PipelineView.jsx";
 import { ledgerRowsToCases, buildLiveActionMap, wakeupFailureText } from "./cockpit.js";
@@ -5224,7 +5225,11 @@ export function App() {
       </header>
       <div className="console-scroll">
         <div className={consoleTab === "settings" ? "console-hidden" : ""}>
-          {consoleTab === "inflight" ? <InflightView /> : null}
+          {consoleTab === "inflight" ? (
+            <ViewBoundary key="inflight">
+              <InflightView />
+            </ViewBoundary>
+          ) : null}
           <div className={consoleTab === "inflight" ? "console-hidden" : ""}>
           <TasksSection
             gateways={gateways}
