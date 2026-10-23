@@ -127,6 +127,11 @@ export default function InflightView() {
     if (String(card.status ?? "").toLowerCase() !== "done") return null;
     return Number(card.updatedAtMs) || null;
   };
+  // 段卡是否已完成——产出清单的第二判据（链接未回填时的兜底）。
+  const segDoneCard = (segNo) => {
+    const card = caseCards.find((c) => String(c.seg ?? "").startsWith(segNo));
+    return Boolean(card) && String(card.status ?? "").toLowerCase() === "done";
+  };
   const firstAt = (() => {
     const times = caseCards.map((c) => Number(c.updatedAtMs)).filter((n) => Number.isFinite(n) && n > 0);
     return times.length ? Math.min(...times) : null;
@@ -146,15 +151,17 @@ export default function InflightView() {
   });
 
   const outputs = [
-    { label: "天璇选题研究", url: active.researchDocUrl },
-    { label: "初审报告", url: active.reviewDocUrl },
-    { label: "母稿 docx", url: active.masterDocUrl },
-    { label: "二审报告", url: active.reReviewDocUrl || active.reviewDocUrl },
-    { label: "玉衡图文包", url: active.visualUrl },
-    { label: "开阳视频包", url: active.videoUrl },
-    { label: "摇光运营方案", url: active.opsDocUrl },
-  ];
-  const gotCount = outputs.filter((o) => o.url).length;
+    { label: "天璇选题研究", url: active.researchDocUrl, seg: "02" },
+    { label: "初审报告", url: active.reviewDocUrl, seg: "03" },
+    { label: "母稿 docx", url: active.masterDocUrl, seg: "04" },
+    { label: "二审报告", url: active.reReviewDocUrl || active.reviewDocUrl, seg: "05" },
+    { label: "玉衡图文包", url: active.visualUrl, seg: "06", off: active.deliverableMode === "VIDEO_ONLY" },
+    { label: "开阳视频包", url: active.videoUrl, seg: "06", off: active.deliverableMode === "IMAGE_ONLY" },
+    { label: "摇光运营方案", url: active.opsDocUrl, seg: "07" },
+  ].map((o) => ({ ...o, done: !o.off && (Boolean(o.url) || segDoneCard(o.seg)) }));
+  const activeOutputs = outputs.filter((o) => !o.off);
+  const gotCount = activeOutputs.filter((o) => o.done).length;
+  const totalOutputs = activeOutputs.length;
   const elapsedMin = Math.min(minutesBetween(active.lastActivityMs, now) ?? 0, 240);
   // 诊断（2026-10-23 加）：在途页出现过「指挥舱已到二审、这里还停在天玑」，
   // 根因是工单卡片没到前端却静默退回账本。这类静默失效必须看得见。
@@ -271,12 +278,12 @@ export default function InflightView() {
           <div className="ifv-card">
             <div className="ifv-card-h"><h2>产出</h2><span /></div>
             <div className="ifv-docs">
-              <div className="ifv-cnt"><span>已生成 {gotCount} / 7</span><span>{active.closed ? "已关单" : "进行中"}</span></div>
-              <div className="ifv-bar"><i style={{ width: `${(gotCount / 7) * 100}%` }} /></div>
+              <div className="ifv-cnt"><span>已生成 {gotCount} / {totalOutputs}</span><span>{active.closed ? "已关单" : "进行中"}</span></div>
+              <div className="ifv-bar"><i style={{ width: `${totalOutputs ? (gotCount / totalOutputs) * 100 : 0}%` }} /></div>
               {outputs.map((o) => (
-                <div key={o.label} className={`ifv-row ${o.url ? "" : "pending"}`}>
+                <div key={o.label} className={`ifv-row ${o.off ? "pending" : o.done ? "" : "pending"}`}>
                   {o.url ? <a href={o.url} target="_blank" rel="noreferrer">{o.label}</a> : <span>{o.label}</span>}
-                  <span className="t">{o.url ? "已生成" : "待生成"}</span>
+                  <span className="t">{o.off ? "未启用" : o.url ? "已生成" : o.done ? "已生成 · 链接待回填" : "待生成"}</span>
                 </div>
               ))}
             </div>
