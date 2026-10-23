@@ -277,6 +277,7 @@ export default function InflightView() {
 const CSS = `
 .ifv{max-width:1240px;margin:0 auto;padding:6px 4px 28px;color:#181d19;font-size:14px;line-height:1.55;
   font-family:"SF Pro Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-variant-numeric:tabular-nums}
+.ifv-diag{flex:0 0 100%;width:100%;margin-top:2px;font-size:10.5px;line-height:1.65;color:#a9aea7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
 .ifv-empty{padding:80px 20px;text-align:center;color:#7d857d}
 .ifv-empty b{font-size:16px;color:#181d19}
 .ifv-empty p{margin:8px 0 0;font-size:13px}
