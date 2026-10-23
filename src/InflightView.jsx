@@ -93,9 +93,26 @@ export default function InflightView() {
     );
   }
 
+  // 阶段以工单段卡为准。2026-10-23 BM-2614 实锤：账本停在 01_建档（靠会话文本
+  // 推断），任务表已到 03 初审，两套源不一致，在途页因此一直显示天枢。
+  const cardStep = (() => {
+    let idx = 0;
+    for (const c of caseCards) {
+      const labels = Array.isArray(c.labels) ? c.labels.join(" ") : String(c.labels ?? "");
+      const m = /seg:(\d{2})/.exec(labels);
+      if (!m) continue;
+      const st = String(c.status ?? "").toLowerCase();
+      if (st !== "done" && st !== "running" && st !== "in_progress") continue;
+      const i = STATIONS.findIndex((x) => x.seg === m[1]);
+      if (i > idx) idx = i;
+    }
+    return idx;
+  })();
+  const step = Math.max(Number(step) || 0, cardStep);
+
   const stepCols = STATIONS.map((s, i) => {
-    const done = i < active.step || active.closed;
-    const nowAt = i === active.step && !active.closed;
+    const done = i < step || active.closed;
+    const nowAt = i === step && !active.closed;
     return { ...s, idx: i, done, now: nowAt };
   });
 
@@ -122,7 +139,7 @@ export default function InflightView() {
         </div>
         <h1>{active.name}</h1>
         <div className="ifv-head-right">
-          <span className="ifv-chip on">第 {active.step + 1} 站 · {STATIONS[active.step]?.star ?? "—"}</span>
+          <span className="ifv-chip on">第 {step + 1} 站 · {STATIONS[step]?.star ?? "—"}</span>
           <div className="ifv-clock"><b>{elapsedMin} 分钟</b><span>预计 {fmtDate((active.lastActivityMs ?? now) + 15 * 60000)} 关单</span></div>
         </div>
       </div>
@@ -165,8 +182,8 @@ export default function InflightView() {
           <div className="ifv-card-h"><h2>这一单做了什么</h2><span /></div>
           <div className="ifv-timeline">
             {STATIONS.map((s, i) => {
-              const done = i < active.step || active.closed;
-              const nowAt = i === active.step && !active.closed;
+              const done = i < step || active.closed;
+              const nowAt = i === step && !active.closed;
               return (
                 <div key={s.key} className={`ifv-stop ${done ? "is-done" : ""} ${nowAt ? "is-now" : ""} ${!done && !nowAt ? "is-wait" : ""}`}>
                   <span className="ifv-dot" />
@@ -196,7 +213,7 @@ export default function InflightView() {
           <div className="ifv-card">
             <div className="ifv-card-h"><h2>当前卡点</h2><span /></div>
             <div className="ifv-focus">
-              <div className="ifv-focus-t"><b>{STATIONS[active.step]?.star ?? "—"} · {STATIONS[active.step]?.label ?? "—"}</b><span>已 {elapsedMin} 分钟</span></div>
+              <div className="ifv-focus-t"><b>{STATIONS[step]?.star ?? "—"} · {STATIONS[step]?.label ?? "—"}</b><span>已 {elapsedMin} 分钟</span></div>
               <p>{active.residencyNote || "暂无驻留说明；等待该星位落盘后自动推进。"}</p>
               <div className="ifv-actions">
                 <button className="ifv-btn primary" disabled title="下一版接入">看会话</button>
@@ -208,7 +225,7 @@ export default function InflightView() {
                 <div><span>补发</span><b>—</b></div>
                 <div><span>watchdog</span><b>—</b></div>
                 <div><span>最近活动</span><b>{fmtDate(active.lastActivityMs)}</b></div>
-                <div><span>阶段</span><b>{STATIONS[active.step]?.label ?? "—"}</b></div>
+                <div><span>阶段</span><b>{STATIONS[step]?.label ?? "—"}</b></div>
               </div>
             </div>
           </div>
