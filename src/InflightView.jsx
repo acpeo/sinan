@@ -38,6 +38,7 @@ function modeText(mode) {
 export default function InflightView() {
   const [cases, setCases] = useState([]);
   const [cards, setCards] = useState([]);
+  const [cardErr, setCardErr] = useState("");
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export default function InflightView() {
         if (!alive) return;
         setCases(ledgerRowsToCases(caseData.cases ?? []));
         setCards(cardData.cards ?? []);
+        setCardErr(cardData.loadError ?? "");
         setNow(Date.now());
       } catch {
         /* 只读失败不打扰，下一拍重试 */
@@ -109,7 +111,9 @@ export default function InflightView() {
     return idx;
   })();
   const fromLedger = Number(active.step);
-  const step = Math.max(Number.isFinite(fromLedger) ? fromLedger : 0, cardStep);
+  // 工单有数据就以工单为准：账本靠会话文本推断，永远慢半拍，取 max 只会把它拖回来。
+  // 只有工单一张都没读到（同步未完成）时，才退回账本，并在诊断行里明示。
+  const step = caseCards.length ? cardStep : (Number.isFinite(fromLedger) ? fromLedger : 0);
 
   const stepCols = STATIONS.map((s, i) => {
     const done = i < step || active.closed;
@@ -128,6 +132,10 @@ export default function InflightView() {
   ];
   const gotCount = outputs.filter((o) => o.url).length;
   const elapsedMin = Math.min(minutesBetween(active.lastActivityMs, now) ?? 0, 240);
+  // 诊断（2026-10-23 加）：在途页出现过「指挥舱已到二审、这里还停在天玑」，
+  // 根因是工单卡片没到前端却静默退回账本。这类静默失效必须看得见。
+  const rawStage = String(active.stage ?? active.rawStage ?? "—");
+  const diag = `工单 ${cards.length} 张 · 本案 ${caseCards.length} 张 · 账本「${rawStage}」(第 ${Number.isFinite(fromLedger) ? fromLedger + 1 : "?"} 站) · 工单段 第 ${cardStep + 1} 站${cardErr ? ` · 读取失败：${cardErr}` : ""}`;
 
   return (
     <div className="ifv">
@@ -154,7 +162,7 @@ export default function InflightView() {
                 {s.key === "06" ? (
                   <>
                     <div className={`ifv-sub ${s.now ? "on" : ""}`}>
-                      <span>{active.deliverableMode === "VIDEO_ONLY" ? "玉衡 · 未启用" : `玉衡 · ${s.done ? "已交付" : "出图中"}`}</span>
+                      <span>{active.deliverableMode === "VIDEO_ONLY" ? "玉衡 · 未启用" : `玉衡 · ${s.done ? "已交付" : s.now ? "出图中" : "待命"}`}</span>
                     </div>
                     <div className={`ifv-sub ${active.deliverableMode === "DUAL" ? "on" : "off"}`}>
                       <span>{active.deliverableMode === "DUAL" ? "开阳 · 制作中" : "开阳 · 未启用"}</span>
@@ -257,6 +265,8 @@ export default function InflightView() {
           </div>
         )) : <div className="ifv-trow"><span style={{ color: "#a8afa7" }}>今天还没有关单记录</span></div>}
       </div>
+
+      <div className="ifv-diag">{diag}</div>
     </div>
   );
 }
