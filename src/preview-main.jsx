@@ -1,6 +1,7 @@
 // 版式预览入口（preview.html 用）：只挂 PipelineView，喂一份真数据形态。
 // 与产品代码的区别仅此一处——App.jsx 的 cases 来自 loadBeidouCases（真账本），
 // 这里来自写死的预览数据。组件本身是同一份，改版式两边同时生效。
+import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { PipelineView } from "./PipelineView.jsx";
 import { installExternalLinkHandler } from "./externalLinks.js";
@@ -184,25 +185,33 @@ const shellKind = new URLSearchParams(location.search).get("shell") ?? "";
 // 预览页这里改成 URL 控制（浮层实底那条只能靠它验）。
 const starsOpen = new URLSearchParams(location.search).get("stars") === "1";
 
-const view = (
-  <PipelineView
-    cases={CASES_TO_SHOW}
-    starTelemetry={TELEMETRY}
-    liveStars={new Set(live)}
-    liveAction={{ tianji: "母稿创作 · 第 3 节", yuheng: "配图出图中" }}
-    conn={{ state: live.length ? "ok" : "ok", text: live.length ? `已连接 · ${live.length} 星在跑` : "已连接 · VPS", title: "预览数据" }}
-    onRetryConn={() => {}}
-    onLaunch={() => {}}
-    onAppendVideo={() => {}}
-    starsOpen={starsOpen}
-    onToggleStars={() => {}}
-  />
-);
+// 「⚡ 一键追投视频」在预览页也要是真按钮：点一下把该案交付模式升成 DUAL，
+// 开阳槽从「未启用」翻成出包分支——和产品侧 handleBeidouAppendVideo 的可见
+// 效果同向（产品还多派一次开阳唤醒，预览没有网关，只做形态变化）。
+function PreviewRoot() {
+  const [cases, setCases] = useState(CASES_TO_SHOW);
+  const handleAppendVideo = useCallback(({ caseId }) => {
+    setCases((prev) =>
+      prev.map((c) => (c.caseId === caseId && c.deliverableMode === "IMAGE_ONLY" ? { ...c, deliverableMode: "DUAL" } : c)),
+    );
+  }, []);
+  const view = (
+    <PipelineView
+      cases={cases}
+      starTelemetry={TELEMETRY}
+      liveStars={new Set(live)}
+      liveAction={{ tianji: "母稿创作 · 第 3 节", yuheng: "配图出图中" }}
+      conn={{ state: live.length ? "ok" : "ok", text: live.length ? `已连接 · ${live.length} 星在跑` : "已连接 · VPS", title: "预览数据" }}
+      onRetryConn={() => {}}
+      onLaunch={() => {}}
+      onAppendVideo={handleAppendVideo}
+      starsOpen={starsOpen}
+      onToggleStars={() => {}}
+    />
+  );
+  return shellKind ? (
+    <div className={`console-root console-shell console-shell--${shellKind}`}>{view}</div>
+  ) : view;
+}
 
-createRoot(document.getElementById("root")).render(
-  shellKind ? (
-    <div className={`console-root console-shell console-shell--${shellKind}`}>
-      {view}
-    </div>
-  ) : view,
-);
+createRoot(document.getElementById("root")).render(<PreviewRoot />);
