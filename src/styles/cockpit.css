@@ -1,0 +1,659 @@
+/* v6 指挥舱（--cp-* 设计令牌）（自 styles.css 第 9116–9773 行切分，顺序保持） */
+/* ===========================================================================
+   v6 · 北斗七星主理人指挥舱（Leo 2026-10-14 全自动无人值守改造）
+   设计系统「Swiss Precision × Oriental Astrolabe」：
+   瑞士精密仪器级遥测舱 × 东方司南星轨美学。宣纸白画布 + 徽墨黑字 +
+   琥珀金只做点缀；所有遥测数字强制等宽 + tabular-nums，杜绝数字跳动
+   引发的布局抖动。只服务指挥舱页（.cp-root），不碰任务台既有样式。
+   =========================================================================== */
+
+/* 指挥舱设计令牌：--cp-* 全部变量。
+   挂在 .pl-root 与 .cp-root 两个选择器上——v6 版式（PipelineView）渲染 .pl-root，
+   旧版式（CockpitView，现已不挂载）渲染 .cp-root。变量定义只在这一处，
+   两边共用，别在各自规则里再写一遍色值。 */
+.pl-root,
+.cp-root,
+.ca-root,
+.console-topbar,
+.window-strip {
+  /* ---- 画布与容器 ---- */
+  --cp-canvas: #f7f6f2;                 /* 温润宣纸白 */
+  --cp-surface: #ffffff;                /* 主卡片纯白 */
+  /* 浮层实底：只有弹层用（星位明细）。玻璃壳会把 --cp-surface 改成半透明，
+     浮层绝不能跟着透——它盖在泳道格子上，透过去就是字叠字（Leo 2026-10-20
+     第 3 条）。所以单开一枚不参与玻璃覆盖的 token。 */
+  --cp-pop: #ffffff;
+  --cp-slot: #f0efea;                   /* 次级内嵌槽位 / 终端区矿石灰 */
+  --cp-standby-bg: #f4f3ee;             /* STANDBY 置灰态底 */
+  /* ---- 发丝边框 ---- */
+  --cp-hair: rgba(20, 20, 19, 0.08);    /* 默认 1px 发丝 */
+  --cp-hair-strong: rgba(20, 20, 19, 0.14);
+  --cp-hair-active: rgba(180, 120, 20, 0.45); /* 激活态 */
+  --cp-hair-standby: rgba(20, 20, 19, 0.18);  /* STANDBY 虚线 */
+  /* ---- 文字层级 ---- */
+  --cp-ink: #141413;                    /* 主标题墨黑 */
+  /* 压在 ink 底上的字色。以前直接拿 --cp-canvas 当它，玻璃壳把 canvas 改成
+     半透明（浅色 rgba(247,246,242,.6) / 深色 rgba(20,24,33,.55)）之后，
+     「立即发车」就成了黑底灰字 / 白底灰字，两边都糊（Leo 2026-10-20 第 4 条）。
+     对比色对必须自己成对，不沾画布色。 */
+  --cp-on-ink: #ffffff;
+  --cp-body: #3d3c38;                   /* 正文炭灰 */
+  --cp-meta: #78766f;                   /* 次级遥测元数据 */
+  /* ---- 星轨状态语义色（前景 / 背景）---- */
+  --cp-jade: #16795b;        --cp-jade-bg: #e8f5f0;      /* PASS / 已通过 / 正常 */
+  --cp-bronze: #b47814;      --cp-bronze-bg: #fdf6e7;    /* ACTIVE / 双出激活 */
+  --cp-amber: #d96b27;       --cp-amber-bg: #fef1e8;     /* AUTO-HEAL 自愈重修 */
+  --cp-cinnabar: #c93b2b;    --cp-cinnabar-bg: #fdecbb;  /* FAIL / 熔断拦截 */
+  --cp-indigo: #2e5bff;      --cp-indigo-bg: #edf2ff;    /* FROZEN 母稿只读 */
+  --cp-slate: #5b6472;       --cp-slate-bg: #eef0f3;     /* 中性进行中 */
+  --cp-standby-fg: rgba(20, 20, 19, 0.42);               /* STANDBY 置灰 */
+  /* ---- 阴影 ---- */
+  --cp-shadow-hover: 0 4px 20px -2px rgba(20, 20, 19, 0.05);
+  --cp-shadow-card: 0 1px 2px rgba(20, 20, 19, 0.04), 0 8px 24px -6px rgba(20, 20, 19, 0.06);
+  --cp-shadow-pop: 0 12px 40px -8px rgba(20, 20, 19, 0.16);
+  --cp-motion: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pl-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--cp-canvas);
+  color: var(--cp-ink);
+  font-family: "Inter", "PingFang SC", "HarmonyOS Sans SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+/* 指挥舱独占一屏时把宿主的内边距与滚动让出来。 */
+.console-scroll:has(> .cp-root) { padding: 0; overflow: hidden; }
+/* 指挥舱把 console-head / console-tabs 收进自己的顶栏后（Leo 2026-10-17），
+   滚动区不再预留那 88px——只留窗口按钮一排（44px），顶栏立刻跟上。
+   不然顶上多出一条 44px 的空带，指挥舱看着"高出一截"。
+   注意不能用 > .pl-root：PipelineView 外面还包着一层 TasksSection。 */
+.console-scroll:has(.pl-root) { top: 86px; padding: 0; overflow: hidden; }
+/* 顶栏提到 y=0 后：右侧让出窗口按钮药丸的位（absolute top8/right10，宽约230），
+   自身抬到拖拽层之上（拖拽区 z-7），拖拽改由顶栏自己的 data-tauri-drag-region 接管。
+   不然顶栏压在 44px 空带下面，指挥舱比别的页"高出一截"（Leo 2026-10-18 三图对照）。 */
+.console-scroll:has(.pl-root) .pl-topbar { position: relative; z-index: 8; padding-right: 248px; }
+
+/* 全栈遥测等宽字体（强制规范）：案件编号、七轴得分、倒计时、Watchdog 周期、
+   Token 消耗、document_id 一律等宽 + tabular-nums。 */
+.cp-mono {
+  font-family: "JetBrains Mono", "SF Mono", "Cascadia Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.01em;
+}
+
+.cp-title {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--cp-ink);
+}
+.cp-meta-text { color: var(--cp-meta); }
+.cp-body-text { color: var(--cp-body); }
+
+.cp-card {
+  background: var(--cp-surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--cp-hair);
+  border-radius: 14px;
+  transition: border-color 0.24s var(--cp-motion), box-shadow 0.24s var(--cp-motion);
+}
+.cp-card:hover { box-shadow: var(--cp-shadow-hover); }
+.cp-card--active { border-color: var(--cp-hair-active); }
+.cp-slot {
+  background: var(--cp-slot);
+  border: 1px solid var(--cp-hair);
+  border-radius: 10px;
+}
+
+/* STANDBY：本案未启用分支的置灰虚线态 */
+.cp-standby {
+  border: 1px dashed var(--cp-hair-standby);
+  background: var(--cp-standby-bg);
+  color: var(--cp-standby-fg);
+  border-radius: 10px;
+}
+
+/* ---------- 语义徽章 ---------- */
+.cp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.cp-badge--jade { color: var(--cp-jade); background: var(--cp-jade-bg); border-color: rgba(22, 121, 91, 0.22); }
+.cp-badge--bronze { color: var(--cp-bronze); background: var(--cp-bronze-bg); border-color: rgba(180, 120, 20, 0.28); }
+.cp-badge--amber { color: var(--cp-amber); background: var(--cp-amber-bg); border-color: rgba(217, 107, 39, 0.26); }
+.cp-badge--cinnabar { color: var(--cp-cinnabar); background: var(--cp-cinnabar-bg); border-color: rgba(201, 59, 43, 0.24); }
+.cp-badge--indigo { color: var(--cp-indigo); background: var(--cp-indigo-bg); border-color: rgba(46, 91, 255, 0.22); }
+.cp-badge--slate { color: var(--cp-slate); background: var(--cp-slate-bg); border-color: rgba(91, 100, 114, 0.2); }
+.cp-badge--standby { color: var(--cp-standby-fg); background: var(--cp-standby-bg); border-style: dashed; border-color: var(--cp-hair-standby); }
+
+/* 星位头像徽章（七颗星一色）*/
+.cp-star {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1;
+  flex: none;
+}
+.cp-star--tianshu { background: #292524; color: #fff; }
+.cp-star--tianxuan { background: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
+.cp-star--tianquan { background: #ffe4e6; color: #9f1239; border: 1px solid #fecdd3; }
+.cp-star--tianji { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+.cp-star--yuheng { background: #e0f2fe; color: #075985; border: 1px solid #bae6fd; }
+.cp-star--kaiyang { background: #ffedd5; color: #9a3412; border: 1px solid #fed7aa; }
+.cp-star--yaoguang { background: #ccfbf1; color: #115e59; border: 1px solid #99f6e4; }
+html[data-theme="dark"] .cp-star--tianshu { background: #f2f0ea; color: #1a1917; }
+
+/* ---------- 按钮 ---------- */
+.cp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  border: 1px solid var(--cp-hair);
+  background: var(--cp-surface);
+  color: var(--cp-body);
+  transition: border-color 0.18s var(--cp-motion), background 0.18s var(--cp-motion), color 0.18s var(--cp-motion);
+}
+.cp-btn:hover { border-color: var(--cp-hair-strong); background: var(--cp-canvas); }
+.cp-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.cp-btn--primary {
+  background: var(--cp-ink);
+  border-color: var(--cp-ink);
+  color: var(--cp-on-ink);
+}
+.cp-btn--primary:hover { background: #24231f; border-color: #24231f; }
+/* 低压暗色旁路按钮（人工介入改题 Override）*/
+.cp-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--cp-meta);
+  font-weight: 500;
+}
+.cp-btn--ghost:hover { background: rgba(20, 20, 19, 0.05); color: var(--cp-body); }
+
+/* ---------- 顶部指令舱 ---------- */
+.cp-topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 56px;
+  flex: none;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--cp-hair);
+  background: rgba(247, 246, 242, 0.86);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.cp-tabs { display: flex; align-items: center; gap: 2px; }
+.cp-tab {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cp-meta);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.18s var(--cp-motion), color 0.18s var(--cp-motion);
+}
+.cp-tab:hover { background: rgba(20, 20, 19, 0.05); color: var(--cp-body); }
+.cp-tab.is-on { background: var(--cp-ink); color: var(--cp-on-ink); }
+
+/* 命题直通发车栏 */
+.cp-launch {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  max-width: 620px;
+  height: 34px;
+  padding: 0 4px 0 12px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 10px;
+  background: var(--cp-surface);
+  transition: border-color 0.2s var(--cp-motion), box-shadow 0.2s var(--cp-motion);
+}
+.cp-launch:focus-within {
+  border-color: var(--cp-hair-active);
+  box-shadow: 0 0 0 3px rgba(180, 120, 20, 0.1);
+}
+.cp-launch input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--cp-ink);
+}
+.cp-launch input::placeholder { color: var(--cp-meta); }
+.cp-launch-kbd {
+  flex: none;
+  margin-right: 6px;
+  padding: 2px 5px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 5px;
+  background: var(--cp-slot);
+  color: var(--cp-meta);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* 交付模式三态分段胶囊 */
+.cp-seg {
+  display: inline-flex;
+  flex: none;
+  padding: 2px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 9px;
+  background: var(--cp-slot);
+}
+.cp-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cp-meta);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s var(--cp-motion), color 0.2s var(--cp-motion), border-color 0.2s var(--cp-motion);
+}
+.cp-seg-btn:hover { color: var(--cp-body); }
+/* 双出选中：鎏金高亮边框与底色 */
+.cp-seg-btn.is-on[data-mode="DUAL"] {
+  background: var(--cp-bronze-bg);
+  border-color: var(--cp-hair-active);
+  color: var(--cp-bronze);
+}
+.cp-seg-btn.is-on[data-mode="IMAGE_ONLY"] { background: var(--cp-surface); border-color: var(--cp-hair-strong); color: var(--cp-ink); }
+.cp-seg-btn.is-on[data-mode="VIDEO_ONLY"] { background: var(--cp-indigo-bg); border-color: rgba(46, 91, 255, 0.32); color: var(--cp-indigo); }
+
+/* ---------- 主区三栏 ---------- */
+.cp-body { display: flex; flex: 1; min-height: 0; }
+.cp-rail {
+  width: 272px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--cp-hair);
+  background: var(--cp-canvas);
+}
+.cp-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- 星轨 ---------- */
+.cp-orbit {
+  flex: none;
+  padding: 14px 20px 16px;
+  border-bottom: 1px solid var(--cp-hair);
+  background: var(--cp-surface);
+}
+.cp-orbit-head { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; }
+.cp-orbit-track { position: relative; }
+.cp-orbit-row { display: flex; align-items: stretch; }
+.cp-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 104px;
+  flex: none;
+  padding: 9px 6px 8px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 12px;
+  background: var(--cp-surface);
+  transition: border-color 0.3s var(--cp-motion), background 0.3s var(--cp-motion), transform 0.3s var(--cp-motion);
+}
+.cp-node:hover { transform: translateY(-1px); }
+.cp-node.is-done { border-color: rgba(22, 121, 91, 0.3); background: var(--cp-jade-bg); }
+.cp-node.is-cur { border-color: var(--cp-hair-active); background: var(--cp-bronze-bg); }
+.cp-node.is-idle { opacity: 0.62; }
+.cp-node-no {
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--cp-meta);
+}
+.cp-node.is-cur .cp-node-no { color: var(--cp-bronze); }
+.cp-node.is-done .cp-node-no { color: var(--cp-jade); }
+.cp-node-title { font-size: 11.5px; font-weight: 600; color: var(--cp-ink); letter-spacing: -0.01em; }
+.cp-node-sub { font-size: 9.5px; color: var(--cp-meta); text-align: center; line-height: 1.3; }
+.cp-node.is-cur .cp-node-title { color: var(--cp-bronze); }
+.cp-node.is-done .cp-node-title { color: var(--cp-jade); }
+
+/* 门禁角标（二审冻结锁）*/
+.cp-node-gate {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: 9px;
+  color: #fff;
+  border: 2px solid var(--cp-surface);
+}
+.cp-node-gate--second { background: var(--cp-indigo); }
+
+/* 星轨连线 */
+.cp-edge { display: flex; align-items: center; width: 26px; flex: none; }
+.cp-edge svg { display: block; overflow: visible; }
+.cp-edge-line { stroke: var(--cp-hair-strong); stroke-width: 1.5; fill: none; }
+.cp-edge-line.is-done { stroke: var(--cp-bronze); }
+/* 激活中的流转路径：鎏金光点流动 */
+.cp-edge-flow {
+  stroke: var(--cp-bronze);
+  stroke-width: 2;
+  fill: none;
+  stroke-dasharray: 5 22;
+  animation: cp-flow 1.6s linear infinite;
+}
+@keyframes cp-flow { to { stroke-dashoffset: -27; } }
+/* 自愈回环虚线：琥珀脉冲 */
+.cp-edge-loop {
+  stroke: var(--cp-amber);
+  stroke-width: 1.75;
+  fill: none;
+  stroke-dasharray: 5 4;
+  animation: cp-loop 1.1s ease-in-out infinite;
+}
+@keyframes cp-loop { 0%, 100% { opacity: 1; } 50% { opacity: 0.42; } }
+/* 未启用分支：静态细虚线 */
+.cp-edge-standby { stroke: var(--cp-hair-standby); stroke-width: 1.25; fill: none; stroke-dasharray: 3 4; }
+
+.cp-loop-tag {
+  position: absolute;
+  z-index: 5;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--cp-amber);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: var(--cp-shadow-hover);
+}
+
+/* 并行双轨 */
+.cp-par { display: flex; flex-direction: column; gap: 6px; width: 190px; flex: none; }
+.cp-par-node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 11px;
+  background: var(--cp-surface);
+  transition: border-color 0.3s var(--cp-motion), background 0.3s var(--cp-motion);
+}
+.cp-par-node.is-active { border-color: var(--cp-hair-active); background: var(--cp-bronze-bg); }
+.cp-par-node.is-done { border-color: rgba(22, 121, 91, 0.3); background: var(--cp-jade-bg); }
+.cp-par-node.is-standby { border-style: dashed; border-color: var(--cp-hair-standby); background: var(--cp-standby-bg); color: var(--cp-standby-fg); }
+.cp-par-node.is-idle { opacity: 0.62; }
+
+/* 双轨合流锁 */
+.cp-merge-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  border: 1px solid rgba(180, 120, 20, 0.3);
+  background: var(--cp-bronze-bg);
+  color: var(--cp-bronze);
+}
+.cp-merge-lock.is-ready { border-color: rgba(22, 121, 91, 0.32); background: var(--cp-jade-bg); color: var(--cp-jade); }
+
+/* ---------- 决策遥测舱 Bento ---------- */
+.cp-bento { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 16px 20px; }
+.cp-panel { display: flex; flex-direction: column; padding: 16px; }
+.cp-panel-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+
+/* 七轴评分条 */
+.cp-axis { display: flex; align-items: center; gap: 9px; }
+.cp-axis-label { width: 62px; flex: none; font-size: 11.5px; color: var(--cp-body); }
+.cp-axis-track { position: relative; flex: 1; height: 5px; border-radius: 999px; background: rgba(20, 20, 19, 0.07); overflow: hidden; }
+.cp-axis-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; transition: width 0.4s var(--cp-motion); }
+.cp-axis-fill--jade { background: var(--cp-jade); }
+.cp-axis-fill--bronze { background: var(--cp-bronze); }
+.cp-axis-fill--cinnabar { background: var(--cp-cinnabar); }
+.cp-axis-val { width: 26px; flex: none; text-align: right; font-size: 11px; font-weight: 700; font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.cp-axis-val--jade { color: var(--cp-jade); }
+.cp-axis-val--bronze { color: var(--cp-bronze); }
+.cp-axis-val--cinnabar { color: var(--cp-cinnabar); }
+
+/* 候选标题行 */
+.cp-cand {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--cp-hair);
+  border-radius: 11px;
+  background: var(--cp-canvas);
+  cursor: pointer;
+  transition: border-color 0.2s var(--cp-motion), background 0.2s var(--cp-motion);
+}
+.cp-cand:hover { border-color: var(--cp-hair-active); }
+.cp-cand.is-champ { border-color: var(--cp-hair-active); background: var(--cp-bronze-bg); }
+.cp-cand-title { font-size: 12.5px; font-weight: 550; color: var(--cp-ink); line-height: 1.45; }
+
+/* 判词引文块 */
+.cp-quote {
+  padding: 11px 12px;
+  border: 1px solid var(--cp-hair);
+  border-left: 2px solid var(--cp-cinnabar);
+  border-radius: 0 10px 10px 0;
+  background: var(--cp-canvas);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--cp-body);
+}
+
+/* 自愈终端 */
+.cp-term {
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: var(--cp-slot);
+  border: 1px solid var(--cp-hair);
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--cp-body);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cp-term-line { display: block; }
+.cp-term-prompt { color: var(--cp-bronze); font-weight: 700; }
+.cp-term-ok { color: var(--cp-jade); }
+.cp-term-warn { color: var(--cp-amber); }
+.cp-term-err { color: var(--cp-cinnabar); }
+
+/* ---------- 双通道发布包预览带 ---------- */
+.cp-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 0 20px 18px; }
+.cp-slotcard { display: flex; flex-direction: column; gap: 9px; padding: 14px; }
+.cp-asset-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--cp-body); }
+.cp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--cp-hair);
+  background: var(--cp-canvas);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--cp-meta);
+  white-space: nowrap;
+}
+.cp-chip--jade { color: var(--cp-jade); background: var(--cp-jade-bg); border-color: rgba(22, 121, 91, 0.22); }
+.cp-chip--bronze { color: var(--cp-bronze); background: var(--cp-bronze-bg); border-color: rgba(180, 120, 20, 0.26); }
+.cp-chip--cinnabar { color: var(--cp-cinnabar); background: var(--cp-cinnabar-bg); border-color: rgba(201, 59, 43, 0.22); }
+
+/* ---------- 左侧卷宗 / Watchdog ---------- */
+.cp-rail-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px 8px; }
+.cp-rail-title { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cp-meta); }
+.cp-arch-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 3px; }
+.cp-arch {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.18s var(--cp-motion), border-color 0.18s var(--cp-motion);
+}
+.cp-arch:hover { background: rgba(20, 20, 19, 0.04); }
+.cp-arch.is-on { border-color: var(--cp-hair-active); background: var(--cp-surface); box-shadow: var(--cp-shadow-hover); }
+.cp-arch-top { display: flex; align-items: center; gap: 6px; }
+.cp-arch-name { font-size: 12.5px; font-weight: 600; color: var(--cp-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-arch-id { margin-left: auto; flex: none; font-size: 10px; color: var(--cp-meta); font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.cp-arch-row2 { display: flex; align-items: center; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
+.cp-arch-note { margin-top: 5px; font-size: 10.5px; color: var(--cp-meta); line-height: 1.4; }
+
+.cp-watch { flex: none; padding: 12px 16px 14px; border-top: 1px solid var(--cp-hair); }
+.cp-watch-row { display: flex; align-items: flex-start; gap: 7px; padding: 6px 0; font-size: 11px; color: var(--cp-body); line-height: 1.45; }
+.cp-watch-receipt { font-size: 10px; color: var(--cp-meta); line-height: 1.45; margin-top: 2px; }
+
+/* 顶栏遥测胶囊 */
+.cp-tele { display: flex; align-items: center; gap: 6px; }
+.cp-tele-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--cp-hair);
+  background: var(--cp-surface);
+  font-size: 11px;
+  color: var(--cp-meta);
+  white-space: nowrap;
+}
+.cp-tele-pill b { color: var(--cp-ink); font-weight: 700; font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.cp-tele-pill--warn { border-color: rgba(217, 107, 39, 0.32); background: var(--cp-amber-bg); color: var(--cp-amber); }
+.cp-tele-pill--warn b { color: var(--cp-amber); }
+.cp-tele-pill--crit { border-color: rgba(201, 59, 43, 0.3); background: var(--cp-cinnabar-bg); color: var(--cp-cinnabar); }
+.cp-tele-pill--crit b { color: var(--cp-cinnabar); }
+
+.cp-dot { width: 6px; height: 6px; border-radius: 999px; flex: none; }
+.cp-dot--jade { background: var(--cp-jade); }
+.cp-dot--bronze { background: var(--cp-bronze); }
+.cp-dot--amber { background: var(--cp-amber); }
+.cp-dot--cinnabar { background: var(--cp-cinnabar); }
+.cp-dot--indigo { background: var(--cp-indigo); }
+.cp-dot--slate { background: var(--cp-slate); }
+
+/* 空槽提示（未启用分支的克制空态）*/
+.cp-empty-slot {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 22px 14px;
+  border: 1px dashed var(--cp-hair-standby);
+  border-radius: 11px;
+  background: var(--cp-standby-bg);
+  color: var(--cp-standby-fg);
+  font-size: 11.5px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+/* 深色主题覆写（沿用现有 data-theme 机制）*/
+/* 选择器同时挂 .pl-root 与 .cp-root：v6 版式渲染前者，旧版式（已不挂载）渲染后者。
+   漏掉 .pl-root 的后果是深色下整页还是浅色——变量全部继承不到。 */
+html[data-theme="dark"] .pl-root,
+html[data-theme="dark"] .cp-root,
+html[data-theme="dark"] .ca-root,
+html[data-theme="dark"] .console-topbar,
+html[data-theme="dark"] .window-strip {
+  --cp-canvas: #1a1917;
+  --cp-surface: #221f1c;
+  /* 浮层实底（同浅色那条注释）：深色下要比玻璃底亮一档、且完全不透，
+     否则明细行底下会透出泳道格子的星名与状态字。 */
+  --cp-pop: #262b36;
+  --cp-slot: #191715;
+  --cp-standby-bg: #1e1c19;
+  --cp-hair: rgba(240, 238, 232, 0.1);
+  --cp-hair-strong: rgba(240, 238, 232, 0.18);
+  --cp-hair-active: rgba(214, 168, 74, 0.5);
+  --cp-hair-standby: rgba(240, 238, 232, 0.2);
+  --cp-ink: #f2f0ea;
+  --cp-on-ink: #14171f;                 /* 深色下 ink 是近白，字要压深 */
+  --cp-body: #cfcbc2;
+  --cp-meta: #8f8b82;
+  --cp-jade: #4fbf9a;    --cp-jade-bg: rgba(22, 121, 91, 0.2);
+  --cp-bronze: #d9a94a;  --cp-bronze-bg: rgba(180, 120, 20, 0.22);
+  --cp-amber: #e5894a;   --cp-amber-bg: rgba(217, 107, 39, 0.2);
+  --cp-cinnabar: #e5695a; --cp-cinnabar-bg: rgba(201, 59, 43, 0.22);
+  --cp-indigo: #7d9bff;  --cp-indigo-bg: rgba(46, 91, 255, 0.2);
+  --cp-slate: #9aa3b2;   --cp-slate-bg: rgba(91, 100, 114, 0.22);
+  --cp-standby-fg: rgba(240, 238, 232, 0.42);
+  --cp-shadow-hover: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+  --cp-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -6px rgba(0, 0, 0, 0.45);
+  background: var(--cp-canvas);
+  color: var(--cp-ink);
+}
+html[data-theme="dark"] .cp-topbar { background: rgba(26, 25, 23, 0.86); }
+html[data-theme="dark"] .cp-tab.is-on { background: var(--cp-ink); color: #1a1917; }
+html[data-theme="dark"] .cp-btn--primary { background: var(--cp-ink); border-color: var(--cp-ink); color: #1a1917; }
+html[data-theme="dark"] .cp-btn--primary:hover { background: #fff; border-color: #fff; }
+html[data-theme="dark"] .cp-node,
+html[data-theme="dark"] .cp-par-node { background: var(--cp-surface); }
+html[data-theme="dark"] .cp-arch.is-on { background: var(--cp-surface); }
+

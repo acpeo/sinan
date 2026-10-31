@@ -1,0 +1,2292 @@
+/* 完整视图外观开关与暗色主题覆盖（自 styles.css 第 6108–8398 行切分，顺序保持） */
+/* ============ 完整视图外观开关（设置页分段控件） ============
+   新类，浅暗两态共用；暗色差异在下方 data-theme 块里覆盖。 */
+.theme-toggle {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 3px;
+  background: rgba(31, 33, 36, 0.05);
+  border-radius: 12px;
+}
+
+.theme-toggle button {
+  min-height: 34px;
+  padding: 0 18px;
+  color: #4d4f53;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition-property: color, background-color, box-shadow;
+  transition-duration: 240ms;
+  transition-timing-function: var(--motion);
+}
+
+.theme-toggle button:hover { color: #1f2022; }
+
+.theme-toggle button.is-selected {
+  color: #202124;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(28, 30, 33, 0.1), 0 0 0 1px rgba(31, 33, 36, 0.04);
+}
+
+/* ================================================================
+   完整视图暗色主题
+   仅作用于展开视图（.app-shell 子树）及其来源抽屉；data-theme 只挂在
+   展开窗口上（见 App.jsx 的门控），故紧凑小插件永不进入此分支。
+   浅色规则不改动一行，这里全部是追加覆盖，把已验收的浅色态零风险留存。
+   ================================================================ */
+:root[data-theme="dark"] {
+  --canvas: #131417;
+  --surface: #1c1e22;
+  --ink: #e7e8eb;
+  --muted: #9a9ca2;
+  /* 品牌/语义色在深底上提亮一档，保证对比度。 */
+  --blue: #6f9bf0;
+  --green: #7cc069;
+  --warn: #dca648;
+  --critical: #ec8468;
+  /* 项目分类色的暗色档：同一组色相按暗底重新取步，非直接翻转。 */
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-6: #008300;
+  --viz-other: rgba(255, 255, 255, 0.35);
+
+  /* 展开视图专用的暗色 token：文字梯度、卡片层级、描边与阴影。 */
+  --d-strong: #f3f4f6;
+  --d-ink: #e7e8eb;
+  --d-ink-2: #cdcfd4;
+  --d-ink-3: #adafb5;
+  --d-muted: #94969c;
+  --d-faint: #7c7e84;
+  --d-card: #1c1e22;
+  --d-raised: #24272c;
+  --d-input: #202329;
+  --d-sunken: rgba(255, 255, 255, 0.055);
+  --d-hairline: rgba(255, 255, 255, 0.09);
+  --d-hairline-2: rgba(255, 255, 255, 0.14);
+  --d-card-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 10px 26px rgba(0, 0, 0, 0.42),
+    inset 0 1px rgba(255, 255, 255, 0.045);
+}
+
+/* --- 外壳与骨架 --- */
+:root[data-theme="dark"] .app-shell {
+  color: var(--d-ink);
+  background:
+    radial-gradient(circle at 84% 14%, rgba(255, 255, 255, 0.035), transparent 30%),
+    var(--canvas);
+}
+
+:root[data-theme="dark"] .sidebar {
+  background: rgba(255, 255, 255, 0.028);
+  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="dark"] .wordmark { color: var(--d-strong); }
+
+:root[data-theme="dark"] .nav-button { color: #85878d; }
+:root[data-theme="dark"] .nav-button:hover {
+  color: var(--d-ink-2);
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .nav-button--active:hover { background: rgba(111, 155, 240, 0.1); }
+
+:root[data-theme="dark"] .tooltip-label {
+  background: rgba(70, 72, 80, 0.96);
+}
+
+:root[data-theme="dark"] .source-status { color: var(--d-muted); }
+:root[data-theme="dark"] .source-status:hover { color: var(--d-ink-2); }
+:root[data-theme="dark"] .source-status small { color: var(--d-faint); }
+
+/* --- 周期切换悬浮条 --- */
+:root[data-theme="dark"] .period-control {
+  background: rgba(28, 30, 34, 0.82);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 9px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .period-control button { color: var(--d-ink-3); }
+:root[data-theme="dark"] .period-control button:hover { color: var(--d-strong); }
+:root[data-theme="dark"] .period-control button.is-selected {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 5px 18px rgba(0, 0, 0, 0.2);
+}
+
+/* --- 概览主区 --- */
+:root[data-theme="dark"] .section-kicker { color: var(--d-strong); }
+:root[data-theme="dark"] .indexing-note {
+  background: rgba(111, 155, 240, 0.13);
+  color: #a8c2f2;
+}
+:root[data-theme="dark"] .metric-line h1 { color: var(--d-strong); }
+:root[data-theme="dark"] .metric-line > span { color: var(--d-ink-2); }
+:root[data-theme="dark"] .comparison { color: var(--d-muted); }
+:root[data-theme="dark"] .axis-caption { color: var(--d-muted); }
+
+/* --- 图表 --- */
+:root[data-theme="dark"] .chart-loading { color: var(--d-faint); }
+:root[data-theme="dark"] .chart-state {
+  color: var(--d-muted);
+  border-color: var(--d-hairline);
+}
+:root[data-theme="dark"] .chart-state h2 { color: var(--d-ink-2); }
+:root[data-theme="dark"] .u-cursor-x { border-right-color: rgba(255, 255, 255, 0.28); }
+:root[data-theme="dark"] .chart-tooltip {
+  background: var(--d-raised);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 14px 38px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="dark"] .chart-tooltip span { color: var(--d-muted); }
+:root[data-theme="dark"] .chart-legend { color: var(--d-muted); }
+
+/* --- 拆分卡片 --- */
+:root[data-theme="dark"] .breakdown-card {
+  background: var(--d-card);
+  box-shadow: var(--d-card-shadow);
+}
+:root[data-theme="dark"] .breakdown-card h2 { color: var(--d-ink-2); }
+:root[data-theme="dark"] .comp-legend span { color: var(--d-ink-3); }
+:root[data-theme="dark"] .comp-legend em,
+:root[data-theme="dark"] .model-list em { color: var(--d-muted); }
+:root[data-theme="dark"] .model-name { color: var(--d-ink-3); }
+:root[data-theme="dark"] .model-track { background: var(--d-sunken); }
+:root[data-theme="dark"] .cost-total strong { color: var(--d-strong); }
+:root[data-theme="dark"] .cost-total span { color: var(--d-muted); }
+:root[data-theme="dark"] .cost-note { color: var(--d-faint); }
+
+/* --- 右栏检查器与配额 --- */
+:root[data-theme="dark"] .inspector {
+  background: var(--d-card);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 20px 56px rgba(0, 0, 0, 0.5),
+    inset 0 1px rgba(255, 255, 255, 0.045);
+}
+:root[data-theme="dark"] .eyebrow { color: var(--d-muted); }
+:root[data-theme="dark"] .quota-group {
+  background: var(--d-card);
+  box-shadow: var(--d-card-shadow);
+}
+:root[data-theme="dark"] .quota-group > header small { color: var(--d-muted); }
+:root[data-theme="dark"] .quota-bar-row small { color: var(--d-muted); }
+:root[data-theme="dark"] .quota-bar-row em { color: var(--d-ink-2); }
+:root[data-theme="dark"] .quota-bar-row > span { color: var(--d-faint); }
+:root[data-theme="dark"] .quota-bar-row--warn em { color: var(--warn); }
+:root[data-theme="dark"] .quota-bar-row--critical em { color: var(--critical); }
+:root[data-theme="dark"] .quota-pace { color: var(--d-faint); }
+:root[data-theme="dark"] .quota-pace--behind { color: var(--warn); }
+
+/* --- Agent 列表 --- */
+:root[data-theme="dark"] .agent-row {
+  color: var(--d-ink);
+  box-shadow: 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .agent-row:hover,
+:root[data-theme="dark"] .agent-row--selected { background: rgba(255, 255, 255, 0.05); }
+:root[data-theme="dark"] .agent-copy small { color: var(--d-muted); }
+:root[data-theme="dark"] .agent-share { color: var(--d-muted); }
+:root[data-theme="dark"] .agent-row > svg { color: var(--d-muted); }
+:root[data-theme="dark"] .traceability { color: var(--d-muted); }
+:root[data-theme="dark"] .traceability > span { color: var(--d-ink-3); }
+:root[data-theme="dark"] .traceability small { color: var(--d-faint); }
+
+/* --- 来源抽屉（展开态弹出；紧凑态弹出的同一抽屉不带 data-theme，保持浅色） --- */
+:root[data-theme="dark"] .drawer-backdrop { background: rgba(0, 0, 0, 0.5); }
+:root[data-theme="dark"] .source-drawer {
+  background: #1a1c20;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 34px 80px rgba(0, 0, 0, 0.6),
+    inset 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .source-drawer h2 { color: var(--d-strong); }
+:root[data-theme="dark"] .icon-button {
+  color: var(--d-ink-3);
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .icon-button:hover { background: rgba(255, 255, 255, 0.1); }
+:root[data-theme="dark"] .source-rescan-button {
+  color: var(--d-ink-3);
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .source-rescan-button:hover:not(:disabled) {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .source-repair {
+  background: rgba(111, 155, 240, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(111, 155, 240, 0.1);
+}
+:root[data-theme="dark"] .source-repair--warning {
+  background: rgba(220, 166, 72, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(220, 166, 72, 0.13);
+}
+:root[data-theme="dark"] .source-repair-icon {
+  color: var(--warn);
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .source-repair strong { color: var(--d-ink-2); }
+:root[data-theme="dark"] .source-repair p { color: var(--d-muted); }
+:root[data-theme="dark"] .source-list {
+  box-shadow: 0 -1px rgba(255, 255, 255, 0.08), 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .source-item { box-shadow: 0 1px rgba(255, 255, 255, 0.07); }
+:root[data-theme="dark"] .source-item:last-child { box-shadow: none; }
+:root[data-theme="dark"] .source-item-icon {
+  color: var(--blue);
+  background: rgba(111, 155, 240, 0.14);
+}
+:root[data-theme="dark"] .source-item p { color: var(--d-muted); }
+:root[data-theme="dark"] .quality-badge {
+  color: var(--d-ink-3);
+  background: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme="dark"] .quality-badge--official { color: var(--blue); background: rgba(111, 155, 240, 0.16); }
+:root[data-theme="dark"] .quality-badge--exact { color: #83c471; background: rgba(124, 192, 105, 0.14); }
+:root[data-theme="dark"] .quality-badge--partial { color: var(--warn); background: rgba(220, 166, 72, 0.15); }
+:root[data-theme="dark"] .quality-badge--unavailable { color: #e6906f; background: rgba(230, 144, 111, 0.14); }
+:root[data-theme="dark"] .privacy-note {
+  color: var(--d-muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* --- 账本重建卡 --- */
+:root[data-theme="dark"] .ledger-recovery {
+  background: rgba(111, 155, 240, 0.06);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), inset 0 1px rgba(255, 255, 255, 0.04);
+}
+:root[data-theme="dark"] .ledger-recovery-icon {
+  color: var(--d-ink-3);
+  background: var(--d-raised);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .ledger-recovery h3 { color: var(--d-ink-2); }
+:root[data-theme="dark"] .ledger-recovery-heading p,
+:root[data-theme="dark"] .ledger-confirmation p { color: var(--d-muted); }
+:root[data-theme="dark"] .ledger-demo-note {
+  color: #e0c67c;
+  background: rgba(220, 166, 72, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(220, 166, 72, 0.14);
+}
+:root[data-theme="dark"] .ledger-button {
+  color: var(--d-ink-2);
+  background: var(--d-raised);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+:root[data-theme="dark"] .ledger-button:hover:not(:disabled) {
+  color: var(--d-strong);
+  background: #2c3037;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.09);
+}
+:root[data-theme="dark"] .ledger-button--primary {
+  color: #fff;
+  background: #3a63c9;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .ledger-button--primary:hover:not(:disabled) {
+  color: #fff;
+  background: #4a72d6;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+}
+:root[data-theme="dark"] .ledger-confirmation {
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .ledger-confirmation strong { color: var(--d-ink-2); }
+:root[data-theme="dark"] .ledger-rebuild-status { color: var(--d-muted); }
+:root[data-theme="dark"] .ledger-rebuild-status--success { color: #83c471; }
+:root[data-theme="dark"] .ledger-rebuild-status--error { color: #e6906f; }
+
+/* --- 设置页 --- */
+:root[data-theme="dark"] .settings-header p { color: var(--d-muted); }
+:root[data-theme="dark"] .settings-header p strong { color: var(--d-ink-2); }
+:root[data-theme="dark"] .settings-demo-note {
+  color: #e0c67c;
+  background: rgba(220, 166, 72, 0.13);
+}
+:root[data-theme="dark"] .settings-tabs { background: rgba(255, 255, 255, 0.06); }
+:root[data-theme="dark"] .settings-tabs button { color: var(--d-muted); }
+:root[data-theme="dark"] .settings-tabs button:hover { color: var(--d-ink-2); }
+:root[data-theme="dark"] .settings-tabs button.is-selected {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .settings-card {
+  background: var(--d-card);
+  box-shadow: var(--d-card-shadow);
+}
+:root[data-theme="dark"] .settings-subsection { border-top-color: var(--d-hairline); }
+:root[data-theme="dark"] .settings-card label { color: var(--d-ink-3); }
+:root[data-theme="dark"] .settings-directory-row input {
+  color: var(--d-ink);
+  background: var(--d-input);
+  border-color: var(--d-hairline-2);
+}
+:root[data-theme="dark"] .settings-feedback--success { color: #83c471; }
+:root[data-theme="dark"] .settings-feedback--error { color: #e6906f; }
+:root[data-theme="dark"] .settings-status dt { color: var(--d-faint); }
+:root[data-theme="dark"] .settings-error-text { color: #e6906f; }
+:root[data-theme="dark"] .settings-muted { color: var(--d-faint); }
+:root[data-theme="dark"] .settings-about a:hover { color: var(--d-muted); }
+:root[data-theme="dark"] .settings-guide { color: var(--d-muted); }
+:root[data-theme="dark"] .settings-guide summary { color: #7fabef; }
+:root[data-theme="dark"] .settings-agent-missing summary { color: var(--d-muted); }
+:root[data-theme="dark"] .settings-device-list li {
+  background: var(--d-raised);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .settings-device-list span { color: var(--d-faint); }
+:root[data-theme="dark"] .settings-device-list small { color: var(--d-muted); }
+:root[data-theme="dark"] .glass-slider-row em { color: var(--d-ink-2); }
+:root[data-theme="dark"] .settings-agent-toggle label {
+  background: var(--d-raised);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .desktop-widget-setting-toggle {
+  color: var(--d-ink-3);
+  background: var(--d-raised);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .desktop-widget-setting-toggle > span { background: rgba(255, 255, 255, 0.2); }
+:root[data-theme="dark"] .desktop-widget-setting-toggle.is-enabled { color: #9ec1f5; background: rgba(74, 132, 222, 0.15); }
+:root[data-theme="dark"] .desktop-widget-setting-toggle.is-enabled > span { background: #4f86dd; }
+:root[data-theme="dark"] .settings-agent-move {
+  color: var(--d-ink-2);
+  background: var(--d-raised);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .settings-agent-move:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* --- 主题分段控件（暗色） --- */
+:root[data-theme="dark"] .theme-toggle { background: var(--d-sunken); }
+:root[data-theme="dark"] .theme-toggle button { color: var(--d-ink-3); }
+:root[data-theme="dark"] .theme-toggle button:hover { color: var(--d-strong); }
+:root[data-theme="dark"] .theme-toggle button.is-selected {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* --- 用量 / 会话页 --- */
+:root[data-theme="dark"] .session-group h2 { color: var(--d-muted); }
+:root[data-theme="dark"] .session-row { box-shadow: 0 1px rgba(255, 255, 255, 0.07); }
+:root[data-theme="dark"] .session-row:last-child { box-shadow: none; }
+:root[data-theme="dark"] .project-row { box-shadow: 0 1px rgba(255, 255, 255, 0.07); }
+:root[data-theme="dark"] .project-row:last-of-type { box-shadow: none; }
+:root[data-theme="dark"] .project-row:hover { background: rgba(255, 255, 255, 0.045); }
+:root[data-theme="dark"] .project-row > em { color: var(--d-strong); }
+:root[data-theme="dark"] .project-row .session-copy strong svg { color: var(--d-muted); }
+:root[data-theme="dark"] .project-bar { background: rgba(255, 255, 255, 0.09); }
+:root[data-theme="dark"] .project-bar i { background: rgba(255, 255, 255, 0.42); }
+:root[data-theme="dark"] .session-board .session-group h3 { color: var(--d-muted); }
+:root[data-theme="dark"] .project-actions button { color: var(--d-muted); }
+:root[data-theme="dark"] .project-actions button:hover {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .project-actions button.is-active { color: var(--d-strong); }
+:root[data-theme="dark"] .usage-note { color: var(--d-muted); }
+:root[data-theme="dark"] .usage-note button {
+  color: var(--d-ink-2);
+  background: rgba(255, 255, 255, 0.09);
+}
+:root[data-theme="dark"] .usage-note button:hover { background: rgba(255, 255, 255, 0.14); }
+:root[data-theme="dark"] .project-expand {
+  color: var(--d-ink-3);
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .project-expand:hover {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .rules-card {
+  background: var(--d-card);
+  box-shadow: var(--d-card-shadow);
+}
+:root[data-theme="dark"] .rules-card-head h2 { color: var(--d-strong); }
+:root[data-theme="dark"] .rules-card > p { color: var(--d-muted); }
+:root[data-theme="dark"] .rules-close { color: var(--d-muted); }
+:root[data-theme="dark"] .rules-close:hover {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .rules-add input {
+  color: var(--d-ink-2);
+  background: var(--d-sunken);
+  border-color: var(--d-hairline);
+}
+:root[data-theme="dark"] .rules-add input:focus {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+:root[data-theme="dark"] .rules-group h3 { color: var(--d-muted); }
+:root[data-theme="dark"] .rules-group li { color: var(--d-ink-2); }
+:root[data-theme="dark"] .rules-group li:hover { background: rgba(255, 255, 255, 0.05); }
+:root[data-theme="dark"] .rules-group li svg { color: var(--d-muted); }
+:root[data-theme="dark"] .rules-group li button { color: var(--d-muted); }
+:root[data-theme="dark"] .rules-group li button:hover {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .rules-toggle--open { background: rgba(255, 255, 255, 0.12); }
+:root[data-theme="dark"] .detail-back { color: var(--d-ink-3); }
+:root[data-theme="dark"] .detail-back:hover { color: var(--d-strong); }
+:root[data-theme="dark"] .project-open { color: rgba(255, 255, 255, 0.2); }
+:root[data-theme="dark"] .project-row:hover .project-open { color: var(--d-ink-2); }
+:root[data-theme="dark"] .project-overview-figures strong { color: var(--d-strong); }
+:root[data-theme="dark"] .project-overview-figures span { color: var(--d-muted); }
+:root[data-theme="dark"] .project-overview-figures small { color: var(--d-muted); }
+:root[data-theme="dark"] .project-overview-figures small button {
+  color: var(--d-muted);
+  border-bottom-color: rgba(255, 255, 255, 0.25);
+}
+:root[data-theme="dark"] .project-overview-figures small button:hover { color: var(--d-strong); }
+:root[data-theme="dark"] .project-trend-list li:hover { background: rgba(255, 255, 255, 0.04); }
+:root[data-theme="dark"] .project-trend-name { color: var(--d-strong); }
+:root[data-theme="dark"] .project-trend-name small { color: var(--d-muted); }
+:root[data-theme="dark"] .project-sparkline { color: var(--d-ink-3); }
+:root[data-theme="dark"] .project-trend-list li > em { color: var(--d-strong); }
+:root[data-theme="dark"] .trend-up { color: var(--d-ink-2); }
+:root[data-theme="dark"] .trend-down { color: var(--d-muted); }
+:root[data-theme="dark"] .trend-flat { color: rgba(255, 255, 255, 0.3); }
+:root[data-theme="dark"] .session-id-chip {
+  color: var(--d-muted);
+  background: var(--d-sunken);
+}
+:root[data-theme="dark"] .session-id-chip:hover {
+  color: var(--d-ink-2);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .session-id-chip--copied { color: #83c471; background: rgba(124, 192, 105, 0.16); }
+:root[data-theme="dark"] .session-copy small { color: var(--d-muted); }
+:root[data-theme="dark"] .session-row > em { color: var(--d-ink-2); }
+:root[data-theme="dark"] .usage-filter { color: var(--d-muted); }
+:root[data-theme="dark"] .usage-toolbar select {
+  color: var(--d-ink);
+  background: var(--d-input);
+  border-color: var(--d-hairline-2);
+}
+
+/* --- 报告页 --- */
+:root[data-theme="dark"] .report-stats strong { color: var(--d-strong); }
+:root[data-theme="dark"] .report-stats span { color: var(--d-muted); }
+:root[data-theme="dark"] .report-card {
+  background: var(--d-card);
+  box-shadow: var(--d-card-shadow);
+}
+:root[data-theme="dark"] .report-card h2 { color: var(--d-ink-2); }
+
+/* 热力图：深底上把序列反相为"越用越亮"，否则深蓝在深底上读不出强度。 */
+:root[data-theme="dark"] .heat-0 { background: rgba(255, 255, 255, 0.06); }
+:root[data-theme="dark"] .heat-1 { background: #22406e; }
+:root[data-theme="dark"] .heat-2 { background: #2f60a8; }
+:root[data-theme="dark"] .heat-3 { background: #4f86dd; }
+:root[data-theme="dark"] .heat-4 { background: #86b0f2; }
+:root[data-theme="dark"] .heatmap-months { color: var(--d-faint); }
+:root[data-theme="dark"] .heatmap-scale { color: var(--d-faint); }
+
+:root[data-theme="dark"] .report-view-toggle { background: var(--d-sunken); }
+:root[data-theme="dark"] .report-view-toggle button { color: var(--d-ink-3); }
+:root[data-theme="dark"] .report-view-toggle button.is-selected {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .trend-axis { stroke: rgba(255, 255, 255, 0.16); }
+:root[data-theme="dark"] .trend-grid { stroke: rgba(255, 255, 255, 0.1); }
+:root[data-theme="dark"] .trend-label { fill: var(--d-faint); stroke: var(--d-card); }
+:root[data-theme="dark"] .donut-total { fill: var(--d-strong); }
+:root[data-theme="dark"] .donut-caption { fill: var(--d-faint); }
+
+/* --- 历史索引横幅 --- */
+:root[data-theme="dark"] .indexing-banner {
+  border-color: var(--d-hairline);
+  background: var(--d-raised);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--d-muted);
+}
+:root[data-theme="dark"] .indexing-banner strong { color: var(--d-strong); }
+
+/* --- 空状态 --- */
+:root[data-theme="dark"] .empty-section > span {
+  color: var(--blue);
+  background: rgba(111, 155, 240, 0.12);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .empty-section p { color: var(--d-muted); }
+:root[data-theme="dark"] .empty-section button { color: #fff; background: #3a63c9; }
+
+/* --- 展开窗口自绘按钮条与刷新按钮（仅 Windows；macOS 完整视图用原生标题栏） --- */
+:root[data-theme="dark"] .expanded-refresh {
+  color: var(--d-muted);
+  background: rgba(30, 32, 36, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 4px 14px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .expanded-refresh:hover {
+  color: var(--d-strong);
+  background: rgba(30, 32, 36, 0.9);
+}
+:root[data-theme="dark"] .expanded-refresh:disabled:hover { color: var(--d-muted); }
+:root[data-theme="dark"] .theme-quick-menu {
+  background: rgba(32, 34, 39, 0.98);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.09),
+    0 12px 30px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="dark"] .theme-quick-menu button { color: var(--d-ink-2); }
+:root[data-theme="dark"] .theme-quick-menu button:hover { background: rgba(255, 255, 255, 0.08); }
+:root[data-theme="dark"] .theme-quick-menu button.is-selected { color: var(--d-accent, #7fabef); }
+
+:root[data-theme="dark"] .window-actions--expanded {
+  background: rgba(30, 32, 36, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 8px 22px rgba(0, 0, 0, 0.4),
+    inset 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .window-action { color: var(--d-muted); }
+:root[data-theme="dark"] .window-action:hover {
+  color: var(--d-strong);
+  background: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme="dark"] .window-action--active,
+:root[data-theme="dark"] .window-action--active:hover {
+  color: var(--blue);
+  background: rgba(111, 155, 240, 0.16);
+}
+:root[data-theme="dark"] .window-action--close:hover {
+  color: #e8796d;
+  background: rgba(232, 121, 109, 0.16);
+}
+
+/* --- 滚动条 --- */
+:root[data-theme="dark"] .dashboard,
+:root[data-theme="dark"] .inspector-zone,
+:root[data-theme="dark"] .settings-section,
+:root[data-theme="dark"] .reports-section,
+:root[data-theme="dark"] .usage-section {
+  scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
+}
+
+/* ── 小组件 · 任务追踪卡片（Gateway 任务 + Agent 活动） ───────────── */
+
+.widget-tasks {
+  margin: 0;
+  padding: 8px 2px 9px;
+  border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* 深色玻璃档补白墨：任务卡片直接坐在壳上，不套列表的浅色卡底，
+   继承的深墨在深色玻璃上不可见（2026-10-02 真机截图确认）。
+   白字档（--glass-ink-light）同补白墨：纱加浓后白字才成立；此前该档漏补，
+   任务行继承 :root 深墨坐在暗纱上看不清（2026-10-06 玻璃壳体检报告④）。
+   浅色档（--glass-light）白霜配深墨，维持排除不动。 */
+.widget-shell--transparent:not(.widget-shell--glass-light) .widget-tasks {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.widget-tasks-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.widget-tasks-head strong {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.widget-tasks-head:hover strong {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.widget-tasks-count {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.68;
+  font-variant-numeric: tabular-nums;
+}
+
+.widget-task-row {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 9px;
+  min-height: 46px;
+  padding: 6px 11px 6px 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+  box-shadow: 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.widget-task-row:last-of-type {
+  box-shadow: none;
+}
+
+/* 状态色竖条与 Agent 行的 .widget-agent-accent 同一语言：
+   3px 宽、scaleY(0.4) 收成小短纤（视觉 ~13px）、48% 透明度——
+   是个指示记号，不是一整根色柱（2026-10-02 用户圈红纠偏）。 */
+.widget-task-accent {
+  width: 3px;
+  height: 34px;
+  border-radius: 0 3px 3px 0;
+  opacity: 0.48;
+  transform: scaleY(0.4);
+  background: rgba(255, 255, 255, 0.24);
+  justify-self: start;
+}
+
+/* 状态色取深色 HUD 既有 token：绿 #6fc49a / warn 黄 #e8b04a / critical 红 #ec7a63 */
+.widget-task-accent--running { background: #6fc49a; }
+.widget-task-accent--queued { background: #e8b04a; }
+.widget-task-accent--failed { background: #ec7a63; }
+/* 良性未跑（六案②）：面板行首色条灰显，不染红 */
+.widget-task-accent--skipped { background: #8b93a1; opacity: 0.55; }
+
+.widget-task-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.widget-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 560;
+}
+
+.widget-task-row small {
+  flex: none;
+  font-size: 11px;
+  font-weight: 560;
+  opacity: 0.58;
+  font-variant-numeric: tabular-nums;
+}
+
+.widget-tasks-empty {
+  margin: 3px 0 0;
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.widget-tasks-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 6px;
+}
+
+.widget-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 10.5px;
+  opacity: 0.9;
+}
+
+.widget-agent-chip .agent-status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.widget-agent-chip--stale {
+  opacity: 0.5;
+}
+
+/* ── 独立任务小组件窗口（?view=tasks）────────────────────────────────
+   外壳复用 .widget-* 全套玻璃 token；这里只补内容区的专属布局。 */
+
+/* 展开面板跟随窗口尺寸（用户可拖拽调宽高，尺寸记忆在 metrik:tasksPanelSize）：
+   .widget-shell 的 320 定宽是主窗小组件的规矩，任务面板放开到满窗。 */
+.tasks-window-shell {
+  width: 100vw;
+  min-width: 0;
+  position: relative;
+}
+
+/* ── 面板八向拖拽热区：无边框窗在 Windows 没有原生 resize 边带，DOM 自绘
+   （Leo 2026-10-06"不能手动拉宽或者拉长"）。按下交原生 startResizeDragging，
+   尺寸记忆走既有 resize 去抖监听；胶囊态不渲染热区（resizable 已锁死）。 */
+.rsz { position: absolute; z-index: 90; touch-action: none; }
+.rsz-n, .rsz-s { left: 10px; right: 10px; height: 5px; }
+.rsz-n { top: 0; cursor: ns-resize; }
+.rsz-s { bottom: 0; cursor: ns-resize; }
+.rsz-e, .rsz-w { top: 10px; bottom: 10px; width: 5px; }
+.rsz-e { right: 0; cursor: ew-resize; }
+.rsz-w { left: 0; cursor: ew-resize; }
+.rsz-nw, .rsz-ne, .rsz-sw, .rsz-se { width: 10px; height: 10px; }
+.rsz-nw { top: 0; left: 0; cursor: nwse-resize; }
+.rsz-ne { top: 0; right: 0; cursor: nesw-resize; }
+.rsz-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.rsz-se { bottom: 0; right: 0; cursor: nwse-resize; }
+
+/* 任务小组件（胶囊与面板）禁用根级原生滚动条：胶囊 36/224 高永远命中上面
+   "极小工作区"的 overflow:auto 兜底，WebView2 合成晚于 setSize 时视口差
+   1-2px 内容就溢出 → 原生横竖滚动条把细条顶成滚动残废（0.20.12 真机截图）。
+   任务窗内容自滚动（胶卷/面板列表自管），根上只许裁切，尺寸失配由
+   applyMiniCapsuleSize 的慢拍复核自愈。选择器同权重、靠源顺序后置取胜。 */
+html:has(.tasks-mini) #root,
+html:has(.tasks-window-shell) #root {
+  overflow: hidden !important;
+}
+
+.tasks-window-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 6px 10px 6px;
+}
+
+/* 与 Agent 行列表同一张卡面（深色 HUD 的白 0.06 + 白描边）、同一 16px 圆角；
+   行发丝线直接贴到卡缘（body 无横向 padding，由行自带 11px 右距）。 */
+.tasks-window-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: none;
+  padding: 3px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(127, 130, 136, 0.4) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 源项目小组件的语言：每个分区是独立的一块 16px 圆角卡（白 0.06 面 + 白 0.09 描边
+   + 内高光），任务一张卡、星位上下文一张卡，滚动容器只负责间距。 */
+.tasks-card {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 3px 0;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.09),
+    inset 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.tasks-card-head {
+  margin: 0;
+  padding: 7px 15px 3px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0.5;
+}
+
+/* 卡头的空闲会话汇总：可点开关（展开/收起空闲会话明细），小一号、去字距。 */
+button.tasks-usage-idle {
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  opacity: 1;
+}
+button.tasks-usage-idle:hover { text-decoration: underline; }
+
+/* 展开出的空闲会话行：整体调暗——它们是"在场但没内容"的盘库信息。 */
+/* 主窗任务台的星位上下文皮（与小组件同一份数据/行渲染） */
+.tasks-usage-card--board { padding: 10px 14px 8px; margin: 12px 16px 16px; }
+.tasks-usage-card--board .tasks-usage-list { padding: 2px 0 0; }
+.tasks-usage-card--board .tasks-usage-idle { border: 0; background: none; font: inherit; color: inherit; opacity: .55; cursor: pointer; padding: 0; }
+.tasks-usage-card--board .tasks-usage-idle:hover { opacity: .85; }
+html:not([data-theme="dark"]) .console-root .tasks-usage-name em { background: rgba(31, 33, 36, 0.08); }
+html:not([data-theme="dark"]) .console-root .task-context-bar { background: rgba(31, 33, 36, 0.1); }
+html:not([data-theme="dark"]) .console-root .tasks-usage-row--idle { opacity: .55; }
+
+.tasks-usage-row--idle { opacity: 0.55; }
+
+.tasks-window-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.tasks-window-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tasks-window-body::-webkit-scrollbar-thumb {
+  background: rgba(127, 130, 136, 0.4);
+  border-radius: 3px;
+}
+
+.widget-shell--transparent .tasks-window-body {
+  scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
+}
+
+.widget-shell--transparent .tasks-window-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* 近期完成的轻量行：小状态点 + 暗标题 + 时长，没有 pill 也没有竖条，
+   不和运行中任务抢视线。 */
+.widget-task-brief {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 8px;
+  min-height: 30px;
+  padding: 3px 11px 3px 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.widget-task-brief .widget-task-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  opacity: 0.66;
+}
+
+.widget-task-brief small {
+  font-size: 10.5px;
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.widget-task-dot {
+  width: 6px;
+  height: 6px;
+  justify-self: center;
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+}
+
+.widget-task-dot--done { background: #6fc49a; opacity: 0.8; }
+.widget-task-dot--failed { background: #ec7a63; opacity: 0.9; }
+.widget-task-dot--neutral { background: rgba(255, 255, 255, 0.35); }
+
+.tasks-window-divider {
+  margin: 7px 0 2px;
+  padding-left: 15px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0.5;
+}
+
+.tasks-window-body .widget-tasks-agents {
+  padding: 8px 11px 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tasks-window-body .widget-tasks-empty {
+  padding: 0 12px;
+}
+
+/* ── 舰队模块板（面板 v2，Leo 2026-10-06 拍板"一个 agent 一个区域模块，
+   实时覆盖"）：跑=呼吸绿框原地刷新，收班=变暗，点模块开该星明细抽屉 ── */
+.tasks-fleet { display: flex; flex-direction: column; gap: 6px; }
+.tasks-fleet-mod {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 7px 10px 8px;
+}
+.tasks-fleet-mod.is-live {
+  border-color: rgba(61, 214, 140, 0.28);
+  background: rgba(61, 214, 140, 0.05);
+}
+/* 收班模块不再压文字（Leo 2026-10-06：全收班时整窗文字×0.62 = "看不清"元凶，
+   像素实测三档全中）。收班感改由卡片底微沉表达，文字永远 100% 亮。 */
+.tasks-fleet-mod.is-dimmed { background: rgba(255, 255, 255, 0.028); border-color: rgba(255, 255, 255, 0.05); }
+.tasks-fleet-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.tasks-fleet-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #4a5568; }
+.tasks-fleet-dot.is-running { background: #3dd68c; box-shadow: 0 0 6px rgba(61, 214, 140, 0.7); animation: v5-breath 1.6s ease-in-out infinite; }
+.tasks-fleet-dot.is-queued { background: transparent; border: 1px solid #4a5568; }
+/* 完成=中性灰：静默=健康，颜色只留给活的事（绿呼吸/空心/红），Leo 2026-10-06 */
+.tasks-fleet-dot.is-done { background: #4a5568; }
+.tasks-fleet-dot.is-failed { background: rgba(242, 109, 109, 0.6); }
+.tasks-fleet-dot.is-skipped { background: transparent; border: 1px solid #4a5568; }
+/* 字号向 Metrik 行看齐（Leo 2026-10-06）：名字 13px、正文 12.5px、辅助 11~10.5px。 */
+.tasks-fleet-name { flex: none; font-weight: 650; font-size: 13px; }
+.tasks-fleet-work { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; color: #cfd8e4; }
+.tasks-fleet-mod.is-live .tasks-fleet-work { color: #b8e6cd; }
+.tasks-fleet-meta { flex: none; color: #5c6779; font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tasks-fleet-line { margin: 5px 0 0 14px; font-size: 11.5px; color: #8fdcb2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tasks-fleet-line em { font-style: normal; opacity: 0.75; }
+.tasks-fleet-line.is-queued { color: #67718a; }
+.tasks-fleet-note { margin: 4px 0 0 14px; font-size: 11px; color: #67718a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tasks-fleet-note.is-failed { color: #e08585; }
+.tasks-fleet-note.is-done, .tasks-fleet-note.is-skipped { color: #8a94a6; }
+.tasks-fleet-drawer { margin: 7px 0 0 14px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.tasks-fleet-drawer-empty { margin: 0; font-size: 11px; color: #67718a; }
+
+/* 浅色玻璃壳覆写（模块板） */
+.widget-shell--glass-light .tasks-fleet-mod { border-color: rgba(31, 33, 36, 0.1); background: rgba(31, 33, 36, 0.045); }
+/* 浅色档收班：同"压底不压字"，白霜上用深墨系微沉 */
+.widget-shell--glass-light .tasks-fleet-mod.is-dimmed { background: rgba(31, 33, 36, 0.028); border-color: rgba(31, 33, 36, 0.06); }
+.widget-shell--glass-light .tasks-fleet-mod.is-live { border-color: rgba(31, 122, 77, 0.35); background: rgba(31, 122, 77, 0.06); }
+.widget-shell--glass-light .tasks-fleet-work { color: rgba(29, 31, 35, 0.85); }
+.widget-shell--glass-light .tasks-fleet-mod.is-live .tasks-fleet-work { color: #1f7a4d; }
+.widget-shell--glass-light .tasks-fleet-meta { color: rgba(48, 51, 57, 0.55); }
+.widget-shell--glass-light .tasks-fleet-line { color: #1f7a4d; }
+.widget-shell--glass-light .tasks-fleet-line.is-queued { color: rgba(48, 51, 57, 0.55); }
+.widget-shell--glass-light .tasks-fleet-note { color: rgba(48, 51, 57, 0.6); }
+.widget-shell--glass-light .tasks-fleet-note.is-failed { color: #a1402e; }
+.widget-shell--glass-light .tasks-fleet-drawer { border-top-color: rgba(31, 33, 36, 0.1); }
+.widget-shell--glass-light .tasks-fleet-drawer-empty { color: rgba(48, 51, 57, 0.55); }
+
+/* ── 星位上下文（B 链路）：sessions.list 会话级用量行 ─────────────────
+   布局跟任务行同一张网格语言：点 | 名字 | 水位条 | 数字。 */
+.tasks-usage-list {
+  padding: 4px 11px 8px;
+}
+
+.tasks-usage-row {
+  display: grid;
+  grid-template-columns: 10px 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 3.5px 0;
+}
+
+.tasks-usage-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* 行不在 .agent-card--active 上下文里，活跃呼吸自己带。 */
+.tasks-usage-dot:not(.tasks-usage-dot--idle) {
+  background: #6fc49a;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+
+.tasks-usage-dot--idle {
+  animation: none !important;
+}
+
+.tasks-usage-name {
+  font-size: 11px;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  opacity: 0.92;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tasks-usage-name em {
+  margin-left: 3px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.09);
+  font-size: 8.5px;
+  font-style: normal;
+  font-weight: 500;
+  opacity: 0.7;
+  vertical-align: 1px;
+}
+
+/* 模型名：模型混跑时才逐行标注（全网关同模型时进卡头，见 App.jsx）。
+   行内跟在角标后面，不另占一行。 */
+.tasks-usage-model {
+  margin-left: 3px;
+  font-size: 8.5px;
+  font-weight: 480;
+  letter-spacing: 0;
+  opacity: 0.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 水位条：2px 高发丝条，绿=健康，黄=80%+ 或建议压缩；无估算时空槽。 */
+.task-context-bar {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.task-context-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: #6fc49a;
+  opacity: 0.75;
+  transition: width 400ms ease;
+}
+
+.task-context-bar i.task-context-fill--warn {
+  background: #e8b04a;
+  opacity: 0.9;
+}
+
+.task-context-bar--empty i {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.tasks-usage-nums {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.62;
+  white-space: nowrap;
+}
+
+.tasks-usage-nums small {
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+/* 水位预警（六案⑥）：超阈值的"建议清理"角标，琥珀配预警条 */
+.tasks-usage-hot {
+  color: #e0b060;
+  opacity: 1;
+  font-weight: 600;
+}
+
+/* 估算年龄角标（Leo 2026-10-20 审计）：数字是上一次 run 的快照，超过 1 小时
+   未跑的会话标出来——客星 23k 十一天没动、天权 207k 来自 10 小时前，
+   不标就全是"看起来实时的陈条"。比条数再暗一档，不抢水位本身。 */
+.tasks-usage-age {
+  opacity: 0.5;
+}
+
+/* 卡内口径声明（Leo 2026-10-20 审计）：cron 会话为何不在卡上——网关不为
+   它们上报 contextBudgetStatus。颜色随父级（--cp-* 令牌的作用域不含任务卡，
+   写死色值会在另一主题下翻车），只压透明度，与 tasks-usage-idle 同约定。 */
+.tasks-usage-note {
+  margin: 4px 0 0;
+  font-size: 9px;
+  line-height: 1.5;
+  color: inherit;
+  opacity: 0.55;
+}
+
+/* 独立任务窗的 footer 不在 .widget-content 里（拿不到它的 10px 内距），自己补齐。
+   对齐方式跟原版 footer 一致用垂直居中——基线对齐在"中文+数字"混排下数字会显浮
+   （2026-10-02 用户对照原版截图纠正）。 */
+.tasks-window-footer {
+  padding: 2px 10px;
+}
+
+.monitor-field--check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.monitor-field--check input {
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  padding: 0;
+  flex: none;
+  accent-color: currentColor;
+}
+
+/* ── 深色玻璃壳内的任务元素配色 ─────────────────────────────────
+   .task-pill / .live-indicator 的默认配色是为完整视图的浅色面板设计的
+   （深字浅底）；小组件的深色玻璃上必须换成浅字深底，否则对比度塌掉。
+   灰阶与绿取自深色 HUD 既有 token（白 0.92/0.6、#6fc49a）。 */
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-pill {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-pill--running {
+  background: rgba(111, 196, 154, 0.16);
+  color: #6fc49a;
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-pill--queued {
+  background: rgba(232, 176, 74, 0.16);
+  color: #e8b04a;
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-pill--succeeded {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.55);
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-pill--failed {
+  background: rgba(236, 122, 99, 0.16);
+  color: #ec7a63;
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-pill--neutral {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.5);
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-pill--stale {
+  background: rgba(232, 176, 74, 0.18);
+  color: #e8b04a;
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .live-indicator {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.62);
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .live-indicator--on {
+  background: rgba(111, 196, 154, 0.15);
+  color: #6fc49a;
+}
+
+/* ── 任务小组件 · 折叠形态（原项目胶囊条同款交互）──────────────────
+   默认横条 = 点+数字格横排（strip-cell 的 icon→dot 平移）+ 发丝分隔 +
+   ••• 控制槽；••• 就地展开置顶/切竖条/展开；竖条是切出来的另一形态。 */
+
+.tasks-mini {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  padding: 3px 4px;
+  gap: 2px;
+  cursor: default;
+  user-select: none;
+}
+
+.tasks-mini-row {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 8px 0 10px;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 240ms var(--motion);
+}
+
+.tasks-mini-row:hover { background: rgba(255, 255, 255, 0.07); }
+.widget-shell--glass-light .tasks-mini-row:hover { background: rgba(31, 33, 36, 0.06); }
+
+/* 跑马灯里的星名归属：谁在干（·分隔）+ 干什么 */
+/* 星名 = 署名层级：比任务标题小一档、弱一档（用户：agent 名字不要太大） */
+.tasks-mini-agent {
+  flex: none;
+  font-size: 10px;
+  font-weight: 560;
+  opacity: 0.66;
+}
+
+.tasks-mini-agent::after {
+  content: "·";
+  margin-left: 4px;
+  opacity: 0.5;
+}
+
+.tasks-mini-sep {
+  flex: none;
+  opacity: 0.4;
+  margin: 0 1px;
+}
+
+.tasks-mini-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.3;
+}
+
+.tasks-mini-row small {
+  flex: none;
+  font-size: 10px;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks-mini-row--failed .tasks-mini-title { opacity: 0.72; }
+/* 良性未跑（六案②）：迷你行整行灰显降级，排在真失败之后 */
+.tasks-mini-row--skipped { opacity: 0.6; }
+
+/* 暂无运行中任务/未同步占位 */
+.tasks-mini-empty {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  min-height: 30px;
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+/* 竖条空态：文字竖排（与链路竖排名同一语言），从上往下读。
+   不带 .task-chain-agent 的 -1.5px 补偿——空态是整盒 grid 居中，冒烟实测
+   墨迹本就居中，补偿反而带偏（Leo 2026-10-06 指左缝，量出是 42 条身太肥）。 */
+.tasks-mini-empty--vertical {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+}
+
+/* 横条跑马灯：单行任务 + "+N" 提示 */
+.tasks-mini:not(.tasks-mini--vertical) { flex-direction: row; align-items: center; padding: 3px 4px 3px 6px; }
+
+.tasks-mini-ticker {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.tasks-mini-ticker .tasks-mini-row { flex: 1; min-width: 0; padding-left: 6px; }
+.tasks-mini-ticker .tasks-mini-title { font-size: 11.5px; }
+.tasks-mini-ticker .tasks-mini-row small { display: none; }
+
+/* 横条 +N 角标：与竖条同一语义（首行/胶卷之外的剩余工作数，点击=展开，
+   悬停列清单）。不承载失败告警——失败在胶卷✕跳/悬停卡/展开面板已有归属，
+   角标只报数量（Leo 2026-10-04 拍板：1 个失败染红整枚不成比例，撤） */
+.tasks-mini-more {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.tasks-mini-more:hover { opacity: 0.85; }
+
+/* 竖条 +N 角标（首行链路之外的活跃/失败任务数）：有活干才存在，点击=展开。
+   绿=还有进行中；失败不在角标标色（口径同横条）；浅色壳随动 */
+.tasks-mini-more--vertical {
+  flex: none;
+  align-self: center;
+  min-width: 26px;
+  margin-top: 2px;
+  padding: 2px 7px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: #6fc49a;
+  background: rgba(111, 196, 154, 0.14);
+  border: 1px solid rgba(111, 196, 154, 0.32);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 240ms var(--motion);
+}
+
+.tasks-mini-more--vertical:hover { background: rgba(111, 196, 154, 0.24); }
+
+.widget-shell--glass-light .tasks-mini-more--vertical {
+  color: #1f7a4d;
+  background: rgba(31, 122, 77, 0.1);
+  border-color: rgba(31, 122, 77, 0.28);
+}
+
+.widget-shell--glass-light .tasks-mini-more--vertical:hover { background: rgba(31, 122, 77, 0.18); }
+
+.tasks-mini-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 38%, transparent);
+}
+
+.tasks-mini-dot--on {
+  background: #6fc49a;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+
+.tasks-mini-dot--failed { background: #ec7a63; }
+.tasks-mini-dot--skipped { background: #8b93a1; opacity: 0.6; }
+
+/* 控制槽：与内容间一条发丝线（strip-controls 同款）；竖条时也是横排
+   （展开=条身加宽，按钮内联一行，不再纵向堆塔裁切） */
+.tasks-mini-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  margin-top: 1px;
+  padding-top: 3px;
+  box-shadow: 0 -1px color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.tasks-mini--vertical .tasks-mini-controls {
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tasks-mini:not(.tasks-mini--vertical) .tasks-mini-controls {
+  margin-top: 0;
+  margin-left: 1px;
+  padding-top: 0;
+  padding-left: 3px;
+  box-shadow: -1px 0 color-mix(in srgb, currentColor 9%, transparent);
+}
+
+/* 状态灯与 ••• 同槽（原 strip-control-slot--menu 模式）：
+   默认见灯，悬停或展开时灯让位、••• 现身 */
+/* 同步状态灯：空心圆环——区别于链上的实心任务点（圆环=连接状态），
+   绿=同步中、橙=断线；悬停让位 ••• 的 visibility 规则照旧生效 */
+.tasks-mini-controls .status-dot {
+  width: 7px;
+  height: 7px;
+  margin: 0;
+  flex: none;
+  background: transparent;
+  border: 1.5px solid var(--green);
+  box-shadow: none;
+}
+
+.tasks-mini-controls .status-dot--error {
+  background: transparent;
+  border-color: #c96a45;
+  box-shadow: none;
+}
+
+.tasks-mini:hover .strip-control-slot--menu .status-dot,
+.tasks-mini-controls--open .strip-control-slot--menu .status-dot { visibility: hidden; }
+
+.tasks-mini .strip-button--menu { opacity: 0; }
+.tasks-mini:hover .strip-button--menu,
+.tasks-mini-controls--open .strip-button--menu { opacity: 1; }
+
+/* 链路胶卷：当前跳恒居中，链条两侧延伸；滚轮横滑；边缘渐隐 */
+.tasks-mini-strip {
+  position: relative; /* 当前跳居中依赖 offsetLeft，参照系必须是条自己 */
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1;
+  /* span 化后仍按可点击元素重置 UA 底色（button 默认 ButtonFace 白底） */
+  padding: 0;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  /* 按住拖拽滚动：横条只吃横向手势（纵向留给页面滚），文本不选中 */
+  touch-action: pan-y;
+  user-select: none;
+  padding: 0 4px;
+  /* 两端渐隐遮罩已摘（Leo 2026-10-04：边缘星名看不清）——10% 渐隐区正好
+     吃掉首尾跳的字，再叠 done 跳 0.6 透明度就是双重变暗；"还能滚"的暗示
+     交给 +N 角标与按住拖拽，不为暗示牺牲可读性。 */
+}
+
+.tasks-mini-strip--vertical {
+  touch-action: pan-x;
+}
+
+/* 竖条悬停详情卡：胶卷包 42px 定位容器（宽随壳内宽，不随扩窗拉伸），
+   卡片固定朝胶卷左侧弹（Leo 2026-10-03 拍板）——side=right 是"胶卷左侧放得下，
+   卡往左弹"；贴左缘放不下退 side=left 卡往右兜底。 */
+/* 竖条胶卷左右各留一条空白边 = 拖窗区（Leo 2026-10-11："细竖条上面的区域
+   不需要点击动作，可以在这个位置加"）。条身 71% 被星位内容占着（按下会被
+   胶卷认领去滚内容），能拖窗的只剩底部一小块——这两条边不归胶卷，按下即走
+   壳层 8px 拖窗阈值，星位/按钮/滚内容一个都不改。 */
+.tasks-mini-railwrap {
+  --mini-drag-gutter: 5px;
+  position: relative;
+  /* 垂直填满壳内高度（替代原胶卷的直接 flex:1）：内容多时由胶卷自身滚动，
+     不能 flex:none 随内容长——那会把滚动约束顶穿，窗口内底部被裁且滚不动 */
+  flex: 1 1 auto;
+  width: 28px;
+  align-self: center;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+}
+.tasks-mini-railwrap .tasks-mini-strip--vertical {
+  width: 100%;
+  /* 左右让出拖窗边：胶卷只占中间，两侧空白归壳层拖窗 */
+  padding-left: var(--mini-drag-gutter, 5px);
+  padding-right: var(--mini-drag-gutter, 5px);
+  box-sizing: border-box;
+}
+/* 定侧类挂在 railwrap 本体上（悬停瞬间同步写），必须复合选择器——曾写成
+   后代选择器永远不命中：竖条悬停扩窗后胶卷不钉窗缘、随窗口平移，指针被甩
+   出胶卷 → 收窗 → 重进 → 再扩，真机表现为"左右跨越跳动+弹窗闪没"（0.20.12
+   真机复现，此类自悬停卡诞生起就是死的）。 */
+.tasks-mini-railwrap.tasks-mini--hover-left { align-self: flex-start; }
+.tasks-mini-railwrap.tasks-mini--hover-right { align-self: flex-end; }
+
+.tasks-hopcard {
+  position: fixed;
+  z-index: 80;
+  width: 224px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(24, 27, 33, 0.97);
+  color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  display: grid;
+  /* 单列轨道必须钳在容器宽内：默认 auto 轨道按最宽子项的 max-content 取尺寸，
+     收班行的 46 字 nowrap 结论会把轨道撑到 ~536px，整行（含药丸/文本列）溢出
+     卡片右侧渲染到卡外——真机窗口裁掉=文本列"空白"（Leo 实锤，75a2cd5 起就在）。
+     minmax(0,1fr) 强制轨道=卡内容宽，长文本走 span 自带的 ellipsis。 */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  font-size: 11.5px;
+  /* 纯展示不截断指针：胶卷的 enter/leave 语义不被卡片打断 */
+  pointer-events: none;
+}
+.tasks-hopcard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* grid 项目的默认 min-width:auto 会拿 nowrap 结论的 min-content 当下限，
+   把卡内容撑破轨道溢出卡外（上一条注释的另一半）——直接子项全部放开。 */
+.tasks-hopcard > * {
+  min-width: 0;
+}
+.tasks-hopcard-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tasks-hopcard-progress {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0.8;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tasks-hopcard-progress em { color: #6fc49a; font-style: normal; }
+.tasks-hopcard-error { margin: 0; font-size: 11px; line-height: 1.4; color: #ff9c9c; }
+/* 成果速览（六案①）：收工跳的北斗中文结论，两行截断悬浮看全文 */
+.tasks-hopcard-summary {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #b8d8c6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 良性未跑（六案②失败分诊）：灰显说明，与红错区分 */
+.tasks-hopcard-skipped { margin: 0; font-size: 11px; line-height: 1.4; color: #9aa2b0; }
+.tasks-hopcard-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  opacity: 0.62;
+  min-width: 0;
+}
+.tasks-hopcard-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* "其他任务"节：首行链路之外的任务（与竖条 +N 角标同源），最多 3 行+溢出提示 */
+.tasks-hopcard-extra {
+  display: grid;
+  /* 与 .tasks-hopcard 同病：auto 轨道被 kv 行的 nowrap 结论 max-content 撑爆，
+     kv 行溢出到卡外——轨道钳回容器宽，行内 span 靠自身 min-width:0 收缩省略 */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.tasks-hopcard-extra > * {
+  min-width: 0;
+}
+.tasks-hopcard-extra-head {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+}
+.tasks-hopcard-extra-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.tasks-hopcard-extra-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #6fc49a;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+.tasks-hopcard-extra-dot--failed { background: #ec7a63; animation: none; }
+.tasks-hopcard-extra-dot--skipped { background: #8b93a1; opacity: 0.6; animation: none; }
+.tasks-hopcard-extra-dot--pending {
+  background: color-mix(in srgb, currentColor 38%, transparent);
+  animation: none;
+}
+.tasks-hopcard-extra-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tasks-hopcard-extra-title--failed { color: #ff9c9c; }
+.tasks-hopcard-extra-agent {
+  flex: none;
+  font-size: 10px;
+  opacity: 0.55;
+}
+/* 浅色跟随：卡片 Portal 在 body 下，壳的 glass-light 类够不到，由组件显式
+   挂 --light（0.20.8 起卡片走 Portal，旧的 .widget-shell--glass-light 前缀
+   规则已匹配不到，换成显式类） */
+.tasks-hopcard--light {
+  background: rgba(251, 250, 247, 0.98);
+  border-color: rgba(31, 33, 36, 0.12);
+  color: rgba(31, 33, 36, 0.92);
+  box-shadow: 0 10px 24px rgba(31, 33, 36, 0.18);
+}
+.tasks-hopcard--light .tasks-hopcard-progress em { color: #1f7a4d; }
+.tasks-hopcard--light .tasks-hopcard-error { color: #b3372f; }
+.tasks-hopcard--light .tasks-hopcard-summary { color: #2e6b50; }
+.tasks-hopcard--light .tasks-hopcard-skipped { color: #5c6472; }
+.tasks-hopcard--light .tasks-hopcard-extra { border-top-color: rgba(31, 33, 36, 0.1); }
+.tasks-hopcard--light .tasks-hopcard-extra-title--failed { color: #b3372f; }
+
+/* 星卡 kv 行（七星灯牌悬停，2026-10-06）：运行=已跑/今夜，收班=时刻/时长/结论 */
+.tasks-hopcard-kv {
+  display: flex; gap: 8px; align-items: baseline;
+  font-size: 11.5px; color: #aab3c2; padding: 3px 0;
+}
+.tasks-hopcard-kv + .tasks-hopcard-kv { border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.tasks-hopcard-kv b { color: #dfe4ec; font-weight: 600; flex: none; width: 66px; }
+.tasks-hopcard-kv span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 收班结论列两行钳制（Leo 2026-10-07 过稿）：46 字结论挤单行在 224px 卡里
+   只剩 7 字，两行能读全半句；全文照旧悬停可看。其余 kv 行（已跑/今夜/下次）
+   维持单行。 */
+.tasks-hopcard-kv .tasks-hopcard-kv-txt {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.tasks-hopcard--light .tasks-hopcard-kv { color: #5c6472; border-top-color: rgba(31, 33, 36, 0.06); }
+.tasks-hopcard--light .tasks-hopcard-kv b { color: #202124; }
+
+.tasks-mini-strip::-webkit-scrollbar { display: none; }
+
+.tasks-mini-strip .task-chain-hop {
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  line-height: 1;
+}
+
+.tasks-mini-strip .task-chain-agent,
+.tasks-mini-strip .task-chain-glyph,
+.tasks-mini-strip .task-chain-hop small {
+  line-height: 1;
+}
+
+/* 横条行高放宽（Leo 2026-10-07 真机实锤：星名首字被削顶——天→大、玉→土、
+   开→升）：line-height 1 的行盒正好 13px=条盒高，CJK 字形墨迹超出 em 盒顶部
+   ~1px，被条的 overflow-y:hidden 齐沿削掉——顶笔画最高的 天/玉/开 中招，
+   玑/衡/阳 顶稍低幸免。1.35 让行盒（≈18px）包住墨迹，条盒随之长高，视觉
+   居中由 ticker 的 align-items:center 保持；竖条一字一行不受此影响，维持 1。 */
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) {
+  line-height: 1.35;
+}
+
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-agent,
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-glyph,
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-hop small {
+  line-height: 1.35;
+}
+
+.tasks-mini-strip .task-chain-link {
+  align-self: center;
+}
+
+/* 横条墨迹光学补偿：盒子全同心，但 ● 墨迹偏高 ~1px、横线偏低 ~1px（不同字号
+   的字形在盒内不对称，上色截图像素实测）。各向名字的视觉中心收拢半像素，
+   只动横条——竖条的墨迹偏置方向不同，另在 --vertical 的名字上补偿。 */
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-glyph {
+  transform: translateY(0.5px);
+}
+
+.tasks-mini-strip:not(.tasks-mini-strip--vertical) .task-chain-link {
+  transform: translateY(-1px);
+}
+
+.tasks-mini-strip .task-chain-hop--current .task-chain-agent {
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.widget-shell--glass-light .tasks-mini-strip .task-chain-hop--current .task-chain-agent {
+  color: rgba(29, 31, 35, 0.98);
+}
+
+/* 链路胶卷纵放（竖条形态）：与横条对称——当前跳垂直居中，滚轮上下滑，
+   上下渐隐；连接线转成竖线 */
+.tasks-mini-strip--vertical {
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 0;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+}
+
+.tasks-mini-strip--vertical .task-chain-link {
+  width: 1px;
+  height: 10px;
+}
+
+.tasks-mini-strip--vertical .task-chain-hop {
+  flex-direction: column;
+  align-items: center; /* 名字/呼吸点/竖线共享中轴，别各自靠左 */
+  gap: 3px;
+  /* 命中范围收窄（Leo 2026-10-11："每个星位名字左右可选范围有点大，横条的
+     上下范围就很好"）：实测竖向每格曾高达 44px（横条整条才 36px 高），
+     上下留白过多导致鼠标稍微偏移就算选中；收到 32px 与横条观感对齐。 */
+  padding: 1px 0;
+  min-height: 32px;
+}
+
+/* 星名竖排：一字一格（用户点名），呼吸点放名字上方（与明细时间线同序）。
+   竖排（vertical-rl）墨迹在盒内偏右 ~1.5px（字体排版偏置，上色截图像素实测），
+   名字左移补偿，与呼吸点/竖线共享视觉中轴。 */
+.tasks-mini-strip--vertical .task-chain-agent {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  transform: translateX(-1.5px);
+}
+
+/* 跑马灯里的紧凑链：小一号、零外距，时长不进横条（tooltip 与展开卡里有） */
+.task-chain--mini {
+  margin: 0;
+  gap: 2px;
+  font-size: 9.5px;
+}
+
+.task-chain--mini .task-chain-hop { gap: 1px; }
+.task-chain--mini .task-chain-link { width: 8px; }
+.task-chain--mini .task-chain-agent { letter-spacing: -0.02em; }
+
+/* ── 任务链路 stepper（链路视图①）────────────────────────────────
+   运行中任务行下方：agent 名 + 状态符（✓ 完成 / ● 进行中 / ○ 待跑）+ 耗时，
+   发丝短线连接。链从 runId 分组与 childSessionKey→sessionKey 父子边拼出
+   （taskChains.js；字段语义在北斗网关实测过）。单跳不成链不渲染。 */
+.task-chain {
+  padding: 1px 11px 3px 15px;
+}
+
+/* 运行中任务的进度一行小字（progressSummary 原话）：缩进与链路对齐，
+   单行截断，悬停看全文。"正在"前缀用绿色，与下方链路条区分归属。 */
+.task-progress-line {
+  margin: 0;
+  padding: 0 11px 2.5px 15px;
+  font-size: 10px;
+  letter-spacing: -0.01em;
+  opacity: 0.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-progress-line em,
+.task-timeline-progress em {
+  font-style: normal;
+  color: #6fc49a;
+  opacity: 0.95;
+}
+
+/* 会话工作台账（session_run）的展开窗行：行尾「会话」小标 + 失败错误行 */
+.widget-session-flag {
+  flex: none;
+  margin-left: 2px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: #9ecfb8;
+  background: rgba(158, 207, 184, 0.1);
+  border: 1px solid rgba(158, 207, 184, 0.24);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.widget-shell--glass-light .widget-session-flag {
+  color: #1f7a4d;
+  background: rgba(31, 122, 77, 0.08);
+  border-color: rgba(31, 122, 77, 0.24);
+}
+
+.task-progress-line--error {
+  color: #ff9c9c;
+  opacity: 0.9;
+}
+
+/* 良性未跑（六案②失败分诊）：面板副行灰显，与红错区分 */
+.task-progress-line--benign {
+  color: #9aa2b0;
+  opacity: 0.85;
+}
+
+/* 成果速览（六案①）：面板收工行下的北斗中文结论，两行截断悬浮看全文 */
+.task-summary-line {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: #b8d8c6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.task-summary-line em { color: #6fc49a; font-style: normal; }
+
+.widget-shell--glass-light .task-progress-line--error {
+  color: #b3372f;
+}
+
+.widget-shell--glass-light .task-progress-line--benign {
+  color: #5c6472;
+}
+
+.widget-shell--glass-light .task-summary-line,
+.widget-shell--glass-light .task-timeline-summary {
+  color: #2e6b50;
+}
+
+.widget-shell--glass-light .task-summary-line em { color: #1f7a4d; }
+
+/* 有链路的任务：行 + 链路同组，组底线替代行底线——链路在行与本组分隔线之间，
+   不被任务行的底线隔在外面。压制规则要压过下面 glass-light/clear/ink 变体
+   （同 (0,3,0) 会输给文件更靠后的变体），故挂到 .tasks-window-body 提到 (0,4,0)。 */
+.widget-task-group {
+  box-shadow: 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.widget-task-group .widget-task-row,
+.widget-shell--transparent .tasks-window-body .widget-task-group .widget-task-row {
+  box-shadow: none;
+}
+
+/* 展开卡里的链路 = 迷你胶囊同款胶片条（ChainFilmstrip）：超宽不裁，滚轮/按住拖动。
+   字号与明细跳名同档 11.5px；渐隐遮罩已在 .tasks-mini-strip 层整体摘除。 */
+.task-chain .tasks-mini-strip {
+  cursor: grab;
+  font-size: 11.5px;
+}
+
+.task-chain .tasks-mini-strip:active {
+  cursor: grabbing;
+}
+
+.task-chain-hop {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+}
+
+.task-chain-agent {
+  font-weight: 560;
+}
+
+.task-chain-glyph {
+  font-size: 9px;
+  line-height: 1;
+}
+
+.task-chain-hop small {
+  font-size: 9.5px;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 灯语亮度下限（Leo 2026-10-07 实锤"除了活动的都看不到"）：旧档 done 0.70/
+   failed 0.75（10-04 三档对比 B 档）把名字一起压暗，深底上空闲星只剩 ~36% 白
+   ≈隐形。改=灯语只管颜色、名字给可读下限：done 0.85/failed 0.9/skipped 0.75/
+   pending 0.62——✕ 仍比 ✓ 抢眼，但每颗星滚到哪都认得出。 */
+.task-chain-hop--done { opacity: 0.85; }
+.task-chain-hop--done .task-chain-glyph { color: #6fc49a; }
+.task-chain-hop--current .task-chain-glyph {
+  color: #6fc49a;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+.task-chain-hop--failed { opacity: 0.9; }
+.task-chain-hop--failed .task-chain-glyph { color: #ec7a63; }
+.task-chain-hop--skipped { opacity: 0.75; }
+.task-chain-hop--skipped .task-chain-glyph { color: #8b93a1; }
+.task-chain-hop--pending { opacity: 0.62; }
+
+.task-chain-link {
+  flex: none;
+  width: 12px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.2;
+}
+
+/* ── 竖直链路时间线（展开卡）：一跳一行，左列状态符 + 穿行引导竖线，
+   当前跳行下挂进度原话；排队跳天然在列，任务列表不再重复占行。 ── */
+.task-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 2px 11px 4px 15px;
+}
+
+.task-timeline-hop {
+  position: relative;
+  display: grid;
+  grid-template-columns: 13px auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1.5px 0;
+}
+
+/* 引导线：每跳画整高一段，首尾各收半截——连成一条穿过状态符列的竖线 */
+.task-timeline-hop::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.task-timeline-hop:first-child::before { top: 55%; }
+.task-timeline-hop:last-child::before { bottom: 45%; }
+.task-timeline-hop:only-child::before { display: none; }
+
+.task-timeline-glyph {
+  position: relative; /* 压在引导线之上 */
+  width: 13px;
+  text-align: center;
+  font-size: 10px;
+}
+
+.task-timeline-name {
+  font-size: 11.5px;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  opacity: 0.92;
+  white-space: nowrap;
+}
+
+.task-timeline-title {
+  font-size: 11.5px;
+  opacity: 0.62;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-timeline-hop small {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.5;
+  white-space: nowrap;
+}
+
+.task-timeline-progress {
+  grid-column: 2 / -1;
+  margin: 0;
+  font-size: 10.5px;
+  letter-spacing: -0.01em;
+  opacity: 0.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 跳状态：与胶片条同语言（绿=完成/进行中，红=失败，○=待跑） */
+.task-timeline-hop--done { opacity: 0.72; }
+.task-timeline-hop--pending { opacity: 0.48; }
+.task-timeline-hop--done .task-timeline-glyph,
+.task-timeline-hop--current .task-timeline-glyph { color: #6fc49a; }
+.task-timeline-hop--failed .task-timeline-glyph { color: #ec7a63; }
+.task-timeline-hop--failed { opacity: 0.75; }
+.task-timeline-hop--skipped { opacity: 0.55; }
+.task-timeline-hop--skipped .task-timeline-glyph { color: #8b93a1; }
+/* 成果速览（六案①）：时间线收工跳下的结论两行截断 */
+.task-timeline-summary {
+  grid-column: 2 / -1;
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: #b8d8c6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 浅色档状态色 = 浅面板 token */
+.widget-shell--transparent.widget-shell--glass-light .task-progress-line em,
+.widget-shell--transparent.widget-shell--glass-light .task-timeline-progress em { color: #1f7a4d; }
+.widget-shell--transparent.widget-shell--glass-light .task-timeline-hop--done .task-timeline-glyph,
+.widget-shell--transparent.widget-shell--glass-light .task-timeline-hop--current .task-timeline-glyph { color: #1f7a4d; }
+.widget-shell--transparent.widget-shell--glass-light .task-timeline-hop--failed .task-timeline-glyph { color: #a1402e; }
+.widget-shell--transparent.widget-shell--glass-light .task-timeline-hop::before {
+  background: rgba(31, 33, 36, 0.14);
+}
+
+/* 浅色档状态色 = 浅面板 token */
+.widget-shell--transparent.widget-shell--glass-light .task-chain-hop--done .task-chain-glyph,
+.widget-shell--transparent.widget-shell--glass-light .task-chain-hop--current .task-chain-glyph { color: #1f7a4d; }
+.widget-shell--transparent.widget-shell--glass-light .task-chain-hop--failed .task-chain-glyph { color: #a1402e; }
+.widget-shell--transparent.widget-shell--glass-light .task-chain-hop--skipped .task-chain-glyph,
+.widget-shell--transparent.widget-shell--glass-light .task-timeline-hop--skipped .task-timeline-glyph { color: #5c6472; }
+.widget-shell--transparent.widget-shell--glass-light .widget-task-accent--skipped { background: #8b93a1; }
+
+/* ── 深色 HUD 玻璃上的迷你条与链路墨色 ─────────────────────────
+   基础 .widget-shell 的墨是浅玻璃用的深墨；迷你条/链路是新元素，
+   不补覆盖就会深字贴深玻璃（2026-10-02 用户深色截图：标题全隐）。
+   作用域与任务 pill 的深档覆盖一致。 */
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini {
+  color: rgba(255, 255, 255, 0.92);
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-row small,
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-empty,
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-more,
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-chain {
+  color: rgba(255, 255, 255, 0.8);
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-timeline,
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .task-progress-line {
+  color: rgba(255, 255, 255, 0.8);
+}
+/* 迷你条里的 strip-button 在深色 HUD 上（原覆盖只挂在 .strip-shell 下，够不到这） */
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini .strip-button {
+  color: rgba(255, 255, 255, 0.62);
+  background: transparent;
+}
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini .strip-button:hover,
+.widget-shell--transparent:not(.widget-shell--glass-light):not(.widget-shell--glass-ink-light) .tasks-mini .strip-button--active {
+  color: rgba(255, 255, 255, 0.96);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* ── 任务小组件三档外观（跟随原项目的深色/浅色/透明档）────────────── */
+
+/* 浅色玻璃：卡面用 glass-light 的白 0.36 + 深色发丝描边；墨色继承壳的深墨 */
+.widget-shell--transparent.widget-shell--glass-light .tasks-card {
+  background: rgba(255, 255, 255, 0.36);
+  box-shadow:
+    0 0 0 1px rgba(31, 33, 36, 0.08),
+    inset 0 1px rgba(255, 255, 255, 0.52);
+}
+.widget-shell--transparent.widget-shell--glass-light .widget-task-row {
+  box-shadow: 0 1px rgba(31, 33, 36, 0.06);
+}
+.widget-shell--transparent.widget-shell--glass-light .widget-task-group {
+  box-shadow: 0 1px rgba(31, 33, 36, 0.06);
+}
+.widget-shell--transparent.widget-shell--glass-light .widget-task-accent {
+  background: rgba(31, 33, 36, 0.22);
+}
+/* 浅色档状态色 = 浅面板 pill 字色（#1f7a4d 绿 / #8f681f 黄 / #a1402e 红） */
+.widget-shell--transparent.widget-shell--glass-light .widget-task-accent--running { background: #1f7a4d; }
+.widget-shell--transparent.widget-shell--glass-light .widget-task-accent--queued { background: #8f681f; }
+.widget-shell--transparent.widget-shell--glass-light .widget-task-accent--failed { background: #a1402e; }
+.widget-shell--transparent.widget-shell--glass-light .widget-task-dot--done { background: #1f7a4d; }
+.widget-shell--transparent.widget-shell--glass-light .widget-task-dot--failed { background: #a1402e; }
+.widget-shell--transparent.widget-shell--glass-light .widget-task-dot--neutral { background: rgba(31, 33, 36, 0.3); }
+.widget-shell--transparent.widget-shell--glass-light .widget-agent-chip {
+  border-color: rgba(31, 33, 36, 0.14);
+  background: rgba(255, 255, 255, 0.5);
+}
+/* 星位上下文行：浅色档状态色与发丝条对齐浅面板 token */
+.widget-shell--transparent.widget-shell--glass-light .tasks-usage-dot:not(.tasks-usage-dot--idle) {
+  background: #1f7a4d;
+}
+.widget-shell--transparent.widget-shell--glass-light .task-context-bar {
+  background: rgba(31, 33, 36, 0.1);
+}
+.widget-shell--transparent.widget-shell--glass-light .task-context-bar i {
+  background: #1f7a4d;
+}
+.widget-shell--transparent.widget-shell--glass-light .task-context-bar i.task-context-fill--warn {
+  background: #8f681f;
+}
+.widget-shell--transparent.widget-shell--glass-light .task-context-bar--empty i {
+  background: rgba(31, 33, 36, 0.22);
+}
+
+/* 透明档（深墨）：不铺卡面，只留深色发丝内描边——与原项目 clear 档同规 */
+.widget-shell--transparent.widget-shell--glass-clear:not(.widget-shell--glass-ink-light) .tasks-card {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(31, 33, 36, 0.1);
+}
+.widget-shell--transparent.widget-shell--glass-clear:not(.widget-shell--glass-ink-light) .widget-task-row {
+  box-shadow: 0 1px rgba(255, 255, 255, 0.06);
+}
+.widget-shell--transparent.widget-shell--glass-clear:not(.widget-shell--glass-ink-light) .widget-task-group {
+  box-shadow: 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* 透明档（白墨）：发丝线换浅色一档 */
+.widget-shell--transparent.widget-shell--glass-ink-light .tasks-card {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+.widget-shell--transparent.widget-shell--glass-ink-light .widget-task-row {
+  box-shadow: 0 1px rgba(255, 255, 255, 0.12);
+}
+.widget-shell--transparent.widget-shell--glass-ink-light .widget-task-group {
+  box-shadow: 0 1px rgba(255, 255, 255, 0.12);
+}
+.widget-shell--transparent.widget-shell--glass-ink-light .task-chain {
+  box-shadow: 0 1px rgba(255, 255, 255, 0.12);
+}
+.widget-shell--transparent.widget-shell--glass-ink-light .widget-task-accent {
+  background: rgba(255, 255, 255, 0.3);
+}
+.widget-shell--transparent.widget-shell--glass-ink-light .widget-agent-chip {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 卡内最后一组不带组底横线：卡自己的圆角收边就是边界。两条线只隔 3px
+   看着双层，且组线是直的、戳出 16px 圆角。放文件末尾压过上面各档组线
+   （clear 档带 :not 是 (0,4,0)，这里同 (0,4,0) 靠源码顺序赢平局）。 */
+.widget-shell--transparent .tasks-window-body .tasks-card .widget-task-group:last-child {
+  box-shadow: none;
+}
+
+/* ── 自绘提醒角标窗（六案 B·自绘壳）：右下角玻璃卡堆，任务小组件同款皮肤 ── */
+.badge-window {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+.badge-empty {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(29, 32, 38, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 11px;
+}
+.badge-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.badge-toast {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 13px 12px;
+  border-radius: 11px;
+  background: rgba(29, 32, 38, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), inset 0 1px rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  overflow: hidden;
+  animation: badge-slide-in 220ms var(--motion, ease-out);
+  color: rgba(255, 255, 255, 0.92);
+}
+@keyframes badge-slide-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.badge-glyph {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+.badge-toast--fail .badge-glyph { background: rgba(236, 122, 99, 0.16); color: #ec7a63; }
+.badge-toast--ok .badge-glyph { background: rgba(111, 196, 154, 0.16); color: #6fc49a; }
+.badge-toast--merge .badge-glyph { background: rgba(224, 176, 96, 0.16); color: #e0b060; }
+.badge-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.badge-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge-toast--fail .badge-title { color: #ff9c9c; }
+.badge-toast--ok .badge-title { color: #8fd4b4; }
+.badge-toast--merge .badge-title { color: #eab86a; }
+.badge-body {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.62);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.badge-meta {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.35);
+  font-variant-numeric: tabular-nums;
+}
+.badge-x {
+  flex: none;
+  padding: 0 3px;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+}
+.badge-x:hover { color: rgba(255, 255, 255, 0.8); }
+.badge-countdown {
+  position: absolute;
+  left: 13px;
+  right: 13px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.32);
+}
+.badge-toast--fail .badge-countdown { background: rgba(236, 122, 99, 0.55); }
+.badge-toast--ok .badge-countdown { background: rgba(111, 196, 154, 0.55); }
+.badge-toast--merge .badge-countdown { background: rgba(224, 176, 96, 0.55); }
+.badge-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 2px 0;
+}
+.badge-close {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 160ms var(--motion, ease-out);
+}
+.badge-window:hover .badge-close { opacity: 1; }
+.badge-close:hover { color: rgba(255, 255, 255, 0.75); }
+
+/* 浅色玻璃档的墨色 */
+.widget-shell--glass-light .badge-empty { color: rgba(31, 33, 36, 0.5); background: rgba(255, 255, 255, 0.7); border-color: rgba(31, 33, 36, 0.1); }
+.widget-shell--glass-light .badge-toast { background: rgba(255, 255, 255, 0.82); border-color: rgba(31, 33, 36, 0.1); color: rgba(31, 33, 36, 0.92); box-shadow: 0 10px 26px rgba(31, 33, 36, 0.18); }
+.widget-shell--glass-light .badge-toast--fail .badge-title { color: #a1402e; }
+.widget-shell--glass-light .badge-toast--ok .badge-title { color: #1f7a4d; }
+.widget-shell--glass-light .badge-toast--merge .badge-title { color: #8a5f14; }
+.widget-shell--glass-light .badge-body { color: rgba(31, 33, 36, 0.6); }
+.widget-shell--glass-light .badge-meta { color: rgba(31, 33, 36, 0.4); }
+.widget-shell--glass-light .badge-x { color: rgba(31, 33, 36, 0.35); }
+.widget-shell--glass-light .badge-x:hover { color: rgba(31, 33, 36, 0.8); }
+.widget-shell--glass-light .badge-close { color: rgba(31, 33, 36, 0.35); }
+
+/* 监控参数网格里的勾选项：标签可换行、勾框与首行对齐；
+   --wide = 免打扰这类"一对输入框的表头开关"，独占整行 */
+.monitor-grid .monitor-field--check {
+  align-items: flex-start;
+}
+.monitor-grid .monitor-field--check input {
+  margin-top: 2px;
+}
+.monitor-grid .monitor-field--check span {
+  line-height: 1.5;
+}
+.monitor-field--check--wide {
+  grid-column: 1 / -1;
+}
+

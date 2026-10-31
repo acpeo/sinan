@@ -1,0 +1,17 @@
+/* 通用组件：统一页头与空态（自 styles.css 第 10761–10776 行切分，顺序保持） */
+/* ============ 通用组件：统一页头与空态（2026-10-31 重构） ============
+   全部颜色走 --ink / --muted 变量，深浅主题与玻璃材质自适应。 */
+.ui-page-head{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;padding:4px 2px 16px}
+.ui-page-head-text{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.ui-page-title{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em;color:var(--ink);display:flex;align-items:center;gap:8px}
+.ui-page-sub{font-size:12px;color:var(--muted)}
+.ui-page-actions{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+.ui-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:64px 24px;text-align:center;color:var(--muted)}
+.ui-empty-icon{font-size:28px;line-height:1;opacity:.55}
+.ui-empty-title{font-size:16px;font-weight:600;color:var(--ink)}
+.ui-empty-desc{font-size:13px;line-height:1.8;max-width:560px;color:var(--muted)}
+.ui-empty-extra{max-width:640px;font-size:13px;line-height:1.8}
+.ui-empty--compact{padding:32px 24px}
+.ui-empty--compact .ui-empty-title{font-size:15px}
+

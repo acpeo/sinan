@@ -1,0 +1,223 @@
+/* 设计令牌、基础重置、主题控件（自 styles.css 第 1–222 行切分，顺序保持） */
+:root {
+  font-family: "Geist Variable", "Segoe UI Variable", sans-serif;
+  color: #202124;
+  background: transparent;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  /* 小组件布局按像素精调，禁止系统文本缩放单独放大文字挤坏布局；
+     用户想放大走设置里的整体缩放滑杆。 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  --canvas: #f7f6f2;
+  --surface: #fbfbfa;
+  --ink: #202124;
+  --muted: #74767a;
+  --blue: #246bdb;
+  --orange: #e36b49;
+  --green: #5c9c4d;
+  --warn: #d99a2b;
+  --critical: #d4553f;
+  --motion: cubic-bezier(0.2, 0, 0, 1);
+  /* 项目分类色：固定顺序，经 CVD 与对比度校验（dataviz 参考色板，白底通过；
+     三个 <3:1 的浅色按 relief 规则由行列表逐行直接标注兜底）。 */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #008300;
+  --viz-other: #a7a9ae;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  background: transparent;
+}
+
+#root {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+}
+
+body {
+  min-height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+html[data-runtime="browser"] body {
+  background:
+    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.82), transparent 34%),
+    linear-gradient(145deg, #e9e7e1, #d9dde1);
+}
+
+button { font: inherit; }
+
+button:focus-visible {
+  outline: 3px solid rgba(36, 107, 219, 0.22);
+  outline-offset: 3px;
+}
+
+.window-actions {
+  display: flex;
+  align-items: center;
+  /* 门面按钮排：只能点，不许鼠标拖选（新版 WebView2 默认连按钮上的字
+     都能选中——Leo 2026-10-08 实锤"点页签手一划就选中"）。 */
+  user-select: none;
+}
+
+.window-actions--compact { gap: 1px; }
+
+.window-actions--compact .window-action {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+}
+
+.window-actions--expanded {
+  position: absolute;
+  z-index: 9;
+  top: 8px;
+  right: 10px;
+  padding: 2px;
+  background: rgba(247, 246, 242, 0.72);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 1px rgba(31, 33, 36, 0.07),
+    0 8px 22px rgba(31, 33, 36, 0.045),
+    inset 0 1px rgba(255, 255, 255, 0.88);
+}
+
+/* 主题快捷键：按钮本身混在按钮组里，弹出菜单挂在它下方。 */
+.theme-quick {
+  position: relative;
+  display: flex;
+}
+
+.theme-quick-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 128px;
+  padding: 4px;
+  background: rgba(252, 252, 251, 0.98);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 1px rgba(31, 33, 36, 0.08),
+    0 12px 30px rgba(31, 33, 36, 0.14);
+}
+
+.theme-quick-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  color: #2b2d31;
+  font-size: 13px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.theme-quick-menu button:hover { background: rgba(31, 33, 36, 0.06); }
+.theme-quick-menu button.is-selected { color: var(--blue); font-weight: 560; }
+
+.window-action {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  color: #77797d;
+  background: transparent;
+  border: 0;
+  border-radius: 11px;
+  cursor: pointer;
+  transition-property: color, background-color, transform;
+  transition-duration: 240ms;
+  transition-timing-function: var(--motion);
+}
+
+.window-action:hover {
+  color: #242529;
+  background: rgba(31, 33, 36, 0.055);
+}
+
+.window-action--active,
+.window-action--active:hover {
+  color: var(--blue);
+  background: rgba(36, 107, 219, 0.08);
+}
+
+.window-action--close:hover {
+  color: #b73d35;
+  background: rgba(183, 61, 53, 0.08);
+}
+
+.window-action:active { transform: scale(0.96); }
+
+.expanded-drag-region {
+  position: absolute;
+  z-index: 7;
+  top: 0;
+  right: 180px;
+  left: 0;
+  height: 34px;
+  cursor: move;
+  /* 拖拽区是门面，按住拖窗不该把底下文字划成蓝块。 */
+  user-select: none;
+}
+
+.widget-shell {
+  display: flex;
+  width: min(320px, 100vw);
+  min-width: 320px;
+  /* 高度跟随窗口（窗口高度由内容驱动：Agent 行多时加高、只剩一行时收短），
+     260 是下限（标题栏+周期签+摘要双块+底栏+单行列表）。 */
+  height: 100dvh;
+  min-height: 260px;
+  flex-direction: column;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 84% 0%, rgba(255, 255, 255, 0.9), transparent 37%),
+    linear-gradient(172deg, #fbfaf7, #f3f2ee);
+  border-radius: 22px;
+  box-shadow:
+    0 4px 14px rgba(31, 33, 36, 0.05),
+    0 20px 52px rgba(31, 33, 36, 0.1),
+    inset 0 0 0 1px rgba(31, 33, 36, 0.06),
+    inset 0 1px rgba(255, 255, 255, 0.94);
+  isolation: isolate;
+  transition-property: background-color, box-shadow;
+  transition-duration: 280ms;
+  transition-timing-function: var(--motion);
+}
+
+/* 极小工作区保留卡片的最低可读尺寸，整卡滚动以便仍可触达底栏。 */
+@media (max-width: 319px), (max-height: 259px) {
+  html:has(.widget-shell),
+  html:has(.widget-shell) body {
+    min-width: 0;
+  }
+  html:has(.widget-shell) #root {
+    min-width: 0;
+    min-height: 0;
+    height: 100dvh;
+    place-items: start;
+    overflow: auto !important;
+  }
+}
+

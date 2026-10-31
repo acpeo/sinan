@@ -1,0 +1,10 @@
+/* 样式聚合入口：顺序与原 styles.css 完全一致，层叠行为不变。 */
+@import "./base.css";
+@import "./glass.css";
+@import "./strip.css";
+@import "./glass-variants.css";
+@import "./dark-theme.css";
+@import "./console.css";
+@import "./cockpit.css";
+@import "./pipeline.css";
+@import "./components.css";

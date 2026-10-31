@@ -1,0 +1,718 @@
+/* 任务台主窗容器层与任务台 v7（自 styles.css 第 8399–9115 行切分，顺序保持） */
+/* ===========================================================================
+   司南任务台主窗（console）——任务台是常驻明暗主题的完整窗口，玻璃只用于
+   任务小组件窗与提醒角标窗；两套皮肤同源，这里只补主窗的容器层。
+   =========================================================================== */
+.console-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #f7f6f2;
+  color: #1c1c20;
+}
+
+/* 浅色主题边缘定义：浅底（白墙/白网页）上主窗轮廓会融掉——一圈细边 + 落地
+   投影把窗从背景里托出来。深色自带反差不需要。
+   四窗全玻璃后主窗恒挂 console-shell（2026-10-20 Leo 拍板），纸感边缘定义
+   只对不带玻璃壳的渲染（纸感档 / 预览页）生效，故整组排除 .console-shell。 */
+html:not([data-theme="dark"]) .console-root:not(.console-shell) {
+  box-shadow:
+    inset 0 0 0 1px rgba(31, 33, 36, 0.14),
+    0 22px 56px rgba(15, 18, 25, 0.26),
+    0 4px 14px rgba(15, 18, 25, 0.14);
+}
+
+html[data-theme="dark"] .console-root:not(.console-shell) {
+  background: #101013;
+  color: #e8e8ec;
+}
+
+/* ===== 四窗全玻璃 · 主窗壳（console-shell，Leo 2026-10-20 拍板）=====
+   主窗与任务小组件/胶囊/角标同一套玻璃配方：同一个 glassShellAppearance
+   生成类名、同一个 --glass-alpha 浓度滑杆、同一组 tint 档（深/浅/透明）。
+   差异只有两处：圆角 16（三窗是 8/10/11），以及透明档不做边缘穿透
+   ——主窗是工作区，点空白要能拖窗、能选中，clear 档只换材质不换交互。
+
+   内容层的明暗由档位决定（App 侧 consoleDark）：深色档 → 既有深色 HUD
+   token；浅色档 → 沿用纸感浅色 token（白霜玻璃上的浅色界面，纸感没被
+   消灭，只是多了"可透明"形态）；透明档看字色。 */
+.console-root.console-shell {
+  border-radius: 16px;
+  transition-property: background-color, box-shadow;
+  transition-duration: 280ms;
+  transition-timing-function: var(--motion, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.console-root.console-shell--transparent {
+  /* 与 .widget-shell--transparent 逐位同色（27 32 45 → 11 14 22，冷色偏置
+     0.1），浓度同吃 --glass-alpha（App 经 inline style 写入）——四窗摆一起
+     是同一块玻璃，不是"另一种玻璃"。 */
+  --glass-alpha: 0.82;
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(178, 200, 255, 0.1), transparent 48%),
+    linear-gradient(
+      168deg,
+      rgb(27 32 45 / calc(var(--glass-alpha) + 0.03)),
+      rgb(11 14 22 / var(--glass-alpha))
+    );
+  border: 1px solid rgba(0, 0, 0, 0.38);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    inset 0 1px rgba(255, 255, 255, 0.15),
+    0 12px 28px rgba(0, 0, 0, 0.3),
+    0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+/* 玻璃拟态回落：真实窗口 Alpha 不可用（浏览器预览 / 某些 release 环境）时，
+   同一套深色 HUD 加深到近实心，外观不塌、也不会露出一片白底。 */
+.console-root.console-shell--glass-css {
+  background:
+    radial-gradient(120% 90% at 12% 0%, rgba(255, 255, 255, 0.09), transparent 46%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 55%),
+    rgba(28, 30, 36, 0.95);
+}
+
+/* 浅色档：透亮白磨砂（同小组件 --glass-light 一族）。内容层沿用纸感浅色
+   token（不挂 data-theme），所以文字仍是深墨，不用另配前景。 */
+.console-root.console-shell--glass-light {
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(255, 255, 255, 0.9), transparent 48%),
+    linear-gradient(
+      168deg,
+      rgb(252 253 255 / calc(var(--glass-alpha) + 0.06)),
+      rgb(236 240 247 / calc(var(--glass-alpha) - 0.05))
+    );
+  border: 1px solid rgba(31, 33, 36, 0.14);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+    inset 0 1px rgba(255, 255, 255, 0.9),
+    0 12px 28px rgba(15, 18, 25, 0.22),
+    0 4px 10px rgba(15, 18, 25, 0.14);
+}
+
+/* 透明档：直接透出桌面与后方窗口。深色字配白霜（glass-light 同时挂上），
+   白色字换深色薄罩（glass-ink-light）。 */
+.console-root.console-shell--glass-clear {
+  --glass-alpha: 0.82;
+  background: rgb(255 255 255 / calc(var(--glass-alpha) * 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    inset 0 1px rgba(255, 255, 255, 0.35),
+    0 12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.console-root.console-shell--glass-ink-light {
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(178, 200, 255, 0.08), transparent 48%),
+    rgb(14 17 24 / var(--glass-alpha));
+  border: 1px solid rgba(0, 0, 0, 0.32);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px rgba(255, 255, 255, 0.12),
+    0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+/* macOS：材质交给系统 vibrancy（hudWindow），WebView 只叠一层适度 tint。 */
+.console-root.console-shell--mac:not(.console-shell--glass-css) {
+  border-radius: 16px;
+  background:
+    radial-gradient(130% 100% at 14% 0%, rgba(178, 200, 255, 0.07), transparent 52%),
+    linear-gradient(168deg, rgba(30, 34, 46, 0.2), rgba(12, 15, 22, 0.28));
+  border: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px rgba(255, 255, 255, 0.12);
+}
+
+/* --- 玻璃下的表面层：卡片不再实底，透出桌面但保住文字对比 --- */
+html[data-theme="dark"] .console-root.console-shell .v7card {
+  background: rgba(19, 26, 38, 0.62);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .v7card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .v7card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .v7card {
+  background: rgba(255, 255, 255, 0.58);
+  border-color: rgba(31, 33, 36, 0.1);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.7);
+}
+html[data-theme="dark"] .console-root.console-shell .settings-card {
+  background: rgba(24, 30, 41, 0.62);
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .settings-card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .settings-card,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .settings-card {
+  background: rgba(252, 251, 249, 0.56);
+}
+html[data-theme="dark"] .console-root.console-shell .cron-board-row {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(240, 240, 240, 0.12);
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .cron-board-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .cron-board-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .cron-board-row {
+  background: rgba(255, 255, 255, 0.5);
+  border-color: rgba(31, 33, 36, 0.1);
+}
+
+/* --- 指挥舱 / 案卷宗：换 --cp-* 的底/面两枚 token，组件层一行不动 ---
+   注意特异性：--cp-* 定义在 .pl-root/.cp-root/.ca-root **自身**上（见文末
+   深色主题那组），所以覆盖必须落在同一元素且比它更强——多挂 .console-root
+   这一级正好压过。玻璃下 canvas 不再是 #f7f6f2 / #1a1917 实底，换成
+   0.55~0.62 的半透：太透字飘、太实就不是玻璃，这个值在真机壁纸上调过。 */
+html[data-theme="dark"] .console-root.console-shell .pl-root,
+html[data-theme="dark"] .console-root.console-shell .cp-root,
+html[data-theme="dark"] .console-root.console-shell .ca-root {
+  --cp-canvas: rgba(20, 24, 33, 0.55);
+  --cp-surface: rgba(255, 255, 255, 0.05);
+  --cp-slot: rgba(255, 255, 255, 0.07);
+  --cp-standby-bg: rgba(255, 255, 255, 0.03);
+  --cp-hair: rgba(255, 255, 255, 0.09);
+  --cp-hair-strong: rgba(255, 255, 255, 0.14);
+  --cp-shadow-hover: 0 4px 20px -2px rgba(0, 0, 0, 0.3);
+  --cp-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -6px rgba(0, 0, 0, 0.35);
+  --cp-shadow-pop: 0 12px 40px -8px rgba(0, 0, 0, 0.5);
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .ca-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .ca-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .ca-root {
+  --cp-canvas: rgba(247, 246, 242, 0.6);
+  --cp-surface: rgba(255, 255, 255, 0.62);
+  --cp-slot: rgba(31, 33, 36, 0.04);
+}
+/* 透明档要真的透：上面那条 0.6 的宣纸白会把桌面糊掉，"透明"就名存实亡
+   （壳透、内容区不透 = 假透明）。压到 0.42 让壁纸读得出来，字仍然压得住。 */
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .cp-root,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .ca-root {
+  --cp-canvas: rgba(255, 255, 255, 0.42);
+  --cp-surface: rgba(255, 255, 255, 0.52);
+}
+
+/* 泳道行垫一层极淡 tint 兜字（深 0.035 / 浅 0.38），与设计稿
+   「每格半透明加深兜底」同一条纪律。IS-ON 行的铜金染色保留。 */
+html[data-theme="dark"] .console-root.console-shell .pl-lane-row {
+  background: rgba(255, 255, 255, 0.035);
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-lane-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-lane-row,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-lane-row {
+  background: rgba(255, 255, 255, 0.38);
+}
+html[data-theme="dark"] .console-root.console-shell .pl-lane-row.is-on {
+  background: color-mix(in srgb, var(--cp-bronze) 5%, rgba(255, 255, 255, 0.035));
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-lane-row.is-on,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-lane-row.is-on,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-lane-row.is-on {
+  background: color-mix(in srgb, var(--cp-bronze) 6%, rgba(255, 255, 255, 0.38));
+}
+/* 深潜舱三列：贴一层淡底，长判词不直接压在壁纸上。这里给得比泳道行重
+   （0.05/0.5）——判词、验收标准这类逐字读的长文本最吃玻璃，这一区给最厚。 */
+html[data-theme="dark"] .console-root.console-shell .pl-insp-col {
+  background: rgba(255, 255, 255, 0.05);
+}
+html:not([data-theme="dark"]) .console-root.console-shell--transparent .pl-insp-col,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-light .pl-insp-col,
+html:not([data-theme="dark"]) .console-root.console-shell--glass-clear .pl-insp-col {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* --- 玻璃深色内容层的逐处补丁 ---
+   token 覆盖不到的单点：sticky 列头必须近乎实底（半透明会被滚上来的行
+   透穿、字叠字）、角标描边要用不透明深色（--cp-surface 此时是半透的）、
+   选中页签的字色、滚动条与焦点环。 */
+html[data-theme="dark"] .console-root.console-shell .pl-colhead-row {
+  background: rgb(23 27 37 / 0.94);
+}
+html[data-theme="dark"] .console-root.console-shell .pl-gate-mark,
+html[data-theme="dark"] .console-root.console-shell .pl-strike-mark {
+  border-color: #1b1f2b;
+}
+html[data-theme="dark"] .console-root.console-shell .pl-tabs button.is-on {
+  background: var(--cp-ink);
+  color: #14171f;
+}
+html[data-theme="dark"] .console-root.console-shell .console-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
+}
+html[data-theme="dark"] .console-root.console-shell .console-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+}
+html[data-theme="dark"] .console-root.console-shell button:focus-visible {
+  outline-color: rgba(158, 193, 245, 0.45);
+}
+/* 顶栏不再吃 86% 纸色——玻璃上一块实底会把"一整块窗"切断；它自带
+   blur(12px) 与底部髮丝线，交给玻璃透上来即可。 */
+.console-root.console-shell .console-topbar {
+  background: transparent;
+}
+
+.console-scroll {
+  position: absolute;
+  inset: 44px 0 0 0;
+  overflow-y: auto;
+  padding: 6px 16px 28px;
+}
+
+.console-settings {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+/* ===== 司南任务台：状态头 + 签页 + 星轨时间线 ===== */
+.console-hidden { display: none !important; }
+/* 整条状态头浮到拖拽区（z=7）之上：拖拽区为消"隐形边界"已覆盖整条头行，
+   而 .console-head 自己 z-index:4 < 7 —— 子元素 z 再高也被困在父层叠上下文
+   里（抬儿子无效，必须抬父层），同步按钮因此被整块吃掉点击。 */
+.console-head { position: absolute; top: 10px; left: 16px; right: 232px; display: flex; align-items: center; gap: 8px; z-index: 8; white-space: nowrap; user-select: none; }
+/* 头行自己不吃点击（它是个宽盒子），只有里面的可交互元素吃——否则整条
+   空白都被它拦下，拖窗失效。空白落回下层拖拽区。 */
+.console-head { pointer-events: none; }
+.console-head > * { pointer-events: auto; }
+.console-head > * { white-space: nowrap; }
+.console-brand { font-weight: 600; font-size: 15px; }
+.console-brand small { color: var(--fg-faint, #6a6b73); font-weight: 400; margin-left: 6px; font-size: 12px; }
+.console-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-faint, #6a6b73); }
+.console-live--on { color: inherit; }
+.console-sync-at { font-size: 12px; color: var(--fg-faint, #6a6b73); }
+/* 状态头里的按钮要浮在拖拽区（z=7）之上：拖拽区为消"隐形边界"已覆盖整条
+   头行，z=auto 的按钮会被它整块吃掉点击（Leo 2026-10-08 实锤"同步按钮点不动"）。
+   门面可点元素一律 position:relative + z-index:8，空白区照旧拖窗。 */
+.console-refresh { position: relative; z-index: 8; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid rgba(127, 127, 127, 0.35); background: transparent; color: inherit; cursor: pointer; }
+.console-refresh:disabled { opacity: 0.5; cursor: default; }
+.console-tabs { position: absolute; top: 42px; left: 16px; right: 16px; display: flex; gap: 4px; z-index: 8; border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
+.console-tabs button { appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent; color: inherit; opacity: 0.6; font: inherit; font-size: 13px; padding: 6px 12px 8px; cursor: pointer; }
+.console-tabs button.is-selected { opacity: 1; border-bottom-color: #d9a860; }
+.console-tabs button:hover { opacity: 1; }
+/* 页签行与页签文字同属门面：禁选（正文内容不受影响，可正常复制）。 */
+.console-tabs { user-select: none; }
+/* 页签行同属门面：浮在拖拽区之上，避免被拖窗层吃掉点击。 */
+.console-tabs { position: relative; z-index: 8; }
+.console-tabs button { user-select: none; }
+.console-root .console-scroll { top: 86px; }
+/* 北斗派发回执条：发车/追投/自愈的真回执（含"没发出去"的原因）。
+   6 秒自消，但存在期间要显眼——这是主理人唯一能确认"车动没动"的地方。 */
+.console-beidou-toast { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; border: 1px solid rgba(127, 127, 127, 0.3); background: rgba(127, 127, 127, 0.1); }
+.console-beidou-toast--ok { border-color: rgba(61, 156, 80, 0.5); background: rgba(61, 156, 80, 0.12); }
+.console-beidou-toast--warn { border-color: rgba(217, 168, 96, 0.55); background: rgba(217, 168, 96, 0.14); }
+.tasks-section--flush { margin: 0; padding: 0; }
+.tasks-standby { color: var(--fg-faint, #6a6b73); font-size: 13px; text-align: center; padding: 28px 12px; }
+/* 幽灵运行告警（Leo 2026-10-20 实况）：有 automation_run 记录但 job 已不在
+   cron 列表 = 任务被删。真机三个天枢巡检 job 被删后 BM-2603/2604 静默 11
+   小时，而「定时任务」页毫无异常——这个块把"删过的任务"摊在明面上。
+   琥珀边条 + 深一号的底，不用整卡重色（它住在 cron-board 上方，要压得住
+   但不抢"2 启用"那种正常态）。 */
+.cron-orphans {
+  margin: 0 0 12px;
+  padding: 10px 14px 10px 16px;
+  border: 1px solid rgba(217, 154, 43, 0.4);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: rgba(217, 154, 43, 0.07);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.cron-orphans b { display: block; color: var(--warn); }
+.cron-orphans > span { display: block; margin-top: 2px; color: var(--fg-faint, #6a6b73); }
+/* 折叠态（Leo 2026-10-20 17:20）：真机 11 条里 9 条是历史删除，摊满半屏
+   看久了变墙纸。收成一行标题 + 最新时刻，点开才看清单。 */
+.cron-orphans--collapsed { padding: 7px 14px 7px 16px; }
+.cron-orphans-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.cron-orphans-toggle b { flex: 1 1 auto; }
+.cron-orphans-hint { flex: 0 0 auto; font-size: 11px; color: var(--fg-faint, #6a6b73); white-space: nowrap; }
+.cron-orphans-toggle:hover .cron-orphans-hint { color: inherit; }
+.cron-orphans--collapsed .cron-orphans-hint { margin-left: auto; }
+.cron-orphans ul { margin: 6px 0 0; padding: 0; list-style: none; }
+.cron-orphans li { display: flex; gap: 8px; align-items: baseline; }
+.cron-orphans li em { font-style: normal; font-weight: 600; min-width: 3em; }
+.cron-orphans li span { color: var(--fg-faint, #6a6b73); }
+.cron-orphans-more { color: var(--fg-faint, #6a6b73); }
+:root[data-theme="dark"] .cron-orphans { background: rgba(217, 154, 43, 0.1); }
+:root[data-theme="dark"] .cron-orphans > span,
+:root[data-theme="dark"] .cron-orphans li span,
+:root[data-theme="dark"] .cron-orphans-more { color: #9a9ba2; }
+.starrail { margin: 0 0 12px; }
+.starrail-frame { position: relative; background: rgba(127, 127, 127, 0.07); border: 1px solid rgba(127, 127, 127, 0.22); border-radius: 10px; padding: 26px 12px 8px 92px; }
+.starrail-grid { position: absolute; left: 92px; right: 12px; top: 0; bottom: 0; }
+.starrail-grid i { position: absolute; top: 22px; bottom: 6px; width: 1px; background: rgba(127, 127, 127, 0.18); }
+.starrail-grid i span { position: absolute; top: 2px; left: 4px; font-size: 10px; color: var(--fg-faint, #6a6b73); font-style: normal; }
+.starrail-lane { position: relative; height: 44px; }
+.starrail-lane--cron { height: 36px; }
+.starrail-who { position: absolute; left: -80px; top: 11px; width: 68px; text-align: right; font-size: 12px; line-height: 1.2; }
+.starrail-who b { font-weight: 600; display: block; }
+.starrail-who small { font-size: 10px; color: var(--fg-faint, #6a6b73); }
+.starrail-rail { position: absolute; left: 0; right: 0; top: 20px; height: 6px; border-radius: 3px; background: rgba(127, 127, 127, 0.12); }
+.starrail-run { position: absolute; top: 2px; height: 22px; border-radius: 6px; min-width: 14px; }
+.starrail-run--done { background: rgba(61, 156, 80, 0.3); border: 1px solid rgba(61, 156, 80, 0.55); }
+.starrail-run--failed { background: rgba(224, 82, 82, 0.32); border: 1px solid rgba(224, 82, 82, 0.6); }
+.starrail-run--skipped { background: rgba(127, 127, 127, 0.15); border: 1px dashed rgba(127, 127, 127, 0.45); }
+.starrail-run--pending { background: rgba(127, 127, 127, 0.12); border: 1px solid rgba(127, 127, 127, 0.35); }
+.starrail-run--current { background: rgba(106, 90, 224, 0.4); border: 1px solid #6a5ae0; box-shadow: 0 0 10px rgba(106, 90, 224, 0.4); }
+.starrail-run--live::after { content: "●"; position: absolute; right: 5px; top: 3px; font-size: 9px; color: #fff; animation: starrail-pulse 1.2s infinite; }
+@keyframes starrail-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.starrail-tick { position: absolute; top: 6px; width: 8px; height: 14px; border-radius: 3px; }
+.starrail-tick--done { background: rgba(61, 156, 80, 0.5); }
+.starrail-tick--failed { background: rgba(224, 82, 82, 0.55); }
+.starrail-tick--skipped { background: rgba(127, 127, 127, 0.28); }
+.starrail-tick--pending, .starrail-tick--current { background: rgba(106, 90, 224, 0.55); }
+.starrail-handoff { position: absolute; width: 0; border-left: 1px dashed rgba(106, 90, 224, 0.45); }
+.starrail-empty { color: var(--fg-faint, #6a6b73); font-size: 12.5px; text-align: center; padding: 18px 10px; }
+
+/* ===== 星轨 v2：贴设计稿的密度与标注 ===== */
+.starrail-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 2px 8px; }
+.starrail-head b { font-size: 14px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.starrail-head small { color: var(--fg-faint, #6a6b73); font-size: 12px; }
+.starrail-window { margin-left: auto; font-size: 11px; color: var(--fg-faint, #6a6b73); }
+.starrail-frame { padding: 30px 12px 10px 96px; }
+.starrail-grid i span { font-size: 10.5px; }
+.starrail-lane { height: 48px; }
+.starrail-lane--cron { height: 44px; }
+.starrail-who { left: -84px; width: 72px; top: 5px; }
+.starrail-who b { font-size: 13px; }
+.starrail-who small { display: block; font-size: 10px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.starrail-rail { top: 24px; height: 8px; border-radius: 4px; }
+.starrail-run { top: 5px; height: 26px; border-radius: 7px; overflow: hidden; display: flex; align-items: center; padding: 0 7px; }
+.starrail-run em { font-style: normal; font-size: 10.5px; line-height: 1; color: rgba(255, 255, 255, 0.92); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.starrail-run--done { background: rgba(61, 156, 80, 0.32); border: 1px solid rgba(61, 156, 80, 0.6); }
+.starrail-run--done em { color: #cdeeda; }
+.starrail-run--failed { background: rgba(224, 82, 82, 0.32); border: 1px solid rgba(224, 82, 82, 0.65); }
+.starrail-run--failed em { color: #f4cdcd; }
+.starrail-run--skipped { border-style: dashed; }
+.starrail-run--current { box-shadow: 0 0 12px rgba(106, 90, 224, 0.45); }
+.starrail-run--live::after { content: "●"; margin-left: auto; font-size: 8px; color: #fff; animation: starrail-pulse 1.2s infinite; }
+.starrail-lane--cron .starrail-tick { top: 12px; }
+.starrail-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 12px; }
+.starrail-chip { background: rgba(127, 127, 127, 0.08); border: 1px solid rgba(127, 127, 127, 0.2); border-radius: 9px; padding: 8px 10px; }
+.starrail-chip b { display: block; font-size: 15px; line-height: 1.2; }
+.starrail-chip b.starrail-bad { color: #e05252; }
+.starrail-chip small { color: var(--fg-faint, #6a6b73); font-size: 11px; }
+.tasks-standby--roomy { padding: 40px 12px; }
+
+/* ===== 任务签可读性：全景/轮次回放字号与对比度（亮暗两套） ===== */
+.console-root .chain-panorama .history-episodes-head,
+.console-root .cron-board .history-episodes-head,
+.console-root .history-episodes .history-episodes-head { font-size: 14.5px; color: inherit; }
+.console-root .history-episodes-head small { font-size: 12px; opacity: 0.72; }
+.console-root .task-timeline-title { font-size: 13.5px; color: inherit; }
+.console-root .task-timeline-name { font-size: 12.5px; font-weight: 600; }
+.console-root .task-timeline-progress { font-size: 12px; color: #56575e; opacity: 1; }
+.console-root .task-timeline-summary { font-size: 12.5px; color: #2e7d43; opacity: 1; }
+html[data-theme="dark"] .console-root .task-timeline-progress { color: #a6a8b0; }
+html[data-theme="dark"] .console-root .task-timeline-summary { color: #7fcf95; }
+
+/* ===== 星轨 v3：标注常驻条内（Apple 日历式）+ 控制台滚动条 ===== */
+.starrail-run { min-width: 2px; }
+/* 滚动条：滚轮照常，但不画滑轨（Leo 2026-10-20 第 2 条：深色没有滑轨、
+   浅色多出一条粗的，两档不一致）。
+   成因：这里原来只给了 ::-webkit-scrollbar 一套 5px 的细条，而 `.console-root`
+   又设了标准属性 scrollbar-width: thin —— Chromium 里标准属性一出现，伪元素
+   那套就被整体忽略，于是浅色渲染成系统原生滚动条（带上下箭头的粗条），
+   深色因为 thumb 色近底而几乎看不见。现在两套都关掉：标准属性用 none，
+   伪元素兜底 0 宽。 */
+.console-root { scrollbar-width: none; }
+.console-root::-webkit-scrollbar,
+.console-root ::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+.starrail-now { position: absolute; right: 12px; top: 28px; bottom: 8px; width: 2px; border-radius: 1px; background: linear-gradient(180deg, rgba(106, 90, 224, 0.9), rgba(106, 90, 224, 0.12)); box-shadow: 0 0 8px rgba(106, 90, 224, 0.55); }
+
+/* ===== 浅色主题：光条文字/描边加深（白字压浅底不可读） ===== */
+.console-root .starrail-run--done em { color: #eaf6ee; }
+.console-root .starrail-run--failed em { color: #fbe0e0; }
+.console-root .starrail-run--current em { color: #f0eeff; }
+html:not([data-theme="dark"]) .console-root .starrail-run--done { background: rgba(61, 156, 80, 0.24); border-color: rgba(34, 110, 55, 0.65); }
+html:not([data-theme="dark"]) .console-root .starrail-run--done em { color: #1c5a2e; }
+html:not([data-theme="dark"]) .console-root .starrail-run--failed { background: rgba(224, 82, 82, 0.2); border-color: rgba(160, 48, 48, 0.6); }
+html:not([data-theme="dark"]) .console-root .starrail-run--failed em { color: #8f2626; }
+html:not([data-theme="dark"]) .console-root .starrail-run--current { background: rgba(106, 90, 224, 0.24); border-color: #5b4ed0; }
+html:not([data-theme="dark"]) .console-root .starrail-run--current em { color: #372e9e; }
+html:not([data-theme="dark"]) .console-root .starrail-run--live::after { color: #372e9e; }
+html:not([data-theme="dark"]) .console-root .starrail-run--skipped { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.28); }
+
+/* ============ 任务台 v7（2026-10-05 设计规范重排）：统一卡片栅格等高对齐、
+   90% 灰阶（色=状态点+金色单重音）、事件流=紧凑日志、密度梯度 ============ */
+.tasksboard { display: flex; flex-direction: column; min-height: 100%; padding-bottom: 12px; }
+.v7row { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; }
+.v7-feedrow { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px 16px 0; align-items: start; }
+/* 行高由左栏内容说了算（右栏行数能一夜涨到几十行，让它参与 stretch 就是
+   互相撑高：Leo 2026-10-13 实测注入 80 行后两栏一起飙到 2678px）。
+   右栏自己 stretch 拿满这个行高，内部 flex 列把剩余高全给滚动区——行少时
+   左右仍同框同顶同底，行多时滚动区压回卡内自滚，整页不再被拉长。
+   不写 max-height: 100%：grid 行高是 auto，百分比解析不到确定高度，是死代码。 */
+.v7-feedrow > .v7-logcard { align-self: stretch; }
+/* 左右底部对齐：矮的一栏末卡吃满剩余高（空腔收进卡内，不再裸在页面上） */
+.v7-feedmain > .v5card:last-child, .v7-feedmain > .v7-gsec:last-child { flex: 1 1 auto; margin-bottom: 0; }
+.v7-feedmain > .v7-gsec:last-child > .v5card:last-child { flex: 1 1 auto; margin-bottom: 0; }
+/* 右栏流水卡同样吃满：卡是 flex 列，滚动区是唯一能伸缩的孩子，行少时它把
+   剩余高吃掉（卡片不会比左栏矮一截）；行多时 flex 把它压回卡内剩余高，
+   超出部分自己滚——不用 max-height 封顶，那会在卡片底部留一条空带。 */
+.v7-logcard > .v7-lscroll { flex: 1 1 auto; min-height: 120px; }
+/* 速览 = 按星分组（Leo 2026-10-06 拍板 B）：节头 = 点+星名+案数 */
+.v7-gsec { display: flex; flex-direction: column; }
+.v7-gsec + .v7-gsec { margin-top: 12px; }
+.v7-ghead { display: flex; align-items: center; gap: 7px; padding: 4px 2px 6px; border-bottom: 1px solid rgba(240, 240, 240, 0.08); font-size: 11.5px; color: #e7ecf4; }
+.v7-ghead b { font-weight: 650; }
+.v7-ghead small { color: #5c6779; font-size: 10px; }
+.v7-gsec .v5card:last-child { margin-bottom: 0; }
+/* 天条贴卡内头（与右卡 mhead+lday 的 4px 同款），框内不再下坠 */
+.v7-mhead + .v5-daybar { margin-top: 4px; }
+.v7card { background: #131a26; border: 1px solid #202938; border-radius: 10px; min-width: 0; }
+.v7-dialcard { padding: 6px 10px; position: relative; overflow: hidden; }
+.dial { position: relative; aspect-ratio: 552 / 146; }
+.dial svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dial-node { cursor: pointer; }
+.dial-node text { font-size: 9.5px; fill: #9aa5b5; }
+.dial-node .dial-sub { font-size: 8.5px; fill: #5c6779; }
+.dial-node .dial-sub.is-live { fill: #3dd68c; }
+.dial-node.is-idle { opacity: .45; }
+.dial-node.is-stale .dial-dot { opacity: .55; }
+.dial-node.is-stale .dial-sub { fill: #4a5568; }
+.dial-node.is-selected text { fill: #d9a860; font-weight: 600; }
+.dial-hub text { fill: #9aa5b5; }
+.dial-halo { animation: v5-breath 1.6s ease-in-out infinite; }
+@keyframes v5-breath { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+/* 摇光→读数块引导线：暗色淡金；浅色下淡金几乎不可见（Leo），加深加重 */
+.dial-leader { stroke: rgba(217, 168, 96, 0.5); }
+html:not([data-theme="dark"]) .console-root .dial-leader { stroke: rgba(146, 100, 26, 0.75); }
+.dial-next { position: absolute; left: 78.6%; top: 46%; text-align: left; }
+.dial-next .lb { font-size: 10.5px; color: #9aa5b5; letter-spacing: .06em; margin-bottom: 3px; }
+.dial-next .tm { font-size: 20px; font-weight: 650; color: #d9a860; font-variant-numeric: tabular-nums; line-height: 1.2; margin-bottom: 3px; }
+.dial-next .sub { font-size: 11.5px; color: #9aa5b5; font-variant-numeric: tabular-nums; line-height: 1.5; }
+
+.v7-croncard { padding: 10px 14px 10px; display: flex; flex-direction: column; }
+.v7-mhead { font-size: 10.5px; color: #5c6779; letter-spacing: .08em; display: flex; align-items: baseline; justify-content: space-between; }
+.v7-mcount { color: #9aa5b5; letter-spacing: 0; }
+.v7-qrow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid #1b2331; }
+.v7-croncard .v7-qrow:first-of-type { border-top: none; }
+.v7-qname { font-size: 12px; color: #e7ecf4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.v7-qnext { font-size: 11px; color: #9aa5b5; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.v7-qnext em { font-style: normal; color: #5c6779; }
+.v7-qempty { padding: 10px 0 4px; font-size: 11.5px; color: #5c6779; }
+.v7-execblock { margin-top: auto; border-top: 1px solid #1b2331; padding-top: 8px; }
+.v7-exectop { display: flex; align-items: baseline; justify-content: space-between; }
+.v7-execnum { font-size: 13px; font-weight: 600; color: #e7ecf4; font-variant-numeric: tabular-nums; }
+.v7-execdetail { font-size: 10.5px; color: #5c6779; margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.v7-spark { display: flex; align-items: center; gap: 8px; }
+.v7-spark em { font-style: normal; font-size: 10.5px; color: #5c6779; }
+.v7-sbs { display: flex; align-items: flex-end; gap: 3px; height: 20px; }
+.v7-sb { width: 5px; border-radius: 1px 1px 0 0; background: #2e3850; }
+.v7-sb.is-now { background: #9aa5b5; }
+
+.v7-dutyrow > * { min-width: 0; }
+.v7-dutybrief { display: flex; min-width: 0; }
+.v7-dutybrief .v5card { flex: 1; }
+.v7-solo { grid-column: 1 / -1; }
+.v5-kind--run { color: #3dd68c; }
+.v7-progress { margin-top: 6px; font-size: 11.5px; color: #8fbfa6; display: flex; align-items: center; gap: 6px; }
+.v7-progress i { width: 5px; height: 5px; border-radius: 50%; background: #3dd68c; animation: v5-breath 1.6s ease-in-out infinite; flex-shrink: 0; }
+
+.v7-feedmain { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 10px 14px 8px; }
+/* 筛选 chips 的归属行：动态流头上，管谁贴谁（v7.1） */
+.v7-logcard { padding: 10px 14px 8px; display: flex; flex-direction: column; min-height: 0; }
+/* 流水是滚动的日志，不是越长越好的史册（Leo 2026-10-13"好长时间没动静"那轮
+   把会话接力的每一跳都接进来了，一夜几十行）。滚动区是 flex 列里唯一能伸缩
+   的孩子：行少时吃掉左栏剩下的高（左右底边仍对齐，Leo 2026-10-06 定稿的
+   "同框同顶同底"）；行多时 flex 把它压到卡内剩余高，超出部分自己滚。
+   不能加 vh/px 的 max-height：那会把滚动区封在某个高，卡片底部留一条空
+   带——grid 的 stretch 已经把卡高和左栏拉齐了，再封顶就是自己跟自己抢。 */
+.v7-logcard .v7-lscroll { overflow-y: auto; min-height: 0; scrollbar-width: thin; }
+/* "展开更早的 N 条"脚注：贴卡底，不抢戏（v5-foot 同款淡墨），可点 */
+.v7-lmore { display: block; width: 100%; margin-top: 6px; padding: 4px 0 0; border: none; border-top: 1px solid #1b2331; background: none; color: #5c6779; font-size: 10.5px; text-align: left; cursor: pointer; }
+.v7-lmore:hover { color: #9aa5b5; }
+html:not([data-theme="dark"]) .console-root .v7-lmore { border-top-color: rgba(31,33,36,.1); color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v7-lmore:hover { color: #54565a; }
+.v7-logcard .v7-lscroll::-webkit-scrollbar { width: 6px; }
+.v7-logcard .v7-lscroll::-webkit-scrollbar-thumb { background: rgba(240,240,240,.14); border-radius: 3px; }
+.v7-lday { font-size: 10px; color: #5c6779; letter-spacing: .1em; margin: 8px 0 2px; }
+.v7-mhead + .v7-lday { margin-top: 4px; }
+.v7-lrow { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px solid #1b2331; font-size: 11.5px; }
+.v7-lday + .v7-lrow { border-top: none; }
+.v7-lt { color: #5c6779; font-variant-numeric: tabular-nums; flex-shrink: 0; width: 34px; }
+.v7-ls { color: #9aa5b5; flex-shrink: 0; width: 52px; }
+.v7-le { color: #e7ecf4; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v7-lg { flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: 10.5px; }
+@media (max-width: 900px) {
+  .v7row, .v7-feedrow { grid-template-columns: 1fr; }
+}
+
+.v5-statrow { display: flex; align-items: center; gap: 16px; padding: 10px 16px 2px; }
+.v5-stat { font-size: 12px; color: #9aa5b5; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v5-stat b { color: #ececec; font-weight: 600; }
+.v5-spark { display: flex; align-items: flex-end; gap: 3px; height: 20px; }
+.v5-spark-label { font-size: 10.5px; color: #5c6779; align-self: center; }
+.v5-spark-bar { width: 4px; border-radius: 1px; background: #2e3850; }
+.v5-filters { margin-left: auto; display: flex; gap: 6px; }
+.v5-chip { font-size: 10.5px; color: #9a9ca0; border: 1px solid rgba(240,240,240,.12); border-radius: 11px; padding: 3px 10px; background: transparent; cursor: pointer; }
+.v5-chip.is-on { color: #d9a860; border-color: rgba(217,168,96,.5); }
+
+.v5-daybar { display: flex; align-items: center; gap: 12px; height: 24px; margin-top: 14px; font-size: 10.5px; color: #74767a; letter-spacing: .1em; flex-shrink: 0; }
+.v5-daybar::after { content: ""; flex: 1; height: 1px; background: rgba(240,240,240,.08); }
+.v5card { position: relative; border: 1px solid rgba(240,240,240,.10); border-radius: 10px; background: rgba(255,255,255,.04); padding: 12px 14px; margin-bottom: 10px; }
+.v5card.spine::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 10px 0 0 10px; background: var(--spine, transparent); }
+.v5card--dump { padding-top: 10px; padding-bottom: 10px; }
+.v5card--brief { border-color: rgba(217,168,96,.38); background: rgba(217,168,96,.05); }
+.v5-l1 { display: flex; align-items: center; gap: 6px; height: 16px; }
+.v5-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.v5-dot--hollow { background: transparent !important; border: 1.5px solid #6b6e78; }
+/* 在跑的点：呼吸（唯一的动画墨色），与星盘/胶囊灯同一语汇——活的事才动。 */
+.v5-dot--live { animation: v5-dot-breath 1.6s ease-in-out infinite; }
+@keyframes v5-dot-breath { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.v5-l1 b { font-size: 11.5px; font-weight: 500; }
+.v5-kind { font-size: 10.5px; color: #74767a; }
+.v5-kind--gold { color: #d9a860; }
+.v5-when { margin-left: auto; font-size: 11px; color: #74767a; font-variant-numeric: tabular-nums; }
+.v5-l2 { font-size: 13px; font-weight: 550; color: #ececec; line-height: 18px; margin-top: 5px; }
+.v5-l2.is-slug { color: #9a9ca0; font-weight: 450; }
+.v5-l2--soft { color: #9a9ca0; }
+.v5-concl { font-size: 13px; color: #c9cbcf; line-height: 21px; margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.v5-concl.is-open { display: block; }
+.v5-concl-en { color: #74767a; font-size: 11px; line-height: 1.5; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v5-morerow { text-align: right; margin-top: 2px; }
+.v5-more { color: #d9a860; font-size: 12px; background: none; border: none; cursor: pointer; padding: 2px 4px; }
+.v5-cancelwhy { font-size: 13px; color: #9a9ca0; line-height: 21px; margin-top: 5px; }
+.v5-errraw { font-size: 11px; color: #74767a; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v5-err { font-size: 12.5px; color: #e08a80; line-height: 1.5; margin-top: 6px; }
+.v5-batchdetail { font-size: 11px; color: #9a9ca0; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.v5-case { border-color: rgba(61,214,140,.28); background: rgba(61,214,140,.045); }
+.v5-chain { margin-top: 6px; font-size: 11.5px; color: #9a9ca0; line-height: 1.6; }
+
+/* ── 案卡折叠芯片（v7.2，Leo 2026-10-06 拍板）：连续同星同果折叠 ✓×N，
+   悬停芯片弹该星明细（收班=跳列表 / 运行=实时卡）——星序一眼可读，
+   替代逐跳平铺的"天枢✓→天枢✓→…"来回刷。 ── */
+.v5card.v5case { position: relative; }
+.v5-chain { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.v5-chain-sep { color: #4a5568; font-size: 11px; }
+.v5-chain-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px; padding: 2px 10px; font-size: 12px; color: #cfd8e4;
+  cursor: default; transition: border-color 150ms var(--motion), background 150ms var(--motion);
+}
+.v5-chain-chip i { width: 6px; height: 6px; border-radius: 50%; background: #4a5568; flex: none; }
+.v5-chain-chip--live { background: rgba(61, 214, 140, 0.10); border-color: rgba(61, 214, 140, 0.35); color: #b8e6cd; }
+.v5-chain-chip--live i { background: #3dd68c; box-shadow: 0 0 6px rgba(61, 214, 140, 0.8); }
+.v5-chain-chip--failed { color: #e08585; border-color: rgba(224, 133, 133, 0.3); }
+.v5-chain-chip--failed i { background: rgba(242, 109, 109, 0.7); }
+.v5-chain-chip.is-hover { border-color: rgba(255, 210, 125, 0.55); background: rgba(255, 210, 125, 0.08); }
+.v5-chain-pop {
+  position: absolute; left: 12px; top: 76px; z-index: 6; width: 330px;
+  background: rgba(24, 28, 36, 0.97); border: 1px solid rgba(255, 210, 125, 0.35);
+  border-radius: 10px; padding: 10px 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.v5-chain-pop-h { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #b8e6cd; font-weight: 700; margin-bottom: 6px; }
+.v5-chain-pop-h i { width: 7px; height: 7px; border-radius: 50%; background: #3dd68c; box-shadow: 0 0 7px rgba(61, 214, 140, 0.85); flex: none; }
+.v5-chain-pop-kv { display: flex; gap: 8px; font-size: 11.5px; color: #aab3c2; padding: 3px 0; }
+.v5-chain-pop-kv + .v5-chain-pop-kv { border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.v5-chain-pop-kv b { color: #dfe4ec; font-weight: 600; flex: none; width: 66px; }
+.v5-chain-pop-kv .txt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #97a1b2; }
+
+/* 灯牌空闲星（rest 灯语）：○ 仍最暗一档，但名字要能认（0.45 → 0.62，
+   Leo 2026-10-07 实锤空闲星隐形） */
+.task-chain-hop--rest { opacity: 0.62; }
+.task-chain-hop--rest .task-chain-glyph { color: #6b7684; }
+.widget-shell--glass-light .task-chain-hop--rest .task-chain-glyph { color: rgba(31, 33, 36, 0.35); }
+.v5-hops { margin-top: 8px; border-top: 1px dashed rgba(240,240,240,.1); padding-top: 8px; }
+.v5-foot { padding: 8px 16px 6px; font-size: 10.5px; color: #5d6069; text-align: center; }
+.v5-empty { margin: 28px 16px; font-size: 12.5px; color: #74767a; text-align: center; line-height: 1.7; }
+
+/* 浅色主题对比度（.console-root 作用域） */
+html:not([data-theme="dark"]) .console-root .dial-node text { fill: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .dial-node.is-stale text { fill: #9a9ca0; }
+html:not([data-theme="dark"]) .console-root .v5card { background: rgba(255,255,255,.6); border-color: rgba(31,33,36,.12); }
+html:not([data-theme="dark"]) .console-root .v5card--brief { background: rgba(217,168,96,.08); }
+html:not([data-theme="dark"]) .console-root .v5-l2 { color: #26282b; }
+html:not([data-theme="dark"]) .console-root .v5-l2.is-slug { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-l2--soft { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-concl { color: #3c3e42; }
+html:not([data-theme="dark"]) .console-root .v5-kind { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v5-when { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v5-stat { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-stat b { color: #26282b; }
+html:not([data-theme="dark"]) .console-root .v5-daybar { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v5-daybar::after { background: rgba(31,33,36,.08); }
+html:not([data-theme="dark"]) .console-root .v5-chip { border-color: rgba(31,33,36,.14); color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v5-chain,
+html:not([data-theme="dark"]) .console-root .v5-cancelwhy,
+html:not([data-theme="dark"]) .console-root .v5-batchdetail { color: #6b6e78; }
+
+/* ---- v5.2 轮：图例删除改星点悬停 / 链线主题化 / 浅色对比度 / 折叠明细 ---- */
+.dial-chain { stroke: #2e3850; }
+/* 值班区双栏（C3 定稿：在办案件｜最新简报 并排，窄窗回落上下堆叠） */
+html:not([data-theme="dark"]) .console-root .dial-chain { stroke: #4a5164; }
+html:not([data-theme="dark"]) .console-root .dial-node text { fill: #54565a; }
+html:not([data-theme="dark"]) .console-root .dial-node.is-idle { opacity: .55; }
+html:not([data-theme="dark"]) .console-root .v7card { background: rgba(255,255,255,.6); border-color: rgba(31,33,36,.12); }
+html:not([data-theme="dark"]) .console-root .v7-qrow,
+html:not([data-theme="dark"]) .console-root .v7-lrow,
+html:not([data-theme="dark"]) .console-root .v7-execblock { border-color: rgba(31,33,36,.1); }
+html:not([data-theme="dark"]) .console-root .v7-mhead,
+html:not([data-theme="dark"]) .console-root .v7-ghead { color: rgba(29, 31, 35, 0.9); border-bottom-color: rgba(31, 33, 36, 0.1); }
+html:not([data-theme="dark"]) .console-root .v7-ghead small { color: rgba(48, 51, 57, 0.55); }
+html:not([data-theme="dark"]) .console-root .v7-lday,
+html:not([data-theme="dark"]) .console-root .v7-lt,
+html:not([data-theme="dark"]) .console-root .v7-qnext em,
+html:not([data-theme="dark"]) .console-root .v7-execdetail { color: #8a8c90; }
+html:not([data-theme="dark"]) .console-root .v7-qname,
+html:not([data-theme="dark"]) .console-root .v7-le,
+html:not([data-theme="dark"]) .console-root .v7-execnum { color: #26282b; }
+html:not([data-theme="dark"]) .console-root .v7-ls { color: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v7-sb { background: rgba(31,33,36,.14); }
+html:not([data-theme="dark"]) .console-root .v7-sb.is-now { background: #6b6e78; }
+html:not([data-theme="dark"]) .console-root .v7-logcard .v7-lscroll::-webkit-scrollbar-thumb { background: rgba(31,33,36,.2); }
+
+/* ---- v5.1：单一滚动容器（Leo：左右两根滑轨多余）——外层 html/body 裁剪，
+   console-scroll 是任务台唯一的滚动条 ---- */
+html:has(.console-root),
+html:has(.console-root) body { overflow: hidden; height: 100%; }
+.console-root { height: 100dvh; overflow: hidden; }
+
+/* ---------------------------------------------------------------------------
+   星卡伴随窗（tasks-hopcard，?view=hopcard）：独立置顶穿透小窗的舞台。
+   胶囊窗悬停零 resize——卡在这里活，窗固定 224×460，内容盒按 side 对齐
+   （竖条居中 / 横条 above=底对齐 below=顶对齐，由内联 alignItems 给）。
+   --------------------------------------------------------------------------- */
+html:has(.hopcard-stage),
+html:has(.hopcard-stage) body,
+html:has(.hopcard-stage) #root {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.hopcard-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* 内容盒超出承载高的兜底（估计偏差/极端长结论）：卡内自滚，不裁字。 */
+.hopcard-stage .tasks-hopcard {
+  max-height: calc(100% - 8px);
+  overflow-y: auto;
+}
+

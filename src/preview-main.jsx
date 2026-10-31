@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { PipelineView } from "./views/PipelineView.jsx";
 import { installExternalLinkHandler } from "./lib/externalLinks.js";
-import "./styles.css";
+import "./styles/index.css";
 
 installExternalLinkHandler();
 

@@ -1,0 +1,702 @@
+/* 胶囊条 strip（横竖形态、悬停详情）（自 styles.css 第 1362–2062 行切分，顺序保持） */
+/* ============ 胶囊条（strip 第三形态） ============
+   近实心深色玻璃拟态（窗口本身透明，圆角由 CSS 画）；
+   不启用原生方形背板，避免从胶囊圆角外露出。 */
+
+/* 胶囊条窗口比 320px 的全局最小宽度还窄，strip 形态下放开限制。 */
+html:has(.strip-shell),
+html:has(.strip-shell) body,
+html:has(.strip-shell) #root {
+  min-width: 0;
+}
+
+.strip-shell {
+  --strip-detail-surface: rgba(248, 248, 247, 0.98);
+  --strip-detail-background:
+    radial-gradient(140% 180% at 14% 0%, rgba(255, 255, 255, 0.9), transparent 60%),
+    linear-gradient(165deg, #fbfbfa, #f0efeb);
+  --strip-detail-ink: rgba(29, 31, 35, 0.94);
+  --strip-detail-muted: rgba(48, 51, 57, 0.48);
+  display: flex;
+  align-items: center;
+  width: 100vw;
+  height: 100dvh;
+  padding: 0 5px 0 6px;
+  gap: 2px;
+  overflow: hidden;
+  color: var(--ink);
+  background:
+    radial-gradient(140% 180% at 14% 0%, rgba(255, 255, 255, 0.9), transparent 60%),
+    linear-gradient(165deg, #fbfbfa, #f0efeb);
+  box-shadow: inset 0 0 0 1px rgba(31, 33, 36, 0.08);
+  cursor: default;
+  user-select: none;
+}
+
+.strip-rail {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.strip-rail::-webkit-scrollbar { display: none; }
+
+.strip-shell--vertical {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 6px 3px 4px;
+  gap: 4px;
+}
+
+.strip-shell--vertical .strip-rail {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  gap: 4px;
+}
+
+/* 横条保留一眼扫完的优势，不复制竖条的扩窗详情。旧版原生 title 已移除，
+   这里只把信息组做成与新版竖条相同的轻量玻璃分组。 */
+.strip-shell--horizontal {
+  padding-inline: 6px 5px;
+  gap: 4px;
+}
+
+.strip-shell--horizontal .strip-rail { gap: 3px; }
+
+.strip-shell--horizontal .strip-cell {
+  position: relative;
+  flex: none;
+  min-height: 24px;
+  padding: 4px 6px 4px 4px;
+}
+
+.strip-shell--horizontal .strip-cell + .strip-cell::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: -2px;
+  width: 1px;
+  background: currentColor;
+  opacity: 0.09;
+  pointer-events: none;
+}
+
+.strip-shell--horizontal .strip-controls {
+  margin-left: 1px;
+  padding-left: 3px;
+  box-shadow: -1px 0 color-mix(in srgb, currentColor 9%, transparent);
+}
+
+/* Windows 竖条悬停详情：透明主窗口只提供承载区，原条身和气泡各自画表面。
+   条身按原坐标留在屏幕上，详情从指向当前 Agent 的尖角位置展开。 */
+.strip-shell--vertical.strip-shell--detail-open {
+  position: relative;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.strip-shell--detail-open .strip-rail {
+  position: absolute;
+  z-index: 2;
+  top: var(--strip-rail-offset-y, 0px);
+  display: flex;
+  flex: none;
+  width: 42px;
+  height: max-content;
+  max-height: calc(100dvh - var(--strip-rail-offset-y, 0px));
+  padding: 6px 3px 4px;
+  gap: 4px;
+  border-radius: 8px;
+  background: var(--strip-detail-background);
+  box-shadow: inset 0 0 0 1px rgba(31, 33, 36, 0.08);
+}
+
+.strip-shell--detail-right .strip-rail { right: 0; }
+.strip-shell--detail-left .strip-rail { left: 0; }
+
+.strip-detail-card {
+  position: absolute;
+  z-index: 4;
+  top: var(--strip-detail-card-center-y, 50%);
+  width: 232px;
+  max-width: calc(100vw - 70px);
+  padding: 12px;
+  color: var(--strip-detail-ink);
+  background: var(--strip-detail-background);
+  border: 1px solid color-mix(in srgb, var(--strip-detail-ink) 9%, transparent);
+  border-radius: 14px;
+  /* 落影必须收在透明承载区之内：卡片离窗口上下缘只有 8–12px、离左缘 26px，
+     超出的部分会被窗口边界切成一道直线，把看不见的承载区暴露出来。 */
+  box-shadow:
+    0 3px 8px rgba(10, 12, 16, 0.14),
+    0 1px 2px rgba(10, 12, 16, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px rgba(255, 255, 255, 0.16);
+  pointer-events: none;
+  transform: translateY(-50%);
+  transform-origin: right var(--strip-detail-pointer-y, 50%);
+  animation: strip-detail-reveal-right 160ms cubic-bezier(0.2, 0.82, 0.22, 1) both;
+}
+
+.strip-shell--detail-right .strip-detail-card { right: 54px; }
+.strip-shell--detail-left .strip-detail-card {
+  left: 54px;
+  transform-origin: left var(--strip-detail-pointer-y, 50%);
+  animation-name: strip-detail-reveal-left;
+}
+
+.strip-detail-card::after {
+  content: "";
+  position: absolute;
+  top: var(--strip-detail-pointer-y, 50%);
+  width: 14px;
+  height: 28px;
+  background: var(--strip-detail-surface);
+  clip-path: polygon(0 0, 100% 50%, 0 100%, 16% 72%, 22% 50%, 16% 28%);
+  transform: translateY(-50%);
+}
+
+.strip-shell--detail-right .strip-detail-card::after { right: -13px; }
+.strip-shell--detail-left .strip-detail-card::after {
+  left: -13px;
+  transform: translateY(-50%) scaleX(-1);
+}
+
+.strip-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.strip-detail-header img {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+}
+
+.strip-detail-header strong {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strip-detail-metrics {
+  display: grid;
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.strip-detail-metric { display: grid; gap: 5px; }
+.strip-detail-metric > span {
+  overflow: hidden;
+  font-size: 10.5px;
+  line-height: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strip-detail-track {
+  height: 5px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--strip-detail-ink) 15%, transparent);
+  border-radius: 999px;
+}
+
+.strip-detail-track i {
+  display: block;
+  min-width: 3px;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.strip-detail-track .strip-detail-fill--warn { background: #e8b04a; }
+.strip-detail-track .strip-detail-fill--critical { background: #ec7a63; }
+
+.strip-detail-metric p {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 13px;
+}
+
+.strip-detail-metric p strong { font-weight: 580; }
+.strip-detail-metric p small {
+  overflow: hidden;
+  color: var(--strip-detail-muted);
+  font-size: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strip-detail-empty,
+.strip-detail-card footer {
+  margin: 9px 0 0;
+  color: var(--strip-detail-muted);
+  font-size: 10px;
+  line-height: 13px;
+}
+
+@keyframes strip-detail-reveal-right {
+  from { opacity: 0; transform: translate(4px, -50%); }
+  to { opacity: 1; transform: translate(0, -50%); }
+}
+
+@keyframes strip-detail-reveal-left {
+  from { opacity: 0; transform: translate(-4px, -50%); }
+  to { opacity: 1; transform: translate(0, -50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strip-detail-card { animation: none; }
+}
+
+/* 玻璃模式与小卡片同一条稳定 Alpha 管线；不在条带变形时切换 DWM 材质。 */
+.strip-shell--transparent {
+  --glass-alpha: 0.82;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.92);
+  background:
+    radial-gradient(120% 160% at 12% 0%, rgba(178, 200, 255, 0.07), transparent 55%),
+    rgba(21, 23, 28, var(--glass-alpha));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.09),
+    inset 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.strip-shell--detail-open.strip-shell--transparent {
+  --strip-detail-surface: rgb(21 23 28 / var(--glass-alpha));
+  --strip-detail-background:
+    radial-gradient(120% 160% at 12% 0%, rgba(178, 200, 255, 0.07), transparent 55%),
+    rgb(21 23 28 / var(--glass-alpha));
+  --strip-detail-ink: rgba(255, 255, 255, 0.94);
+  --strip-detail-muted: rgba(255, 255, 255, 0.46);
+}
+
+.strip-shell--detail-open.strip-shell--transparent .strip-rail {
+  background: var(--strip-detail-background);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.09),
+    inset 0 1px rgba(255, 255, 255, 0.12);
+}
+
+/* 横条高度从 40 收到 28 之后，8px 圆角在短边上占掉近三分之一，看着发圆。
+   按原来的比例（8/40）回到 6px；竖条短边仍是 42px 宽，不受影响。 */
+.strip-shell--transparent:not(.strip-shell--vertical) {
+  border-radius: 6px;
+}
+
+/* Linux 置顶后整个悬浮形态是纯展示层。inert 负责键盘/辅助技术语义，这条再明确
+   禁掉全部控件命中；窗口自身仍保留边界指针事件，以便立即隐藏或淡出。 */
+.widget-shell[data-pinned="true"] *,
+.strip-shell[data-pinned="true"] * {
+  pointer-events: none !important;
+}
+
+.widget-shell[data-pinned="true"],
+.strip-shell[data-pinned="true"] {
+  pointer-events: auto;
+}
+
+/* Wayland/网页回落改变整个 renderer 的 opacity，而不是某个 shell 的 :hover。
+   X11 主路径由 QueryPointer 直接控制 GTK 顶层 opacity，不会命中本规则；
+   回落同样不设 transition，命中后的下一帧就完成切换。 */
+html[data-pinned-hover-active="true"] body {
+  opacity: var(--pinned-hover-target-opacity, 0) !important;
+  transition: none !important;
+}
+
+/* Wayland 不允许客户端读取全局指针位置。本地回落不能把输入面完全抹掉，
+   0.1% 肉眼等同隐藏，但仍让 WebKitGTK 有机会收到 pointerout 并恢复。 */
+html[data-pinned-hover-driver="local"][data-pinned-hover-mode="hide"][data-pinned-hover-active="true"] body {
+  opacity: 0.001 !important;
+}
+
+/* macOS：条带同样使用跟随系统的 menu vibrancy；原生材质拿不到时走
+   上面的近实心配方，不套这条。 */
+.strip-shell--mac:not(.strip-shell--glass-css) {
+  /* 与 setEffects 传给窗口的 radius 对齐，避免四角露出方形材质。 */
+  border-radius: 20px;
+  background:
+    radial-gradient(120% 160% at 12% 0%, rgba(178, 200, 255, 0.07), transparent 55%),
+    linear-gradient(168deg, rgba(30, 34, 46, 0.2), rgba(12, 15, 22, 0.28));
+}
+
+.strip-cell {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 4px;
+  border-radius: 9px;
+  transition: background-color 240ms var(--motion);
+}
+
+/* 竖条 = 横条立起来：图标在上、百分比居中、进度条在下。 */
+.strip-shell--vertical .strip-cell {
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 2px;
+}
+
+.strip-shell--vertical .strip-cell-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.strip-shell--vertical .strip-cell-body {
+  flex: none;
+  width: 100%;
+}
+
+.strip-cell > * { pointer-events: none; }
+
+.strip-cell:hover { background: rgba(31, 33, 36, 0.06); }
+.strip-shell--transparent .strip-cell:hover { background: rgba(255, 255, 255, 0.07); }
+
+.strip-cell-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+}
+
+/* 个别 App 图标自带透明边距（macOS 圆角图标规范），16px 下会显得偏小。
+   用真实尺寸 + 负 margin 补偿并保持 16px 占位；不用 transform: scale，
+   后者在分数 DPI（125%/150%）下渲染模糊且视觉偏移。 */
+.strip-cell-icon.agent-icon--zcode { width: 20px; height: 20px; margin: -2px; }
+.strip-cell-icon.agent-icon--kimi { width: 18px; height: 18px; margin: -1px; }
+.strip-shell--vertical .strip-cell-icon.agent-icon--zcode { width: 24px; height: 24px; margin: -3px; }
+.strip-shell--vertical .strip-cell-icon.agent-icon--kimi { width: 20px; height: 20px; margin: -1px; }
+
+.strip-cell-body {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.strip-cell-body em {
+  /* 居中而非左对齐：数字宽度一变（9% / 100%）左对齐就让一排格子的
+     右边参差。 */
+  text-align: center;
+  color: rgba(31, 33, 36, 0.92);
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  /* 行高留余量：别的机器字体度量偏大时文字只占满自己这行，不压进度条。 */
+  line-height: 1.25;
+}
+
+/* 金额格（余额）：¥xx.x 比百分比长得多，11px 必然溢出竖条 32px 内容区
+   （实测 ¥68.50 宽 36.7px）。配合 compact 格式（≤1 位小数）降一档字号，
+   ¥9999 以内都装得下；完整精度留给主窗与详情卡。 */
+.strip-cell-body em.strip-balance {
+  font-size: 10px;
+}
+
+.strip-shell--transparent .strip-cell-body em { color: rgba(255, 255, 255, 0.92); }
+
+/* 格子只有图标 + 百分比两层，接近耗尽全靠数字变色表达（沿用 85/95 分级）。 */
+.strip-cell--warn em { color: #8f681f; }
+.strip-cell--critical em { color: #a1402e; }
+.strip-shell--transparent .strip-cell--warn em { color: #e8b04a; }
+.strip-shell--transparent .strip-cell--critical em { color: #ec7a63; }
+
+/* 用户勾选了但暂无官方配额来源的 agent："--" 占格。 */
+.strip-cell--unavailable em { color: var(--muted); }
+.strip-shell--transparent .strip-cell--unavailable em { color: rgba(255, 255, 255, 0.55); }
+
+.strip-empty {
+  flex: 1;
+  padding-left: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.strip-shell--transparent .strip-empty { color: rgba(255, 255, 255, 0.6); }
+
+.strip-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.strip-shell--vertical .strip-controls {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+/* 状态点/更新点与按钮共用 26px 槽位：所有控件恒同心，
+   不再靠"各自恰好居中"的巧合（内容超窗挤压时曾错位）。 */
+.strip-control-slot {
+  display: grid;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+}
+
+/* 基础 .status-dot 的 margin-top 是来源抽屉的对齐补偿，胶囊条里要归零，
+   否则点相对按钮下坠 5px。 */
+.strip-shell .status-dot {
+  flex: none;
+  margin: 0;
+}
+
+/* 固定 / 横竖切换 / 还原 / 完整视图不再常驻——四个 26px 的槽在竖条上要吃掉
+   130px，比三个格子还高。它们由 … 就地展开，收起态则完全不占位：… 绝对
+   定位压在状态灯那个槽里，悬停或展开时与灯互换。 */
+.strip-control-slot--menu { position: relative; }
+
+/* 让位给 … 只能用 visibility：更新中的灯有一条跑在 opacity 上的呼吸动画，
+   动画优先级高于普通声明，写 opacity: 0 会让黄灯继续压在按钮上。 */
+.strip-shell:hover .strip-control-slot--menu .status-dot,
+.strip-controls--open .strip-control-slot--menu .status-dot { visibility: hidden; }
+
+.strip-button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: #4f5257;
+  background: rgba(31, 33, 36, 0.06);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition-property: color, background-color, opacity;
+  transition-duration: 240ms;
+  transition-timing-function: var(--motion);
+}
+
+/* 展开入口自己不占格：铺满状态灯的槽，静止态透明。 */
+.strip-button--menu {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  opacity: 0;
+}
+
+.strip-shell:hover .strip-button--menu,
+.strip-controls--open .strip-button--menu,
+.strip-button--menu:focus-visible { opacity: 1; }
+
+.strip-button:hover {
+  color: #1f2124;
+  background: rgba(31, 33, 36, 0.12);
+}
+
+.strip-shell--transparent .strip-button {
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.strip-shell--transparent .strip-button:hover {
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.strip-button--active { color: var(--blue); }
+.strip-shell--transparent .strip-button--active { color: #9ec1f5; }
+
+/* CodexBar 直接使用原生 NSMenu，并把菜单外观钉在系统当前 appearance；
+   Metrik 的 WebView 内容也必须随之切换前景色，不能在浅色材质上继续用白字。 */
+@media (prefers-color-scheme: light) {
+  .widget-shell--mac:not(.widget-shell--glass-css) {
+    /* 浅色外观：同一浓度值驱动白罩——低档几乎纯 vibrancy，高档霜白近实。 */
+    background:
+      radial-gradient(130% 100% at 14% 0%, rgb(255 255 255 / calc(var(--mac-scrim) * 1.15)), transparent 52%),
+      linear-gradient(168deg, rgb(252 252 252 / var(--mac-scrim)), rgb(238 241 246 / calc(var(--mac-scrim) * 0.8)));
+    box-shadow:
+      inset 0 0 0 1px rgba(31, 33, 36, 0.1),
+      inset 0 1px rgba(255, 255, 255, 0.72);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-titlebar {
+    background: rgba(255, 255, 255, 0.18);
+    box-shadow: 0 1px rgba(31, 33, 36, 0.08);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-brand,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-metric strong,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent {
+    color: rgba(24, 26, 30, 0.94);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .window-action {
+    color: rgba(31, 33, 36, 0.58);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .window-action:hover {
+    color: rgba(24, 26, 30, 0.94);
+    background: rgba(31, 33, 36, 0.08);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .period-control--compact {
+    background: rgba(31, 33, 36, 0.07);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .period-control--compact button {
+    color: rgba(31, 33, 36, 0.58);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .period-control--compact button.is-selected {
+    color: rgba(24, 26, 30, 0.94);
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: 0 1px 3px rgba(31, 33, 36, 0.12);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent-list {
+    background: rgba(255, 255, 255, 0.34);
+    /* 滚动条拇指也是白的：面板高度封顶后 Agent 多了就要滚，白压白看不见。 */
+    scrollbar-color: rgba(127, 130, 136, 0.4) transparent;
+    box-shadow:
+      0 0 0 1px rgba(31, 33, 36, 0.08),
+      inset 0 1px rgba(255, 255, 255, 0.52);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent-list::-webkit-scrollbar-thumb {
+    background: rgba(127, 130, 136, 0.4);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-metric,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota {
+    background: rgba(255, 255, 255, 0.34);
+    box-shadow:
+      0 0 0 1px rgba(31, 33, 36, 0.08),
+      inset 0 1px rgba(255, 255, 255, 0.52);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota:hover {
+    background: rgba(255, 255, 255, 0.5);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent {
+    box-shadow: 0 1px rgba(31, 33, 36, 0.07);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota-window em,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent em {
+    color: rgba(24, 26, 30, 0.92);
+  }
+
+  /* 告急色沿用浅色玻璃那两档：#e8b04a 压在白霜上只有约 1.9:1，读不出来。 */
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota-window--warn em,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent--warn em {
+    color: #8f681f;
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota-window--critical em,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent--critical em {
+    color: #a1402e;
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota-window--warn .widget-quota-track i {
+    background: var(--warn);
+    filter: none;
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota-window--critical .widget-quota-track i {
+    background: var(--critical);
+    filter: none;
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-metric > span,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota > span,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-metric small,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-comparison,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota > small,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota-window small,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-agent > span > small,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-source,
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-source small {
+    color: rgba(31, 33, 36, 0.58);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-quota-track {
+    background: color-mix(in srgb, var(--quota-accent, #246bdb) 18%, rgba(31, 33, 36, 0.08));
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-source:hover {
+    color: rgba(24, 26, 30, 0.9);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-refresh {
+    color: rgba(31, 33, 36, 0.58);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-refresh:hover {
+    color: rgba(24, 26, 30, 0.9);
+    background: rgba(31, 33, 36, 0.08);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-refresh:disabled:hover {
+    color: rgba(31, 33, 36, 0.58);
+    background: transparent;
+  }
+
+  /* 白底上的白字底片：按钮沿用面板浅色外观的半透白芯片，墨色翻成深色。 */
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-expand {
+    color: rgba(24, 26, 30, 0.94);
+    background: rgba(255, 255, 255, 0.62);
+    box-shadow: inset 0 0 0 1px rgba(31, 33, 36, 0.1);
+  }
+
+  .widget-shell--mac:not(.widget-shell--glass-css).widget-shell--transparent .widget-expand:hover {
+    background: rgba(255, 255, 255, 0.82);
+  }
+
+  .strip-shell--mac:not(.strip-shell--glass-css) {
+    color: rgba(24, 26, 30, 0.92);
+    background:
+      radial-gradient(120% 160% at 12% 0%, rgba(255, 255, 255, 0.48), transparent 55%),
+      linear-gradient(168deg, rgba(252, 252, 252, 0.42), rgba(238, 241, 246, 0.32));
+    box-shadow:
+      inset 0 0 0 1px rgba(31, 33, 36, 0.1),
+      inset 0 1px rgba(255, 255, 255, 0.68);
+  }
+
+  .strip-shell--mac:not(.strip-shell--glass-css).strip-shell--transparent .strip-cell-body em {
+    color: rgba(24, 26, 30, 0.92);
+  }
+
+  .strip-shell--mac:not(.strip-shell--glass-css).strip-shell--transparent .strip-button {
+    color: rgba(31, 33, 36, 0.6);
+    background: rgba(31, 33, 36, 0.07);
+  }
+
+  .strip-shell--mac:not(.strip-shell--glass-css).strip-shell--transparent .strip-button:hover {
+    color: rgba(24, 26, 30, 0.94);
+    background: rgba(31, 33, 36, 0.13);
+  }
+
+  .strip-shell--mac:not(.strip-shell--glass-css).strip-shell--transparent .strip-empty,
+  .strip-shell--mac:not(.strip-shell--glass-css).strip-shell--transparent .strip-cell--unavailable em {
+    color: rgba(31, 33, 36, 0.56);
+  }
+}
+
