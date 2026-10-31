@@ -26,6 +26,7 @@ import {
   textWantsDual,
 } from "../lib/cockpit.js";
 import { contextEstimateAge, ESTIMATE_STALE_MS } from "../lib/taskChains.js";
+import { EmptyState } from "../components/EmptyState.jsx";
 
 export const STAR_ICON = {
   tianshu: "🧭", tianxuan: "🔭", tianquan: "⚖️", tianji: "🖋️",
@@ -572,14 +573,14 @@ function Inspector({ caseItem, liveStars, liveAction, workboardCards = [], hasCa
     // 两种「没内容」不是一回事：账本真空 vs 有案但没选中。
     // 之前一律写「本地账本还没有案件」—— 有案没选中时这句话就是假话。
     return (
-      <div className="pl-insp-empty">
-        <p className="pl-insp-empty-title">{hasCases ? "还没选中案件" : "账本还没有案件"}</p>
-        <p className="pl-insp-empty-body">
-          {hasCases
-            ? "点上面泳道里的任意一行（或点案名列），它的五轴、打回次数和产出链接都摊在这里。"
-            : "北斗在 VPS 上跑、产出在飞书文档，这里只是本地镜像：点「立即发车」会生成案号（BM-xxxx）并把任务派到网关，任务带上案件标记后，每一跳的状态才会归进这张账本。"}
-        </p>
-      </div>
+      <EmptyState
+        compact
+        className="pl-insp-empty"
+        title={hasCases ? "还没选中案件" : "账本还没有案件"}
+        description={hasCases
+          ? "点上面泳道里的任意一行（或点案名列），它的五轴、打回次数和产出链接都摊在这里。"
+          : "北斗在 VPS 上跑、产出在飞书文档，这里只是本地镜像：点「立即发车」会生成案号（BM-xxxx）并把任务派到网关，任务带上案件标记后，每一跳的状态才会归进这张账本。"}
+      />
     );
   }
   const c = caseItem;

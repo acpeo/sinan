@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { loadBeidouCases, loadWorkboardCards } from "../lib/taskClient.js";
 import { ledgerRowsToCases } from "../lib/cockpit.js";
+import { EmptyState } from "../components/EmptyState.jsx";
 
 /// 在途视图（2026-10-23）：单案、只读、按钮置灰。
 /// 数据只读本地账本 + 工单镜像，不触发任何派发/写操作。
@@ -87,10 +88,7 @@ export default function InflightView() {
     return (
       <div className="ifv">
         <style>{CSS}</style>
-        <div className="ifv-empty">
-          <b>没有在途案子</b>
-          <p>北斗一次只跑一单；当前没有进行中的任务。</p>
-        </div>
+        <EmptyState title="没有在途案子" description="北斗一次只跑一单；当前没有进行中的任务。" />
       </div>
     );
   }
@@ -310,9 +308,6 @@ const CSS = `
 .ifv{max-width:1240px;margin:0 auto;padding:6px 4px 28px;color:#181d19;font-size:14px;line-height:1.55;
   font-family:"SF Pro Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-variant-numeric:tabular-nums}
 .ifv-diag{flex:0 0 100%;width:100%;margin-top:2px;font-size:10.5px;line-height:1.65;color:#a9aea7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
-.ifv-empty{padding:80px 20px;text-align:center;color:#7d857d}
-.ifv-empty b{font-size:16px;color:#181d19}
-.ifv-empty p{margin:8px 0 0;font-size:13px}
 .ifv-head{display:flex;align-items:flex-end;gap:14px;padding:10px 2px 14px;flex-wrap:wrap}
 .ifv-eyebrow{display:flex;gap:8px;font-size:11px;color:#a8afa7;letter-spacing:.12em}
 .ifv-eyebrow b{font-family:"SF Mono",Consolas,monospace;color:#2c5f46;letter-spacing:.08em}

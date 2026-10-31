@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 
 import { starNameOf } from "../lib/cockpit.js";
 import { STAGE_COLS, STAR_ICON } from "./PipelineView.jsx";
+import { PageHeader } from "../components/PageHeader.jsx";
 
 const COLS = "86px 1fr 86px 92px 64px 84px 74px 38px 58px";
 
@@ -49,9 +50,12 @@ export function CaseArchive({ cases = [], onOpenCase }) {
 
   return (
     <div className="ca-root">
-      <header className="ca-head">
-        <h2>📁 案件卷宗</h2>
-        <span className="ca-sub">Case Ledger · 本地 SQLite 镜像 · 只读</span>
+      <PageHeader
+        className="ca-head"
+        icon="📁"
+        title="案件卷宗"
+        subtitle="Case Ledger · 本地 SQLite 镜像 · 只读"
+      >
         <div className="ca-badges">
           <span className={`ca-badge${scope === "inflight" ? " is-on" : ""}`} onClick={() => setScope(scope === "inflight" ? "all" : "inflight")} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setScope(scope === "inflight" ? "all" : "inflight"); }}>在途 <b>{inFlight}</b></span>
           <span className={`ca-badge${scope === "closed" ? " is-on" : ""}`} onClick={() => setScope(scope === "closed" ? "all" : "closed")} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setScope(scope === "closed" ? "all" : "closed"); }}>历史 <b>{history}</b></span>
@@ -59,7 +63,7 @@ export function CaseArchive({ cases = [], onOpenCase }) {
               单案次数不同义——不写清，两处数字会被当成对不上（2026-10-18 审计） */}
           <span className="ca-badge" title="全部案件的二审打回次数之和（按案累加）">打回 <b>{strikes}</b></span>
         </div>
-      </header>
+      </PageHeader>
 
       <div className="ca-tools">
         <input
