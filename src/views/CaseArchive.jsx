@@ -5,7 +5,7 @@
 // 所以这几列一律留「—」，不拿 updatedAt 冒充建案时间、不拿 0 分冒充五轴。
 import { useMemo, useState } from "react";
 
-import { starNameOf } from "./cockpit.js";
+import { starNameOf } from "../lib/cockpit.js";
 import { STAGE_COLS, STAR_ICON } from "./PipelineView.jsx";
 
 const COLS = "86px 1fr 86px 92px 64px 84px 74px 38px 58px";

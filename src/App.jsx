@@ -35,16 +35,16 @@ import piAppIcon from "./assets/pi-app-icon.png";
 import qwenAppIcon from "./assets/qwen-app-icon.png";
 import workbuddyAppIcon from "./assets/workbuddy-app-icon.png";
 import zcodeAppIcon from "./assets/zcode-app-icon.png";
-import { GLASS_MODES, glassShellAppearance, nextGlassTint, resolveGlassMode } from "./glassAppearance.js";
-import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, loadWorkboardCards, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, syncWorkboardCards, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./taskClient.js";
-import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./taskChains.js";
-import { PipelineView } from "./PipelineView.jsx";
-import InflightView from "./InflightView.jsx";
-import ViewBoundary from "./ViewBoundary.jsx";
-import { CaseArchive } from "./CaseArchive.jsx";
-import { BrandLogo } from "./PipelineView.jsx";
-import { ledgerRowsToCases, buildLiveActionMap, wakeupFailureText } from "./cockpit.js";
-import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth, stripGestureOwner } from "./windowGeometry";
+import { GLASS_MODES, glassShellAppearance, nextGlassTint, resolveGlassMode } from "./lib/glassAppearance.js";
+import { isTauriRuntime, loadAgentsSnapshot, loadBeidouCases, loadCronJobs, loadGatewayConfig, loadGatewayTasks, loadMonitorConfig, loadSessionRuns, loadWorkboardCards, refreshCronJobs, saveGatewayConfig, saveMonitorConfig, syncWorkboardCards, beidouDirectLaunch, beidouAppendVideo, beidouAutoHeal } from "./lib/taskClient.js";
+import { activeRelayEpisodes, agentDisplayName, buildAgentRoster, buildCronNextByAgent, buildFleetModules, cleanSessionTitle, contextEstimateAge, detectRoundNotifications, benignStateOf, buildAgentNameMap, buildTaskChains, chainHopsFor, cleanTaskTitle, cronNextAtOf, cronScheduleTextOf, defuseStaleSnapshotActivity, failureClassOf, gatewayResultsAllOk, gatewayFailureText, hopTitleOf, canonicalAgentId, buildStarState, groupSessionEpisodes, isSubagentTask, listIdleSessions, listOrphanRuns, hopGlyphOf, hopToneOf, isActiveTask, selectUsageSessions, sessionErrorText, sessionEpisodeHops, sessionRunHop, toolProgressLabel, ESTIMATE_STALE_MS } from "./lib/taskChains.js";
+import { PipelineView } from "./views/PipelineView.jsx";
+import InflightView from "./views/InflightView.jsx";
+import ViewBoundary from "./views/ViewBoundary.jsx";
+import { CaseArchive } from "./views/CaseArchive.jsx";
+import { BrandLogo } from "./views/PipelineView.jsx";
+import { ledgerRowsToCases, buildLiveActionMap, wakeupFailureText } from "./lib/cockpit.js";
+import { desyncHealRetryDelayMs, hopCardWindowPlacement, horizontalStripTargetWidth, stripGestureOwner } from "./lib/windowGeometry";
 import {
   applyStartupUiScale,
   applyWindowMode,
@@ -103,7 +103,7 @@ import {
   syncLinuxTrayPinned,
   takeHopCardPayload,
   toggleMaximizeWindow,
-} from "./windowClient";
+} from "./lib/windowClient";
 
 // 预览豁免（?eager）：IAB 预览面板收起时 document.visibilityState 恒为 hidden
 // 且被宿主钉死不可覆写（实例与 window.document 都 non-configurable），

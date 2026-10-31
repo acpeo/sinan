@@ -4,7 +4,7 @@ import "@fontsource-variable/geist";
 import "@fontsource/instrument-serif/400.css";
 import "@fontsource/newsreader/400.css";
 import { App } from "./App.jsx";
-import { installExternalLinkHandler } from "./externalLinks.js";
+import { installExternalLinkHandler } from "./lib/externalLinks.js";
 import "./styles.css";
 
 document.documentElement.dataset.runtime = window.__TAURI_INTERNALS__ ? "desktop" : "browser";

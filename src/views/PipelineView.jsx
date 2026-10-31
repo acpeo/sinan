@@ -12,7 +12,7 @@
 // Leo 2026-10-15：实际用的时候不会有假案子。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { STAGE_COLS, liveColumnsOf, liveIndex, nameOfCase, sortCasesNewest, wbBadgeText, wbSegsOfCol, wbStepByCase } from "./pipelineLive.js";
+import { STAGE_COLS, liveColumnsOf, liveIndex, nameOfCase, sortCasesNewest, wbBadgeText, wbSegsOfCol, wbStepByCase } from "../lib/pipelineLive.js";
 import {
   DAG_STEPS,
   DELIVERABLE_MODES,
@@ -24,8 +24,8 @@ import {
   ledgerRowToCase,
   starNameOf,
   textWantsDual,
-} from "./cockpit.js";
-import { contextEstimateAge, ESTIMATE_STALE_MS } from "./taskChains.js";
+} from "../lib/cockpit.js";
+import { contextEstimateAge, ESTIMATE_STALE_MS } from "../lib/taskChains.js";
 
 export const STAR_ICON = {
   tianshu: "🧭", tianxuan: "🔭", tianquan: "⚖️", tianji: "🖋️",
@@ -154,7 +154,7 @@ function PipelineTopBar({ conn, onOpenStars, tabs, activeTab, onTab, cases = [] 
 /* 品牌标：直接用打包图标原图（src-tauri/icons/128x128.png → src/assets）。
    之前手绘的北斗七星 SVG 和 ✦ 都是近似，Leo 2026-10-18 指出与任务栏图标
    对不上——真标志就一张图，别画第二份。 */
-import sinanLogoUrl from "./assets/sinan-logo.png";
+import sinanLogoUrl from "../assets/sinan-logo.png";
 
 export function BrandLogo({ size = 28 }) {
   return (

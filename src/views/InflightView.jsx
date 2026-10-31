@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { loadBeidouCases, loadWorkboardCards } from "./taskClient.js";
-import { ledgerRowsToCases } from "./cockpit.js";
+import { loadBeidouCases, loadWorkboardCards } from "../lib/taskClient.js";
+import { ledgerRowsToCases } from "../lib/cockpit.js";
 
 /// 在途视图（2026-10-23）：单案、只读、按钮置灰。
 /// 数据只读本地账本 + 工单镜像，不触发任何派发/写操作。

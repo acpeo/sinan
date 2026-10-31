@@ -3,8 +3,8 @@
 // 这里来自写死的预览数据。组件本身是同一份，改版式两边同时生效。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PipelineView } from "./PipelineView.jsx";
-import { installExternalLinkHandler } from "./externalLinks.js";
+import { PipelineView } from "./views/PipelineView.jsx";
+import { installExternalLinkHandler } from "./lib/externalLinks.js";
 import "./styles.css";
 
 installExternalLinkHandler();
