@@ -5,8 +5,6 @@ import { GLASS_MODES, glassShellAppearance, nextGlassTint, resolveGlassMode } fr
 import { ledgerRowsToCases, wakeupFailureText } from "./lib/cockpit.js";
 import { BrandLogo } from "./views/PipelineView.jsx";
 import { ArrowsClockwise } from "@phosphor-icons/react";
-import ViewBoundary from "./views/ViewBoundary.jsx";
-import InflightView from "./views/InflightView.jsx";
 import { useWidgetTasksFeed } from "./hooks/useWidgetTasksFeed.js";
 import { normalizeGlassInk, normalizeGlassTint } from "./lib/glass.js";
 import { IS_MAC, IS_WINDOWS } from "./lib/platformFlags.js";
@@ -19,16 +17,20 @@ import { TasksSection } from "./views/TasksSection.jsx";
 import { MonitorSettingsCard } from "./views/settings/MonitorSettingsCard.jsx";
 import { GatewaySettingsCard } from "./views/settings/GatewaySettingsCard.jsx";
 import { AppearanceCard } from "./views/settings/AppearanceCard.jsx";
+import { PageHeader } from "./components/PageHeader.jsx";
 
-
+// 一级导航只保留四种任务；在途与定时任务收进各自相关的二级视图。
 const CONSOLE_TABS = [
-  { id: "inflight", label: "在途" },
   { id: "cockpit", label: "指挥舱" },
-  // 案件卷宗：查历史案件用（泳道只看当前在办，翻旧账得靠这张表）
-  { id: "cases", label: "案件卷宗" },
-  { id: "tasks", label: "任务" },
-  { id: "cron", label: "定时任务" },
+  { id: "cases", label: "案件" },
+  { id: "tasks", label: "运行" },
   { id: "settings", label: "设置" },
+];
+
+const SETTINGS_SECTIONS = [
+  { id: "monitor", label: "监控与提醒", description: "同步节奏、台账和通知" },
+  { id: "gateway", label: "网关", description: "连接、追踪与定时镜像" },
+  { id: "appearance", label: "外观", description: "主题、玻璃与窗口缩放" },
 ];
 
 function initialWindowMode() {
@@ -44,7 +46,8 @@ export function App() {
   const [viewMode] = useState(initialWindowMode);
   const [gateways, setGateways] = useState(() => loadGatewayConfig());
   const reloadGateways = useCallback(() => setGateways(loadGatewayConfig()), []);
-  const [consoleTab, setConsoleTab] = useState("inflight");
+  const [consoleTab, setConsoleTab] = useState("cockpit");
+  const [settingsSection, setSettingsSection] = useState("monitor");
   // 卷宗里点一行 → 回指挥舱并选中那一案（不然点了没反应，"查看过往案件"就断在这）。
   const [focusCaseId, setFocusCaseId] = useState(null);
   const [starsOpen, setStarsOpen] = useState(false);
@@ -522,12 +525,6 @@ export function App() {
       </header>
       <div className="console-scroll">
         <div className={consoleTab === "settings" ? "console-hidden" : ""}>
-          {consoleTab === "inflight" ? (
-            <ViewBoundary key="inflight">
-              <InflightView />
-            </ViewBoundary>
-          ) : null}
-          <div className={consoleTab === "inflight" ? "console-hidden" : ""}>
           <TasksSection
             gateways={gateways}
             onGatewaysChanged={reloadGateways}
@@ -549,23 +546,47 @@ export function App() {
               setConsoleTab("cockpit");
             }}
           />
-          </div>
         </div>
         <div className={consoleTab === "settings" ? "console-settings" : "console-settings console-hidden"}>
-          <MonitorSettingsCard tasksWidgetEnabled={tasksWidgetEnabled} onToggleTasksWidget={handleToggleTasksWidget} />
-          <GatewaySettingsCard gateways={gateways} onGatewaysChanged={reloadGateways} />
-          <AppearanceCard
-            theme={theme}
-            onThemeChange={handleThemeChange}
-            glassAlpha={glassAlpha}
-            onGlassAlpha={handleGlassAlpha}
-            glassTint={glassTint}
-            onGlassTint={handleGlassTint}
-            glassInk={glassInk}
-            onGlassInk={handleGlassInk}
-            mainGlass={mainGlass}
-            onMainGlass={handleMainGlass}
-          />
+          <PageHeader title="设置" subtitle="只显示当前分类，其余设置保持不变" />
+          <div className="settings-layout">
+            <nav className="settings-nav" aria-label="设置分类">
+              {SETTINGS_SECTIONS.map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={settingsSection === section.id ? "is-on" : ""}
+                  aria-current={settingsSection === section.id ? "page" : undefined}
+                  onClick={() => setSettingsSection(section.id)}
+                >
+                  <b>{section.label}</b>
+                  <span>{section.description}</span>
+                </button>
+              ))}
+            </nav>
+            <div className="settings-content">
+              <div className={settingsSection === "monitor" ? "settings-panel" : "settings-panel console-hidden"}>
+                <MonitorSettingsCard tasksWidgetEnabled={tasksWidgetEnabled} onToggleTasksWidget={handleToggleTasksWidget} />
+              </div>
+              <div className={settingsSection === "gateway" ? "settings-panel" : "settings-panel console-hidden"}>
+                <GatewaySettingsCard gateways={gateways} onGatewaysChanged={reloadGateways} />
+              </div>
+              <div className={settingsSection === "appearance" ? "settings-panel" : "settings-panel console-hidden"}>
+                <AppearanceCard
+                  theme={theme}
+                  onThemeChange={handleThemeChange}
+                  glassAlpha={glassAlpha}
+                  onGlassAlpha={handleGlassAlpha}
+                  glassTint={glassTint}
+                  onGlassTint={handleGlassTint}
+                  glassInk={glassInk}
+                  onGlassInk={handleGlassInk}
+                  mainGlass={mainGlass}
+                  onMainGlass={handleMainGlass}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

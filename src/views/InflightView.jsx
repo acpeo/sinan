@@ -3,8 +3,8 @@ import { loadBeidouCases, loadWorkboardCards } from "../lib/taskClient.js";
 import { ledgerRowsToCases } from "../lib/cockpit.js";
 import { EmptyState } from "../components/EmptyState.jsx";
 
-/// 在途视图（2026-10-23）：单案、只读、按钮置灰。
-/// 数据只读本地账本 + 工单镜像，不触发任何派发/写操作。
+/// 在途专注：指挥舱内的单案只读视图，不触发任何派发/写操作。
+/// 产品内由 PipelineView 直接喂同一份账本与工单；独立使用时才自行轮询。
 const STATIONS = [
   { key: "01", label: "接单建档", star: "天枢", seg: "01" },
   { key: "02", label: "选题研究", star: "天璇", seg: "02" },
@@ -36,21 +36,31 @@ function modeText(mode) {
   return "图文";
 }
 
-export default function InflightView() {
-  const [cases, setCases] = useState([]);
-  const [cards, setCards] = useState([]);
-  const [cardErr, setCardErr] = useState("");
+export default function InflightView({ cases: sharedCases = null, workboardCards: sharedCards = null, onOpenOverview = null }) {
+  const [localCases, setLocalCases] = useState([]);
+  const [localCards, setLocalCards] = useState([]);
+  const [localCardErr, setLocalCardErr] = useState("");
   const [now, setNow] = useState(Date.now());
+  const externallyFed = Array.isArray(sharedCases) && Array.isArray(sharedCards);
+  const cases = externallyFed ? sharedCases : localCases;
+  const cards = externallyFed ? sharedCards : localCards;
+  const cardErr = externallyFed ? "" : localCardErr;
 
   useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (externallyFed) return undefined;
     let alive = true;
     const pull = async () => {
       try {
         const [caseData, cardData] = await Promise.all([loadBeidouCases(), loadWorkboardCards()]);
         if (!alive) return;
-        setCases(ledgerRowsToCases(caseData.cases ?? []));
-        setCards(cardData.cards ?? []);
-        setCardErr(cardData.loadError ?? "");
+        setLocalCases(ledgerRowsToCases(caseData.cases ?? []));
+        setLocalCards(cardData.cards ?? []);
+        setLocalCardErr(cardData.loadError ?? "");
         setNow(Date.now());
       } catch {
         /* 只读失败不打扰，下一拍重试 */
@@ -62,7 +72,7 @@ export default function InflightView() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [externallyFed]);
 
   // 单案系统：取最近一个未关单的案子
   const active = useMemo(() => {
@@ -88,7 +98,11 @@ export default function InflightView() {
     return (
       <div className="ifv">
         <style>{CSS}</style>
-        <EmptyState title="没有在途案子" description="北斗一次只跑一单；当前没有进行中的任务。" />
+        <EmptyState title="没有在途案子" description="当前没有进行中的任务。流水线总览仍可查看历史案件并发车。">
+          {onOpenOverview ? (
+            <button type="button" className="ui-empty-action" onClick={onOpenOverview}>返回流水线</button>
+          ) : null}
+        </EmptyState>
       </div>
     );
   }
@@ -180,7 +194,10 @@ export default function InflightView() {
           <span className="ifv-chip on">第 {step + 1} 站 · {STATIONS[step]?.star ?? "—"}</span>
           <div className="ifv-clock"><b>{elapsedMin} 分钟</b><span>距上次动作</span></div>
         </div>
-        <div className="ifv-diag">{diag}</div>
+        <details className="ifv-diag">
+          <summary>诊断信息</summary>
+          <div>{diag}</div>
+        </details>
       </div>
 
       <div className="ifv-rail">
@@ -258,15 +275,8 @@ export default function InflightView() {
             <div className="ifv-focus">
               <div className="ifv-focus-t"><b>{STATIONS[step]?.star ?? "—"} · {STATIONS[step]?.label ?? "—"}</b><span>已 {elapsedMin} 分钟</span></div>
               <p>{active.residencyNote || "暂无驻留说明；等待该星位落盘后自动推进。"}</p>
-              <div className="ifv-actions">
-                <button className="ifv-btn primary" disabled title="下一版接入">看会话</button>
-                <button className="ifv-btn" disabled title="下一版接入">催一次</button>
-                <button className="ifv-btn" disabled title="下一版接入">跳过</button>
-              </div>
               <div className="ifv-divider" />
               <div className="ifv-kv">
-                <div><span>补发</span><b>—</b></div>
-                <div><span>watchdog</span><b>—</b></div>
                 <div><span>最近活动</span><b>{fmtDate(active.lastActivityMs)}</b></div>
                 <div><span>阶段</span><b>{STATIONS[step]?.label ?? "—"}</b></div>
               </div>

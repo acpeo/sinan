@@ -27,6 +27,9 @@ import {
 } from "../lib/cockpit.js";
 import { contextEstimateAge, ESTIMATE_STALE_MS } from "../lib/taskChains.js";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { ViewSwitch } from "../components/ViewSwitch.jsx";
+import InflightView from "./InflightView.jsx";
+import ViewBoundary from "./ViewBoundary.jsx";
 
 export const STAR_ICON = {
   tianshu: "🧭", tianxuan: "🔭", tianquan: "⚖️", tianji: "🖋️",
@@ -943,6 +946,19 @@ export function PipelineView({
 }) {
   const [activeId, setActiveId] = useState(cases[0]?.caseId);
   const [colFilter, setColFilter] = useState(null);
+  const [cockpitView, setCockpitView] = useState("pipeline");
+  const showInflight = Boolean(tabs) && cockpitView === "inflight";
+  const cockpitSwitch = (
+    <ViewSwitch
+      value={cockpitView}
+      onChange={setCockpitView}
+      ariaLabel="指挥舱视图"
+      options={[
+        { value: "pipeline", label: "星位流水线" },
+        { value: "inflight", label: "在途专注" },
+      ]}
+    />
+  );
   // Workboard 段卡在跑数（Phase 2 · B 路线）：按**段**聚合，不按星——
   // 天权在链上有两列（03-初审 / 05-二审），按星聚合会把同一计数画到两列上。
   // 列头只报「在跑」——done/todo 的数量是看板缩影，不该挤进星位遥测；
@@ -1064,14 +1080,30 @@ export function PipelineView({
         />
       )}
 
-      <main className="pl-main" ref={dragRef}>
+      <main className={showInflight ? "pl-main pl-main--inflight" : "pl-main"} ref={dragRef}>
+        {showInflight ? (
+          <>
+            <div className="pl-section-head pl-section-head--switch">
+              {cockpitSwitch}
+              <span className="pl-section-sub">单案耗时、当前卡点与产出</span>
+            </div>
+            <ViewBoundary key="inflight">
+              <InflightView
+                cases={casesEff}
+                workboardCards={workboardCards}
+                onOpenOverview={() => setCockpitView("pipeline")}
+              />
+            </ViewBoundary>
+          </>
+        ) : (
+          <>
           <LaunchBar onLaunch={onLaunch} busy={busy} />
           <section
             className="pl-lane-section"
             style={lanePx == null ? undefined : { flex: `0 0 ${lanePx}px` }}
           >
-            <div className="pl-section-head">
-              <h1>星位流水线</h1>
+            <div className="pl-section-head pl-section-head--switch">
+              {tabs ? cockpitSwitch : <h1>星位流水线</h1>}
               <span className="pl-section-sub">一行一案 · 横看案件进度 · 竖看星位队列</span>
               {/* 四态图例：设计稿 mock20 段头就有，落地时漏了 —— 于是「格子颜色
                   是什么意思」只能靠猜。四态与泳道节点一一对应：
@@ -1131,6 +1163,8 @@ export function PipelineView({
               hasCases={cases.length > 0}
             />
           </section>
+          </>
+        )}
       </main>
 
       {starsOpen ? (

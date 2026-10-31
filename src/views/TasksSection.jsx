@@ -9,6 +9,8 @@ import { jobDisplayName } from "../lib/taskFeed.js";
 import { PipelineTelemetry } from "./PipelineTelemetry.jsx";
 import { TasksBoard } from "./TasksBoard.jsx";
 import { starNameOf } from "../lib/agents.js";
+import { PageHeader } from "../components/PageHeader.jsx";
+import { ViewSwitch } from "../components/ViewSwitch.jsx";
 
 
 export function TasksSection({
@@ -30,6 +32,7 @@ export function TasksSection({
   onToggleStars,
 }) {
   const [state, setState] = useState({ status: "loading", filter: "all", data: null });
+  const [taskView, setTaskView] = useState("activity");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [lastSync, setLastSync] = useState(null);
@@ -393,13 +396,31 @@ export function TasksSection({
   );
 
   const showTasks = tab === "tasks";
-  const showCron = tab === "cron";
-  // 指挥舱（星位流水线）与任务/定时两页共用 TasksSection 的轮询产物——
+  const showTaskActivity = showTasks && taskView === "activity";
+  const showCron = showTasks && taskView === "cron";
+  // 指挥舱（星位流水线）与运行页共用 TasksSection 的轮询产物——
   // 遥测、定时镜像、活跃星集都是同一份快照，各页各渲染，不重复握手。
   const showPipeline = tab === "cockpit";
   const showCases = tab === "cases";
   return (
     <main className="tasks-section tasks-section--flush">
+      {showTasks ? (
+        <PageHeader
+          className="tasks-view-head"
+          title="运行"
+          subtitle="星位接力、事件流水与自动化"
+        >
+          <ViewSwitch
+            value={taskView}
+            onChange={setTaskView}
+            ariaLabel="运行视图"
+            options={[
+              { value: "activity", label: "任务动态" },
+              { value: "cron", label: "定时任务", count: cronJobs.length },
+            ]}
+          />
+        </PageHeader>
+      ) : null}
       {showCases ? <CaseArchive cases={cases ?? []} onOpenCase={onOpenCase} /> : null}
       {showTasks && feedback && (
         <p className={feedback.tone === "error" ? "tasks-feedback tasks-feedback--error" : "tasks-feedback tasks-feedback--success"}>
@@ -436,7 +457,7 @@ export function TasksSection({
         />
       ) : null}
 
-      {showTasks && (
+      {showTaskActivity && (
         <TasksBoard
           rows={cronTasks}
           episodes={historyEpisodes}
@@ -487,10 +508,7 @@ export function TasksSection({
       )}
       {showCron && (cronBoard.length > 0 ? (
         <section className="cron-board" aria-label="定时任务">
-          <h2 className="history-episodes-head">
-            定时任务
-            <small>北斗挂的自动化（巡检/心跳/记忆整理），排程与上次结果一览；镜像 ≤1 分钟延迟</small>
-          </h2>
+          <p className="cron-board-note">排程与上次结果 · 本地镜像最多延迟 1 分钟</p>
           <div className="cron-board-list">
             {cronBoard.map((row) => (
               <div className="cron-board-row" key={row.id} title={row.description || row.name || row.id}>
